@@ -7,7 +7,7 @@ export default {
       return;
     }
     ctx.waitUntil(checkFindMyShift(env));
-    if(['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE))ctx.waitUntil(checkSubscriptionBuild(env));
+    if(['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE)){ctx.waitUntil(checkSubscriptionBuild(env));ctx.waitUntil(checkDoctorCalendars(env));}
     if(env.IDENTITY_REGISTRY_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env,'register'));
     // The endpoint checks its R2 checkpoint before D1: completed weeks are
     // cheap no-ops; an interrupted Sunday pass can resume on later days.
@@ -70,4 +70,9 @@ async function checkSubscriptionBuild(env){
  const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode:'check'}),signal:AbortSignal.timeout(30000)});
  const result=await response.json().catch(()=>({}));
  console.log(JSON.stringify({event:'subscription-build',status:result.status||'unknown',http:response.status}));
+}
+
+async function checkDoctorCalendars(env){
+ const response=await fetch(new URL('/api/automation/doctor-calendars',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl),{method:'POST',headers:{authorization:'Bearer '+String(env.ROSTER_WATCHDOG_TOKEN||''),'Content-Type':'application/json'},body:JSON.stringify({mode:'check-source'}),signal:AbortSignal.timeout(30000)});
+ const result=await response.json().catch(()=>({}));console.log(JSON.stringify({event:'doctor-calendar-build',status:result.status||'unknown',http:response.status}));
 }

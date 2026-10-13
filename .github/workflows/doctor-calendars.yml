@@ -1,0 +1,27 @@
+name: Prepare selectively updated doctor calendars
+on:
+  workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: "Coalesced external calendar preparation lease"
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: doctor-calendar-retained-backfill
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      DOCTOR_CALENDAR_DISPATCH_ID: ${{ inputs.dispatch_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/process-doctor-calendars.mjs

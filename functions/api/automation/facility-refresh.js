@@ -101,7 +101,7 @@ export async function onRequestPost(context) {
   let result;
   try {
     result = await runFacilityPublicationStep({ ...context, env: { ...context.env, ROSTER_DB: meter.binding } }, source, {
-      mode, termStart: job.term_start, dates: JSON.parse(job.dates_json),
+      mode, requireDoctorCalendars: context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', termStart: job.term_start, dates: JSON.parse(job.dates_json),
       operationRevision: plan?.operationRevision, batchIndex: job.next_batch, month: plan?.months[job.next_month],
     });
     if (meter.metadataComplete && (meter.rowsRead > READ_RESERVATION || meter.rowsWritten > WRITE_RESERVATION)) {
@@ -132,5 +132,5 @@ export async function onRequestPost(context) {
         .bind(READ_RESERVATION - meter.rowsRead, Math.max(0,WRITE_RESERVATION-16-meter.rowsWritten), day).run();
     }
   }
-  return Response.json({ ...result, completed: result.ok && !result.deferred && mode === "finalize" }, { status: result.ok ? 200 : 409 });
+  return Response.json({ ...result, doctorCalendarsEnabled:context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', completed: result.ok && !result.deferred && mode === "finalize" }, { status: result.ok ? 200 : 409 });
 }

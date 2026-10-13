@@ -123,10 +123,10 @@ for(const change of [
  "UPDATE roster_person_aliases SET display_name='New spelling' WHERE doctor_key='DOC A'",
  "INSERT INTO account_hospital_locations(email,source_type,location) VALUES('a@test','mmc','New place')",
  "INSERT INTO custom_events(owner_email,id,title,start_date,end_date,all_day) VALUES('a@test','custom','Leave','2026-10-01','2026-10-02',1)",
- "UPDATE roster_identity_revision SET revision=revision+1",
  "UPDATE account_profiles SET real_name='New name' WHERE email='a@test'"
 ]){const before=(await subscriptionEvidence(db,'token')).revision;sql.exec(change);assert.notEqual((await subscriptionEvidence(db,'token')).revision,before,change);}
 const stable=(await subscriptionEvidence(db,'token')).revision;
+sql.exec('UPDATE roster_identity_revision SET revision=revision+1');assert.equal((await subscriptionEvidence(db,'token')).revision,stable,'an unrelated identity audit does not invalidate this subscription');
 sql.exec("INSERT INTO account_profiles(email,real_name) VALUES('b@test','Other');");assert.equal((await subscriptionEvidence(db,'token')).revision,stable);
 response=await feed({env,request:new Request('https://test/api/feed?token=token')});assert.equal(response.status,200,'stale input uses complete current fallback');
 const begin=await call({mode:'start'}),next=await call({mode:'next',leaseId:begin.leaseId}),base={leaseId:begin.leaseId,queueKey:next.queueKey};

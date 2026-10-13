@@ -50,6 +50,7 @@ try {
  await Promise.all(pending);
  assert.deepEqual(calls.filter(call=>/subscription-build$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),['check']);
  assert.ok(calls.every(call=>call.consumed),'subscription dispatch drains the response');
+ assert.deepEqual(calls.filter(call=>/doctor-calendars$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),['check-source']);
  calls.length=0;pending.length=0;
  await worker.scheduled({}, {...identityEnv,ROSTER_AUTOMATION_ENABLED:'false'}, {waitUntil:promise=>pending.push(promise)});
  await Promise.all(pending);

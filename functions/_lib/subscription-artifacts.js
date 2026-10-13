@@ -36,7 +36,6 @@ export async function subscriptionEvidence(db,token,view='full',identitiesEnable
  (SELECT json_group_array(json_array(source_type,doctor_key,display_name,person_id,updated_at)) FROM (SELECT * FROM aliases ORDER BY source_type,doctor_key LIMIT 65)) aliases_json,
  (SELECT json_group_array(json_array(person_id,status,preferred_display_name,merged_into_person_id,version)) FROM (SELECT * FROM roster_people WHERE person_id IN (SELECT person_id FROM people) ORDER BY person_id LIMIT 65)) people_json,
  (SELECT json_group_array(json_array(person_id,updated_at)) FROM account_people WHERE email=o.email) account_people_json,
- (SELECT revision FROM roster_identity_revision WHERE id=1) identity_revision,
  (SELECT json_group_array(json_array(id,source_type,parsed_at,content_revision)) FROM (
   SELECT f.id,f.source_type,f.parsed_at,c.content_revision FROM roster_files f LEFT JOIN roster_file_coverage c ON c.file_id=f.id
   WHERE f.active=1 AND f.source_type IN (SELECT source_type FROM wanted) ORDER BY f.source_type,f.id LIMIT 1025)) files_json,

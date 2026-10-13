@@ -1,3 +1,4 @@
+import {doctorMonthIndexKey} from '../functions/_lib/doctor-calendar-artifacts.js';
 import { configureRosterMaintenanceBudget, reserveRosterMaintenanceBudget } from "../functions/_lib/roster-maintenance-budget.js";
 import { onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as refreshFacility } from "../functions/api/automation/facility-refresh.js";
@@ -84,6 +85,7 @@ class LocalR2 {
     this.version += 1;
     this.objects.set(key, { bytes, options, etag: `local-${this.version}` });
   }
+  async head(key) {return this.objects.has(key)?{key}:null;}
   async get(key) {
     this.gets += 1;
     const item = this.objects.get(key);
@@ -510,6 +512,11 @@ for (const month of chunkPlan.months) {
   assert.equal(repeatedMonth.unchanged, true);
   assert.equal(chunkedR2.puts, monthPuts, "repeating a completed month must write no R2 objects");
 }
+const gatedFinalize=await runFacilityPublicationStep(chunkContext,'mmc',{mode:'finalize',termStart:'2026-08-03',operationRevision:chunkPlan.operationRevision,requireDoctorCalendars:true});
+assert.equal(gatedFinalize.deferred,true,'new source remains staged until doctor caches complete');
+assert.equal((await loadPublishedFacilityDays(chunkedR2,['mmc'],'2026-08-03')).preparing,true,'doctor preparation must precede source visibility');
+for(const pointer of gatedFinalize.doctorCalendars)await chunkedR2.put(doctorMonthIndexKey('mmc',pointer.month,pointer.revision),new TextEncoder().encode('{}'));
+const sourceGate=await runFacilityPublicationStep(chunkContext,'mmc',{mode:'finalize',termStart:'2026-08-03',operationRevision:chunkPlan.operationRevision,requireDoctorCalendars:true});assert.equal(sourceGate.deferred,true);assert.ok(sourceGate.doctorSource?.manifestKey,'source metadata is prepared externally before visibility');assert.equal((await loadPublishedFacilityDays(chunkedR2,['mmc'],'2026-08-03')).preparing,true);
 db.failRunIncludes = "SET status = 'complete'";
 await assert.rejects(runFacilityPublicationStep(chunkContext, "mmc", { mode: "finalize", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision }), /Injected D1 statement failure/);
 assert.equal((await loadPublishedFacilityDays(chunkedR2, ["mmc"], "2026-08-03")).preparing, false, "only finalisation may expose staged days");

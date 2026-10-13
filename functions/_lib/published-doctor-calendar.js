@@ -1,9 +1,10 @@
+import {loadPublishedDoctorSourceRange} from './doctor-source-artifacts.js';
 import { loadPublishedFacilityRange } from './facility-overview-cache.js';
 import { applyAccountHospitalLocations, buildPreviewFromDerivedEvents } from './d1-calendar.js';
 import { applyEventOverrides, customEventsToEvents, defaultSettings, normalizeRosterName } from './roster.js';
 
 // Explicit Creator profile views read shared artifacts; they never build D1 snapshots.
-export async function loadPublishedDoctorCalendar(r2, profile, { range, today, locations = {}, schemaVersion = 1, previousSnapshot = null, ownerType = "doctor-profile", ownerId = profile.profileId } = {}) {
+export async function loadPublishedDoctorCalendar(r2, profile, { range, today, locations = {}, schemaVersion = 1, previousSnapshot = null, ownerType = "doctor-profile", ownerId = profile.profileId, cachedRevision = "" } = {}) {
   const known = new Set(['mmc', 'mch', 'ddh', 'vhh', 'casey']);
   const sources = [...new Set(profile.sourceTypes || [])];
   const aliases = profile.aliases?.length ? profile.aliases : sources.map(sourceType => ({ sourceType, key: profile.doctorKey }));
@@ -11,19 +12,11 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
     throw new Error('Published doctor calendar requires bounded site identities.');
   }
   const markers = new Set(aliases.map(alias => `${alias.sourceType}|${alias.key}`));
-  const published = sources.length?await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today, { identityMarkers: markers }):{events:[],revision:'empty-identity',missing:[],visibleTerms:[]};
+  let published = sources.length?profile.doctorArtifactsEnabled?await loadPublishedDoctorSourceRange(r2,sources,range.startDate,range.endDate,today,markers):await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today, { identityMarkers: markers }):{events:[],revision:'empty-identity',missing:[],visibleTerms:[]};
   if (published.preparing || published.events.length > 50000
     || (published.missing || []).some(item => ["month-unavailable", "staff-unavailable"].includes(item.reason))) {
     return { snapshot: null, snapshotAvailable: false, snapshotStale: false, stale: false, snapshotStatus: 'missing', snapshotSource: 'published-roster', calendarRevision: '' };
   }
-  const seen = new Set();
-  const roster = published.events.filter(row => {
-    if (!markers.has(`${row.sourceType}|${row.doctorKey}`)) return false;
-    const marker = `${row.sourceType}|${row.doctorKey}|${row.event?.id || JSON.stringify(row.event)}`;
-    if (seen.has(marker)) return false;
-    seen.add(marker);
-    return true;
-  }).map(row => row.event);
   // Retain historical cached shifts outside published windows. Never retain a
   // cached current-term shift after a replacement or removal.
   const historical = (previousSnapshot?.preview?.events || []).filter(event => {
@@ -35,10 +28,20 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
   });
   const session = profile.state?.session || {};
   const settings = { ...defaultSettings(), ...(session.settings || {}) };
+  const bytes = new TextEncoder().encode(JSON.stringify([published.revision, aliases, session, locations, historical,profile.doctorArtifactsEnabled?range:null]));
+  const revision = 'published-profile:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
+  if(profile.doctorArtifactsEnabled&&cachedRevision===revision)return {snapshot:null,snapshotCurrent:true,snapshotAvailable:true,snapshotRevision:revision,calendarRevision:revision};
+  if(profile.doctorArtifactsEnabled&&sources.length)published.events=await published.readEvents();
+  const seen = new Set();
+  const roster = published.events.filter(row => {
+    if (!markers.has(`${row.sourceType}|${row.doctorKey}`)) return false;
+    const marker = `${row.sourceType}|${row.doctorKey}|${row.event?.id || JSON.stringify(row.event)}`;
+    if (seen.has(marker)) return false;
+    seen.add(marker);
+    return true;
+  }).map(row => row.event);
   const events = applyEventOverrides(applyAccountHospitalLocations([...historical, ...roster], locations, { includeLocations: settings.includeLocations !== false }), session.overrides || {});
   const custom = customEventsToEvents(session.customEvents || [], settings, events).filter(event => String(event.start || '').slice(0, 10) <= range.endDate && String(event.end || event.start || '').slice(0, 10) >= range.startDate);
-  const bytes = new TextEncoder().encode(JSON.stringify([published.revision, aliases, session, locations, historical]));
-  const revision = 'published-profile:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
   const builtAt = new Date().toISOString();
   return {
     partial: Boolean(published.missing?.length), missing: published.missing || [],

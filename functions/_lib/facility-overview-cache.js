@@ -1,3 +1,5 @@
+import {doctorSourceKey,doctorSourceCurrentKey,DOCTOR_SOURCE_VERSION} from './doctor-source-artifacts.js';
+import {loadDoctorMonthSelection,doctorMonthIndexKey} from './doctor-calendar-artifacts.js';
 import {
   loadCachedSnapshot,
   ROSTER_PARSER_VERSION,
@@ -92,7 +94,7 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
   if (!operationRevision || operationRevision !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
   if (mode === "build-batch") return buildFacilityPublicationBatch(context, plan, publicPlan, Number(options.batchIndex));
   if (mode === "build-month") return buildFacilityPublicationMonth(context, plan, publicPlan, String(options.month || ""));
-  return finalizeFacilityPublication(context, plan, publicPlan);
+  return finalizeFacilityPublication(context, plan, publicPlan, options);
 }
 
 function chunkedPublicationPlanResponse(plan) {
@@ -186,7 +188,7 @@ async function buildFacilityPublicationMonth(context, plan, publicPlan, month) {
   if (!publicPlan.months.includes(month)) return { ok: false, reason: "valid-planned-month-required" };
   const resultKey = facilityMonthResultKey(plan.sourceType, plan.planRevision, month);
   const existing = await loadJsonObject(r2, resultKey);
-  if (existing.data) return { ok: true, mode: "build-month", unchanged: true, operationRevision: plan.planRevision, month };
+  if (existing.data) return { ok: true, mode: "build-month", unchanged: true, operationRevision: plan.planRevision, month, revision: existing.data.pointer?.revision };
   const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
   if (!completed.ok) return completed;
   const stagedPlan = await loadJsonObject(r2, facilityOperationKey(plan.sourceType, plan.planRevision));
@@ -208,10 +210,11 @@ async function buildFacilityPublicationMonth(context, plan, publicPlan, month) {
   return { ok: true, mode: "build-month", operationRevision: plan.planRevision, month, dateCount: monthDates.length, revision };
 }
 
-async function finalizeFacilityPublication(context, plan, publicPlan) {
+async function finalizeFacilityPublication(context, plan, publicPlan, options = {}) {
   const { ROSTER_DB: db, ROSTER_FILES: r2 } = context.env;
   const currentPublic = await loadJsonObject(r2, facilityMetadataManifestKey(plan.sourceType));
   if (currentPublic.data?.publicationOperationId === plan.planRevision) {
+    if(options.requireDoctorCalendars&&!await promoteDoctorSource(r2,plan.sourceType,plan.planRevision,currentPublic.data.revision))return {ok:true,deferred:true,doctorSource:{manifestKey:`facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${currentPublic.data.revision}.json.gz`,operationRevision:plan.planRevision},sourceType:plan.sourceType,mode:'finalize'};
     await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
       .bind(String(currentPublic.data.revision || ""), new Date().toISOString(), plan.sourceType, plan.planRevision).run();
     return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: plan.planRevision, revision: currentPublic.data.revision };
@@ -232,10 +235,19 @@ async function finalizeFacilityPublication(context, plan, publicPlan) {
     if (!result.data?.pointer) return { ok: false, reason: "all-months-required", missingMonth: month };
     months[month] = result.data.pointer;
   }
+  if(options.requireDoctorCalendars){
+    const missing=[];
+    for(const month of publicPlan.months){const pointer=months[month];if(!await r2.head(doctorMonthIndexKey(plan.sourceType,month,pointer.revision)))missing.push({month,revision:pointer.revision});}
+    if(missing.length)return {ok:true,deferred:true,doctorCalendars:missing,sourceType:plan.sourceType,mode:'finalize'};
+  }
   const stable = { ...stagedPlan.data.preparedManifest, days, months };
   const revision = await digest(stable);
   const candidate = { ...stable, revision, publicationOperationId: plan.planRevision, publishedAt: new Date().toISOString() };
   await putJsonGzip(r2, `facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`, candidate);
+  if(options.requireDoctorCalendars){
+    const prepared=await loadCachedSnapshot(r2,doctorSourceKey(plan.sourceType,'generations',plan.planRevision));
+    if(!prepared||prepared.manifestRevision!==revision)return {ok:true,deferred:true,doctorSource:{manifestKey:`facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`,operationRevision:plan.planRevision},sourceType:plan.sourceType,mode:'finalize'};
+  }
   await db.prepare("UPDATE facility_day_publications SET candidate_revision = ?, updated_at = ? WHERE source_type = ? AND operation_id = ? AND status = 'building'")
     .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
   const ownerResult = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'building'").bind(plan.sourceType).all();
@@ -244,6 +256,7 @@ async function finalizeFacilityPublication(context, plan, publicPlan) {
   await putJsonGzip(r2, facilityMetadataManifestKey(plan.sourceType), candidate, {
     onlyIf: stagedPlan.data.baseEtag ? { etagMatches: stagedPlan.data.baseEtag } : { etagDoesNotMatch: "*" },
   });
+  if(options.requireDoctorCalendars&&!await promoteDoctorSource(r2,plan.sourceType,plan.planRevision,revision))return {ok:true,deferred:true,doctorSource:{manifestKey:`facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`,operationRevision:plan.planRevision},sourceType:plan.sourceType,mode:'finalize'};
   await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
     .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
   return { ok: true, mode: "finalize", operationRevision: plan.planRevision, revision };
@@ -553,22 +566,22 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
   const months = monthsInRange(startDate, endDate);
   const selected = [];
   const missing = [];
-  for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
+  const requestedSources=[...new Set(sourceTypes.map(safeSource).filter(Boolean))];
+  await Promise.all(requestedSources.map(async(sourceType) => {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
-    if (!manifest) { missing.push({ sourceType, startDate, endDate, reason: "manifest-unavailable" }); continue; }
+    if (!manifest) { missing.push({ sourceType, startDate, endDate, reason: "manifest-unavailable" }); return; }
     const visibleTerms = (manifest.terms || []).filter((term) => rosterTermVisible(term, currentDate) && term.termEnd >= startDate && term.termStart <= endDate);
-    if (!visibleTerms.length) { missing.push({ sourceType, startDate, endDate, reason: "history-unavailable" }); continue; }
+    if (!visibleTerms.length) { missing.push({ sourceType, startDate, endDate, reason: "history-unavailable" }); return; }
     // A bounded publication replaces the source summary with that term's
     // coverage. Other retained terms keep authoritative coverage in their
     // staff snapshots; never infer their absence from the source summary.
-    const publications = [];
-    for (const term of visibleTerms) {
+    const publications = await Promise.all(visibleTerms.map(async(term) => {
       const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
       const termCoverage = Array.isArray(term.coverage) ? term.coverage
         : Array.isArray(staff?.coverage) ? staff.coverage : manifest.coverage;
       const empty = Array.isArray(termCoverage) && !termCoverage.length && (!term.staffKey || Boolean(staff));
-      publications.push({ term, staff, coverage: termCoverage, empty });
-    }
+      return { term, staff, coverage: termCoverage, empty };
+    }));
     const emptyRoster = publications.every(item => item.empty);
     let gap = null;
     for (let date = startDate; date <= endDate;) {
@@ -590,15 +603,18 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
       return false;
     });
     selected.push({ sourceType, manifest, visibleTerms, publications, emptyRoster, monthPointers });
-  }
+  }));
+  selected.sort((a,b)=>requestedSources.indexOf(a.sourceType)-requestedSources.indexOf(b.sourceType));
   if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "", missing };
   const events = [];
   const coverage = [];
-  let availableMonths = 0;
-  for (const { sourceType, manifest, visibleTerms, publications, emptyRoster, monthPointers } of selected) {
+  let availableMonths = 0, doctorArtifactUnavailable = false;
+  const doctorRevisions=[],sourceEvents=new Map();
+  const readSource=async({sourceType,manifest,visibleTerms,publications,emptyRoster,monthPointers})=>{
+    const collected=[];sourceEvents.set(sourceType,collected);
     // A published manifest with no active coverage authoritatively removes
     // current shifts; personal calendars must not retain a stale old roster.
-    if (emptyRoster) { availableMonths += 1; continue; }
+    if (emptyRoster) { availableMonths += 1; return; }
     const overrides = new Map();
     for (const {term,staff,empty} of publications) {
       if (!staff && !empty) missing.push({ sourceType, termStart: term.termStart, startDate, endDate, reason: "staff-unavailable" });
@@ -606,8 +622,17 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
         if (entry.termStart === term.termStart) overrides.set(`${entry.sourceType}|${entry.doctorKey}|${term.termStart}`, entry);
       }
     }
+    const preparedDoctors=options.doctorArtifacts&&options.identityMarkers
+      ? new Map(await Promise.all(monthPointers.map(async([month,pointer])=>[month,await loadDoctorMonthSelection(r2,sourceType,month,pointer.revision,
+        [...options.identityMarkers].filter(marker=>marker.startsWith(sourceType+'|')).map(marker=>marker.slice(sourceType.length+1)),{metadataOnly:options.metadataOnly})])))
+      : null;
     for (const [month, pointer] of monthPointers) {
-      const snapshot = await loadCachedSnapshot(r2, pointer.key);
+      let snapshot;
+      if(options.doctorArtifacts && options.identityMarkers){
+        const selection=preparedDoctors.get(month);
+        if(!selection){doctorArtifactUnavailable=true;missing.push({sourceType,month,startDate,endDate,reason:'doctor-artifact-unavailable'});continue;}
+        doctorRevisions.push([sourceType,month,selection.selected]);snapshot={rows:selection.rows};
+      }else snapshot = await loadCachedSnapshot(r2, pointer.key);
       if (!Array.isArray(snapshot?.rows)) { missing.push({ sourceType, month, startDate, endDate, reason: "month-unavailable" }); continue; }
       availableMonths += 1;
       for (const row of snapshot.rows || []) {
@@ -616,18 +641,25 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
         if (date < startDate || date > endDate || !publications.some(({term,empty}) => !empty && term.termStart <= date && term.termEnd >= date)) continue;
         const term = publications.find(({term}) => term.termStart <= date && term.termEnd >= date)?.term;
         const override = overrides.get(`${row.sourceType}|${row.doctorKey}|${term?.termStart}`);
-        events.push(override && !override.useRosterSeniority
+        collected.push(override && !override.useRosterSeniority
           ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
           : row);
       }
     }
     for (const publication of publications) coverage.push(...(publication.coverage || []));
-  }
-  const revision = await digest([selected.map(({ sourceType, visibleTerms, monthPointers }) => [sourceType,
+  };
+  if(options.doctorArtifacts)await Promise.all(selected.map(readSource));else for(const source of selected)await readSource(source);
+  for(const source of selected)events.push(...(sourceEvents.get(source.sourceType)||[]));
+  doctorRevisions.sort((a,b)=>JSON.stringify(a.slice(0,2)).localeCompare(JSON.stringify(b.slice(0,2))));
+  missing.sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const revision = options.doctorArtifacts && options.identityMarkers
+    ? await digest([doctorRevisions,selected.map(({sourceType,visibleTerms,publications})=>[sourceType,
+      visibleTerms.map(term=>[term.termStart,term.termEnd]),publications.flatMap(({staff})=>(staff?.seniorityOverrides||[]).filter(entry=>options.identityMarkers.has(`${entry.sourceType}|${entry.doctorKey}`)))]),missing])
+    : await digest([selected.map(({ sourceType, visibleTerms, monthPointers }) => [sourceType,
     visibleTerms.map(term => term.staffRevision || ""), monthPointers.map(([month, pointer]) => [month, pointer.revision || ""])]), missing]);
   if (!missing.length && options.cachedRevision === revision) return { preparing: false, unchanged: true, events: [], coverage: [], revision, missing };
   const uniqueCoverage = [...new Map(coverage.map(item => [JSON.stringify(item), item])).values()];
-  return { preparing: !availableMonths, partial: missing.length > 0, missing, events, coverage: uniqueCoverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
+  return { preparing: !availableMonths || doctorArtifactUnavailable, partial: missing.length > 0, missing, events, coverage: uniqueCoverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
 }
 
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
@@ -871,4 +903,12 @@ function monthsInRange(startDate, endDate) {
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
   return result;
+}
+
+async function promoteDoctorSource(r2,sourceType,operationRevision,manifestRevision){
+ const prepared=await loadCachedSnapshot(r2,doctorSourceKey(sourceType,'generations',operationRevision));if(!prepared||prepared.manifestRevision!==manifestRevision)return false;
+ const head=await r2.head(facilityMetadataManifestKey(sourceType));if(!head)return false;
+ const existing=await loadCachedSnapshot(r2,doctorSourceCurrentKey(sourceType));if(existing?.parentEtag===head.etag&&existing.catalogueKey===prepared.catalogueKey)return true;
+ const saved=await r2.put(doctorSourceCurrentKey(sourceType),new TextEncoder().encode(JSON.stringify({...prepared,parentEtag:head.etag})),{onlyIf:prepared.baseEtag?{etagMatches:prepared.baseEtag}:{etagDoesNotMatch:'*'}});
+ return Boolean(saved);
 }

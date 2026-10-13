@@ -6312,3 +6312,17 @@ function sanitizeEvent(value) {
     monthKey: String(value.monthKey || ""),
   };
 }
+
+// Calendar-only presentation inputs share one indexed binding call. Account
+// state already came from the authenticated account/claims/state join.
+export async function loadCalendarPresentationInputs(db,email,session){
+ const row=await db.prepare(`SELECT
+  (SELECT json_group_array(json_object('source_type',source_type,'location',location)) FROM
+    (SELECT source_type,location FROM account_hospital_locations WHERE email=? ORDER BY source_type LIMIT 6)) locations_json,
+  (SELECT json_group_array(json_object('id',id,'title',title,'start_date',start_date,'end_date',end_date,'all_day',all_day,'start_time',start_time,'end_time',end_time,'location',location,'include',include)) FROM
+    (SELECT id,title,start_date,end_date,all_day,start_time,end_time,location,include FROM custom_events WHERE owner_email=? ORDER BY start_date,start_time,title,id LIMIT 201)) custom_json`)
+  .bind(normalizeEmail(email),normalizeEmail(email)).first();
+ const locations=JSON.parse(row.locations_json),custom=JSON.parse(row.custom_json);
+ return {locations:locations.length>5?await loadAccountHospitalLocations(db,email,session):locations.length?normalizeHospitalLocationMap(Object.fromEntries(locations.map(r=>[String(r.source_type||'').toLowerCase(),r.location]))):hospitalLocationsFromSession(session),
+  customEvents:custom.length>200?await queryAccountCustomEvents(db,email):custom.map(r=>customEventForAccount(r,email)).filter(e=>e.id&&e.title&&e.startDate&&e.endDate)};
+}

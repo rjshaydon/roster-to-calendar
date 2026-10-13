@@ -1,3 +1,4 @@
+import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
 import {normalizeEmail} from "../_lib/email.js";
 export {normalizeEmail} from "../_lib/email.js";
 import {identityTermHistory} from '../_lib/identity-term-history.js';
@@ -226,6 +227,32 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPost(context) {
+  if(context.data?.stateAction==='loadCalendarEvents')return handleCalendarEventsRequest(context);
+  return handleAccountStateRequest(context);
+}
+
+async function handleCalendarEventsRequest(context){
+  context.env={...context.env,ROSTER_FILES:memoizeSnapshotReads(context.env.ROSTER_FILES)};
+  try{
+    const body=await context.request.json().catch(()=>null);
+    if(body?.action!=='loadCalendarEvents')return Response.json({error:'Invalid calendar action.'},{status:400});
+    const email=normalizeEmail(body.email),password=String(body.password||'');
+    if(!email)return Response.json({error:'Email address is required.'},{status:400});
+    if(!hasCalendarDb(context.env))return Response.json({error:'D1 database is not configured.'},{status:503});
+    const account=await verifyD1Account(context.env.ROSTER_DB,email,password),targetEmail=normalizeEmail(body.targetEmail);
+    const targetRecord=targetEmail&&['creator','owner'].includes(account.role)?await loadAccountMirror(context.env.ROSTER_DB,targetEmail):account.record;
+    const prepared=await prepareLightweightAccountResponse(targetRecord,{db:context.env.ROSTER_DB,includeImportRefs:false,recordStateCurrent:true,calendarOnly:true});
+    const range=boundedCalendarEventRange(body),params={targetRecord,prepared,startDate:range.startDate,endDate:range.endDate,doctorKey:normalizeRosterName(body.doctorKey||''),cachedRevision:body.cachedRevision||'',allowInlineBuild:body.allowInlineBuild!==false,skipRebuild:body.skipRebuild===true,diagnosticsRequested:body.diagnostics===true,reason:'loadCalendarEvents'};
+    const payload=body.responseMode==='fast'&&body.allowInlineBuild===false?await loadFastAccountSnapshotPayload(context,params):await loadAccountSnapshotPayload(context,params);
+    return Response.json(payload);
+  }catch(error){
+    if(['d1-statement-budget-exceeded','d1-request-deadline-exceeded'].includes(error?.code))throw error;
+    const message=error.message||'Calendar request failed.',failure=classifyD1Failure(message);
+    return Response.json(failure?{error:failure.message,errorType:failure.errorType,phase:String(context.data?.d1OperationPhase||'')}:{error:message},{status:failure?503:message==='Incorrect password.'||message.startsWith('Account not found')?401:400});
+  }
+}
+
+async function handleAccountStateRequest(context) {
   context.env = { ...context.env, ROSTER_FILES: memoizeSnapshotReads(context.env.ROSTER_FILES) };
   const requestStartedAt = Date.now();
   try {
@@ -2590,7 +2617,7 @@ export async function onRequestPost(context) {
       const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
-      const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB, includeImportRefs: false });
+      const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB, includeImportRefs: false, recordStateCurrent:true, calendarOnly:true });
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
@@ -3842,7 +3869,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
   const record = rawRecord;
   const role = record.role || roleForEmail(record.email);
   let state = sanitizeState(record.state);
-  const mirroredState = await loadAccountStateMirror(options.db, record.email).catch(() => null);
+  const mirroredState = options.recordStateCurrent?null:await loadAccountStateMirror(options.db, record.email).catch(() => null);
   if (mirroredState?.session) {
     state = {
       ...state,
@@ -3852,8 +3879,12 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
       },
     };
   }
-  state = await applySqlHospitalLocationSettings(options.db, record.email, state);
-  const d1CustomEvents = await queryAccountCustomEvents(options.db, record.email).catch(() => []);
+  const calendarInputs=options.calendarOnly?await loadCalendarPresentationInputs(options.db,record.email,state?.session):null;
+  const calendarLocations=calendarInputs?.locations||null;
+  state = options.calendarOnly
+    ? calendarLocations?{...state,session:{...state.session,settings:mergeHospitalLocationsIntoSettings(state.session?.settings||{},calendarLocations)}}:state
+    : await applySqlHospitalLocationSettings(options.db, record.email, state);
+  const d1CustomEvents = calendarInputs?.customEvents||await queryAccountCustomEvents(options.db, record.email).catch(() => []);
   if (d1CustomEvents.length) {
     state = {
       ...state,
@@ -3886,8 +3917,9 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     };
   }
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
+  const facilityOverviewAccess = options.calendarOnly?null:await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
   return {
+    calendarLocations,
     role,
     realName: record.realName || "",
     state: applyDefaultSelectedDoctorToState(state, role, claims, defaultDoctorKey),
@@ -4516,15 +4548,16 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
   if (!sourceTypes.length && context.env.IDENTITY_REVIEW_ENABLED!=='true') return cached;
   if(context.env.IDENTITY_REVIEW_ENABLED==='true' && cached.snapshot) cached.snapshot=filterSnapshotByIdentityAliases(cached.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
   const email = params.targetRecord.email;
-  const locations = await loadAccountHospitalLocations(context.env.ROSTER_DB, email, session);
+  const locations = params.prepared?.calendarLocations||await loadAccountHospitalLocations(context.env.ROSTER_DB, email, session);
   const published = await loadPublishedDoctorCalendar(context.env.ROSTER_FILES, {
     doctorKey, displayName: aliases.find(alias=>alias.preferredName)?.preferredName || option?.displayName || params.targetRecord.realName || doctorKey,
-    aliases, sourceTypes, state: { session }, identityAliasesEnforced:context.env.IDENTITY_REVIEW_ENABLED==='true',
+    aliases, sourceTypes, state: { session }, doctorArtifactsEnabled:context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', identityAliasesEnforced:context.env.IDENTITY_REVIEW_ENABLED==='true',
   }, { range: boundedCalendarEventRange(params), today: australianDateKey(), locations,
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
+    cachedRevision:params.cachedRevision, schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
   // An incomplete publication retains the last working cache until the shared
   // pointer is committed; it never triggers a D1 history rebuild.
   if (!published.snapshotAvailable) return cached;
+  if (published.snapshotCurrent) return {ok:true,...published};
   const refs = sourceTypes.length?await context.env.ROSTER_DB.prepare(`SELECT id,name,source_type,size,last_modified,added_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE active=1 AND source_type IN (${sourceTypes.map(() => '?').join(',')}) LIMIT 129`).bind(...sourceTypes).all():{results:[]};
   if (refs.results.length > 128) throw new Error("Active roster references exceed the calendar limit.");
   published.snapshot.fileRefs = refs.results.map(file => ({ id:file.id, name:file.name, sourceType:file.source_type, size:file.size, lastModified:file.last_modified, addedAt:file.added_at }));
@@ -5878,7 +5911,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
       const aliases=await expandApprovedIdentityAliases(db,profile.aliases?.length?profile.aliases:(profile.sourceTypes||[]).map(sourceType=>({sourceType,key:profile.doctorKey})));
       profile={...profile,aliases,sourceTypes:[...new Set(aliases.map(a=>a.sourceType))],displayName:aliases.find(a=>a.preferredName)?.preferredName || profile.displayName};
     }
-    return loadPublishedDoctorCalendar(context.env.ROSTER_FILES, profile, { range: requestedRange, today: australianDateKey(), locations, schemaVersion: SNAPSHOT_SCHEMA_VERSION });
+    return loadPublishedDoctorCalendar(context.env.ROSTER_FILES, {...profile,doctorArtifactsEnabled:context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready'}, { cachedRevision:options.cachedRevision, range: requestedRange, today: australianDateKey(), locations, schemaVersion: SNAPSHOT_SCHEMA_VERSION });
   }
   const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);
   setRequestOperationPhase(context, "revision");

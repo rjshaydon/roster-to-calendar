@@ -50,6 +50,7 @@ export async function onRequest(context) {
   const url = new URL(context.request.url);
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
+  if(url.pathname==='/api/state'){context.data ||= {};context.data.stateAction=action;}
   let identityMaintenanceInput, derivedInput;
   if (url.pathname === '/api/automation/identity-maintenance' && context.request.method === 'POST') {
     identityMaintenanceInput = await context.request.json().catch(() => null);
@@ -74,7 +75,7 @@ export async function onRequest(context) {
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && ["identity","loadCalendarEvents"].includes(action) || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the

@@ -1,3 +1,5 @@
+import {publishDoctorSource} from './process-doctor-source.mjs';
+import {publishDoctorMonth,doctorCalendarRequest} from './process-doctor-calendars.mjs';
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
@@ -73,6 +75,14 @@ for (const run of runs) {
 if (pending.boundedImportEnabled === true) {
   for (let step = 0; step < 24; step += 1) {
     const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId, maintenanceBudget } });
+    const doctorRequest=doctorCalendarRequest({base:baseUrl,token:process.env.ROSTER_AUTOMATION_TOKEN});
+    const doctorSource={"monash-adults":"mmc","monash-paeds":"mch","dandenong-findmyshift":"ddh","vhh-active-medical-roster":"vhh"}[sourceId];
+    if(refresh.doctorCalendarsEnabled&&refresh.mode==='build-month'&&refresh.revision)await publishDoctorMonth({sourceType:doctorSource,month:refresh.month,revision:refresh.revision,request:doctorRequest});
+    if(refresh.doctorCalendars?.length){
+      for(const pointer of refresh.doctorCalendars)await publishDoctorMonth({sourceType:refresh.sourceType,month:pointer.month,revision:pointer.revision,request:doctorRequest});
+      continue;
+    }
+    if(refresh.doctorSource){await publishDoctorSource({sourceType:refresh.sourceType,request:doctorRequest,...refresh.doctorSource});continue;}
     if(refresh.deferred) processorDeferred=true;
     if (refresh.idle || refresh.deferred || refresh.completed) break;
     if(step===23) processorDeferred=true;

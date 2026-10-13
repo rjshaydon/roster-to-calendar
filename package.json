@@ -69,7 +69,8 @@
     "test:roster-patch": "node --no-warnings scripts/test-roster-patch.mjs",
     "test:identity-audit-plan": "node --no-warnings scripts/test-identity-audit-plan.mjs",
     "test:external-identity-audit": "node --no-warnings scripts/test-external-identity-audit.mjs",
-    "test:identity-audit-checkpoints": "node --no-warnings scripts/test-identity-audit-checkpoints.mjs"
+    "test:identity-audit-checkpoints": "node --no-warnings scripts/test-identity-audit-checkpoints.mjs",
+    "test:doctor-calendar-artifacts": "node --no-warnings scripts/test-doctor-calendar-artifacts.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",
