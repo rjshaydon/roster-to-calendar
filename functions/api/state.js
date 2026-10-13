@@ -4537,26 +4537,35 @@ async function loadAccountSnapshotPayload(context, params = {}) {
 
 async function loadFastAccountSnapshotPayload(context, params = {}) {
   if (String(context.env.BOUNDED_MANUAL_ROSTER_ENABLED || "").toLowerCase() !== "true") return loadLegacyFastAccountSnapshotPayload(context, params);
-  const cached = await loadLegacyFastAccountSnapshotPayload(context, { ...params, cachedRevision: "" });
   const session = params.prepared?.state?.session || params.targetRecord?.state?.session || {};
   const claims = sanitizeClaims(params.prepared?.claims || params.targetRecord?.claims);
+  // Claims supply aliases independently of the old snapshot. Creator views
+  // without claims still read it to preserve their existing doctor selections.
+  const deferSnapshotRead = context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready' && context.env.IDENTITY_REVIEW_ENABLED==='true' && claims.length>0;
+  const cached = await loadLegacyFastAccountSnapshotPayload(context, { ...params, cachedRevision: "", deferSnapshotRead });
+  const resolveCached = async () => {
+    const {readSnapshot,historicalRevision,...payload}=cached;
+    if(readSnapshot)payload.snapshot=await readSnapshot();
+    if(readSnapshot&&!payload.snapshot)return {...payload,snapshotAvailable:false,snapshotSource:'server-cache-miss'};
+    if(context.env.IDENTITY_REVIEW_ENABLED==='true'&&payload.snapshot)payload.snapshot=filterSnapshotByIdentityAliases(payload.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
+    return payload;
+  };
   const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
   const option = (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
   let aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
   if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await calendarIdentityAliases(context.env.ROSTER_DB,{role:params.prepared?.role||params.targetRecord.role,email:params.targetRecord.email,doctorKey,aliases});
   const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
   if (!sourceTypes.length && context.env.IDENTITY_REVIEW_ENABLED!=='true') return cached;
-  if(context.env.IDENTITY_REVIEW_ENABLED==='true' && cached.snapshot) cached.snapshot=filterSnapshotByIdentityAliases(cached.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
   const email = params.targetRecord.email;
   const locations = params.prepared?.calendarLocations||await loadAccountHospitalLocations(context.env.ROSTER_DB, email, session);
   const published = await loadPublishedDoctorCalendar(context.env.ROSTER_FILES, {
     doctorKey, displayName: aliases.find(alias=>alias.preferredName)?.preferredName || option?.displayName || params.targetRecord.realName || doctorKey,
     aliases, sourceTypes, state: { session }, doctorArtifactsEnabled:context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', identityAliasesEnforced:context.env.IDENTITY_REVIEW_ENABLED==='true',
   }, { range: boundedCalendarEventRange(params), today: australianDateKey(), locations,
-    cachedRevision:params.cachedRevision, schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
+    cachedRevision:params.cachedRevision, schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, previousSnapshotLoader:cached.readSnapshot, historicalRevision:cached.historicalRevision, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
   // An incomplete publication retains the last working cache until the shared
   // pointer is committed; it never triggers a D1 history rebuild.
-  if (!published.snapshotAvailable) return cached;
+  if (!published.snapshotAvailable) return resolveCached();
   if (published.snapshotCurrent) return {ok:true,...published};
   const refs = sourceTypes.length?await context.env.ROSTER_DB.prepare(`SELECT id,name,source_type,size,last_modified,added_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE active=1 AND source_type IN (${sourceTypes.map(() => '?').join(',')}) LIMIT 129`).bind(...sourceTypes).all():{results:[]};
   if (refs.results.length > 128) throw new Error("Active roster references exceed the calendar limit.");
@@ -4625,6 +4634,16 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
   }
 
   if (readyArtifact) {
+    if(params.deferSnapshotRead) return {
+      ok:true,snapshot:null,snapshotAvailable:true,snapshotStale:false,
+      snapshotBuiltAt:registry.builtAt || '',calendarRevision:registryRevision,
+      historicalRevision:JSON.stringify([registry.artifactKey,registryRevision]),
+      readSnapshot:async()=>{
+        const snapshot=await loadCachedSnapshot(cacheBucket,registry.artifactKey).catch(()=>null);
+        return snapshot?filterSnapshotCalendarEvents(snapshot):null;
+      },
+      ...snapshotRegistryState('ready',{snapshotSource:'server-cache',snapshotRevision:registryRevision}),
+    };
     const r2StartedAt = Date.now();
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     const r2ReadMs = Date.now() - r2StartedAt;

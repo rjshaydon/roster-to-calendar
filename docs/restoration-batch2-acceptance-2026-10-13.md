@@ -1,5 +1,39 @@
 # Batch 2 production acceptance — 13 October 2026 (Melbourne)
 
+## Deferred until after Batch 2
+
+Investigate the iPhone bottom menu remaining halfway up the screen after keyboard
+use or reopening the app. Scrolling sometimes restores it; sometimes force-quitting
+is required. Check keyboard/viewport offsets and app resume behavior, preserving
+the normal bottom placement. Reported 13 October; intentionally not part of the
+current calendar CPU acceptance work.
+
+## Conditional legacy history read follow-up
+
+The optimized authenticated calendar path previously loaded the old account
+snapshot before checking the browser's publication revision. For accounts with
+claims, it now pins the immutable legacy artifact key and built revision, and
+loads historical content only when assembling a changed calendar or returning
+a fallback during publication. Creator views without claims retain their existing
+snapshot-based selection semantics.
+
+The route also no longer builds an identity-filtered preview that is immediately
+discarded when a published calendar is available. Historical selection itself
+enforces aliases; fallback previews still receive the identity filter before
+being returned. This removes redundant preview work in the existing build-mode
+path as well as the candidate reader.
+
+Local authenticated-route tests verify no legacy R2 download on unchanged
+checks, exact historical/current event preservation, identity isolation and
+fallback during source preparation. Additional publication tests cover interrupted
+catalogue builds, completed-person receipt reuse, staged generation rebasing,
+stale parent/current-pointer rejection and watchdog lease coalescing. These tests
+do not establish native CPU acceptance. Production remains in `build` mode.
+
+External preparation run 38350316863 yielded at its time bound after completing
+MMC month derivatives; the watchdog automatically started continuation run
+38351770569. A successful yielded run is progress, not a completed backfill.
+
 Status: **not accepted**. No safeguards or clinical data were changed in this pass.
 
 ## Passed

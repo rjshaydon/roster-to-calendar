@@ -1,6 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
+import {readdir,readFile} from 'node:fs/promises';
+import {onRequestPost as statePost} from '../functions/api/state.js';
+import {snapshotRegistryRangeKey} from '../functions/_lib/d1-calendar.js';
 import {loadCalendarPresentationInputs} from '../functions/_lib/d1-calendar.js';
-import {doctorRangeGaps} from '../functions/_lib/doctor-source-artifacts.js';
+import {doctorRangeGaps,doctorSourceKey,doctorSourceCurrentKey} from '../functions/_lib/doctor-source-artifacts.js';
 import {publishDoctorSource} from './process-doctor-source.mjs';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -12,10 +15,10 @@ import {facilityMetadataManifestKey,facilityMonthObjectKey} from '../functions/_
 import {loadPublishedDoctorCalendar} from '../functions/_lib/published-doctor-calendar.js';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 class Bucket{
- objects=new Map();reads=[];writes=[];failRows=false;
+ objects=new Map();reads=[];writes=[];failRows=false;failCatalogue=false;
  async head(key){return this.objects.has(key)?{key,etag:hash(this.objects.get(key))}:null;}
  async get(key){this.reads.push(key);const entry=this.objects.get(key);return entry?{body:entry,etag:hash(entry),async arrayBuffer(){return entry.buffer.slice(entry.byteOffset,entry.byteOffset+entry.length)}}:null;}
- async put(key,value,options={}){if(this.failRows&&key.includes('/rows/'))throw Error('Injected failure');if(options.onlyIf?.etagDoesNotMatch==='*'&&this.objects.has(key)||options.onlyIf?.etagMatches&&(!this.objects.has(key)||hash(this.objects.get(key))!==options.onlyIf.etagMatches))return null;const bytes=typeof value==='string'?Buffer.from(value):value instanceof ReadableStream?Buffer.from(await new Response(value).arrayBuffer()):Buffer.from(value);if(options.sha256)assert.equal(hash(bytes),Buffer.from(options.sha256).toString('hex'));this.objects.set(key,bytes);this.writes.push(key);return {key};}
+ async put(key,value,options={}){if(this.failRows&&key.includes('/rows/')||this.failCatalogue&&key.includes('/catalogues/'))throw Error('Injected failure');if(options.onlyIf?.etagDoesNotMatch==='*'&&this.objects.has(key)||options.onlyIf?.etagMatches&&(!this.objects.has(key)||hash(this.objects.get(key))!==options.onlyIf.etagMatches))return null;const bytes=typeof value==='string'?Buffer.from(value):value instanceof ReadableStream?Buffer.from(await new Response(value).arrayBuffer()):Buffer.from(value);if(options.sha256)assert.equal(hash(bytes),Buffer.from(options.sha256).toString('hex'));this.objects.set(key,bytes);this.writes.push(key);return {key};}
 }
 const r2=new Bucket(),sourceType='mmc',month='2026-10',doctor='DOCTOR A';
 const event=(id,doctorKey,seniority='Junior Registrar')=>({sourceType,doctorKey,seniority,event:{id,doctorKey,source:'MMC',title:'AM shift',start:'2026-10-07T08:00:00+11:00',end:'2026-10-07T16:00:00+11:00',seniority,rawValue:'AM'}});
@@ -37,10 +40,27 @@ let uploadCalls=0;const originalRequest=request;const countedRequest=async(i,o)=
 rows=[rows[0],event('b-changed','DOCTOR B','Senior Registrar')];await generation();result=await publishDoctorMonth({sourceType,month,revision,request:countedRequest});assert.equal(uploadCalls,1,'unchanged doctor performs no upload request or object head check');assert.equal(result.changed,1,'only changed doctor receives new content');
 selection=await loadDoctorMonthSelection(r2,sourceType,month,revision,[doctor]);assert.equal(selection.selected[0][1],firstDigest);
 const staffKey='facility-overview/v1/mmc/staff/2026-08-03/'+hash('staff')+'.json.gz';
-async function manifest(){await r2.put(staffKey,JSON.stringify({coverage:[{startDate:'2026-08-03',endDate:'2026-11-01'}],seniorityOverrides:[]}));await r2.put(facilityMetadataManifestKey(sourceType),JSON.stringify({revision:hash(revision),terms:[{termStart:'2026-08-03',termEnd:'2026-11-01',staffKey}],months:{[month]:{key:facilityMonthObjectKey(sourceType,month,revision),revision}}}));}
+async function manifest(){await r2.put(staffKey,JSON.stringify({coverage:[{startDate:'2026-08-03',endDate:'2026-11-01'}],seniorityOverrides:[]}));await r2.put(facilityMetadataManifestKey(sourceType),JSON.stringify({revision:hash(revision),terms:[{termStart:'2026-10-01',termEnd:'2026-10-31',staffKey}],months:{[month]:{key:facilityMonthObjectKey(sourceType,month,revision),revision}}}));}
 await manifest();await publishDoctorSource({sourceType,request});const profile={sourceTypes:[sourceType],aliases:[{sourceType,key:doctor}],doctorKey:doctor,displayName:'Doctor A',state:{session:{}},identityAliasesEnforced:true,doctorArtifactsEnabled:true};
 const options={range:{startDate:'2026-10-01',endDate:'2026-10-31'},today:'2026-10-07'};
 let calendar=await loadPublishedDoctorCalendar(r2,profile,options);assert.equal(calendar.snapshot.preview.events.length,1);assert.equal(calendar.snapshot.preview.events[0].seniority,'Junior Registrar');const personalRevision=calendar.calendarRevision;
+let historicalReads=0;
+const historicalSnapshot={preview:{events:[
+ {...rows[0].event,id:'history',start:'2026-07-07T08:00:00+10:00',end:'2026-07-07T16:00:00+10:00'},
+ {...rows[0].event,id:'former-person',doctorKey:'SOMEONE ELSE',start:'2026-07-07T08:00:00+10:00',end:'2026-07-07T16:00:00+10:00'},
+ {...rows[0].event,id:'removed-current-shift'},
+]}};
+const lazyOptions={...options,range:{startDate:'2026-07-01',endDate:'2026-10-31'},historicalRevision:'immutable-history-v1',previousSnapshotLoader:async()=>{historicalReads++;return historicalSnapshot;}};
+const lazyCalendar=await loadPublishedDoctorCalendar(r2,profile,lazyOptions);
+const eagerCalendar=await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,previousSnapshotLoader:null,previousSnapshot:historicalSnapshot});
+const stablePreview=({lastParsed,...preview})=>preview;
+assert.deepEqual(stablePreview(lazyCalendar.snapshot.preview),stablePreview(eagerCalendar.snapshot.preview),'lazy history preserves exact events and review details');
+assert.equal(historicalReads,1);
+assert.deepEqual(lazyCalendar.snapshot.preview.events.map(e=>e.id).sort(),['a','history'],'retains history but excludes former identities and removed current-term shifts');
+const lazyCurrent=await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,cachedRevision:lazyCalendar.calendarRevision});
+assert.equal(lazyCurrent.snapshotCurrent,true);assert.equal(historicalReads,1,'unchanged calendar never downloads or processes legacy history');
+const historyChanged=await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,historicalRevision:'immutable-history-v2',cachedRevision:lazyCalendar.calendarRevision});
+assert.notEqual(historyChanged.snapshotCurrent,true);assert.equal(historicalReads,2,'new historical artifact invalidates the browser calendar');
 r2.reads=[];calendar=await loadPublishedDoctorCalendar(r2,profile,{...options,cachedRevision:personalRevision});assert.equal(calendar.snapshotCurrent,true);assert.equal(r2.reads.some(k=>k.includes('/rows/')||k.includes('/months/')||k.includes('/people/')),false,'unchanged check loads neither doctor shifts nor site roster');
 rows=[rows[0],event('b-again','DOCTOR B')];await generation();await publishDoctorMonth({sourceType,month,revision,request});await manifest();await publishDoctorSource({sourceType,request});
 calendar=await loadPublishedDoctorCalendar(r2,profile,{...options,cachedRevision:personalRevision});assert.equal(calendar.snapshotCurrent,true,'colleague edit does not invalidate this doctor');
@@ -50,6 +70,57 @@ calendar=await loadPublishedDoctorCalendar(r2,profile,{...options,cachedRevision
 rows=[event('new',doctor)];await generation();r2.failRows=true;
 await assert.rejects(publishDoctorMonth({sourceType,month,revision,request}));assert.equal(await r2.head(doctorMonthIndexKey(sourceType,month,revision)),null,'failed upload cannot publish completion index');r2.failRows=false;
 await manifest();calendar=await loadPublishedDoctorCalendar(r2,profile,options);assert.equal(calendar.snapshotAvailable,false,'missing complete generation cannot publish partial calendar');
+// A completed person upload survives interruption before catalogue publication.
+await publishDoctorMonth({sourceType,month,revision,request});
+const oldCurrent=Buffer.from(r2.objects.get(doctorSourceCurrentKey(sourceType)));
+r2.failCatalogue=true;
+await assert.rejects(publishDoctorSource({sourceType,request}));
+assert.deepEqual(r2.objects.get(doctorSourceCurrentKey(sourceType)),oldCurrent,'failed catalogue never promotes a partially built source');
+r2.failCatalogue=false;r2.reads=[];r2.writes=[];
+await publishDoctorSource({sourceType,request});
+assert.equal(r2.reads.some(key=>key.includes('/rows/')),false,'resume reuses completed person receipts without reassembling shifts');
+assert.equal(r2.writes.some(key=>key.includes('/people/')),false,'resume never uploads completed person artifacts again');
+const currentKey=doctorSourceCurrentKey(sourceType),current=JSON.parse(r2.objects.get(currentKey)),operationRevision=hash('staged-operation');
+const prepared={mode:'prepare-source',sourceType,operationRevision,manifestRevision:hash(revision),catalogueKey:current.catalogueKey,digest:current.digest,baseEtag:'initial-base'};
+await request(prepared);await request({...prepared,baseEtag:'rebased-current'});
+assert.equal(JSON.parse(r2.objects.get(doctorSourceKey(sourceType,'generations',operationRevision))).baseEtag,'rebased-current','same source generation can rebase after concurrent bootstrap');
+await assert.rejects(request({...prepared,manifestRevision:hash('different-generation')}),'different source revision cannot overwrite the staged generation');
+const beforeRace=Buffer.from(r2.objects.get(currentKey));
+await assert.rejects(request({...prepared,mode:'activate-source',manifestEtag:'stale-parent',baseEtag:(await r2.head(currentKey)).etag}));
+assert.deepEqual(r2.objects.get(currentKey),beforeRace,'changed source parent rejects activation');
+await assert.rejects(request({...prepared,mode:'activate-source',manifestEtag:(await r2.head(facilityMetadataManifestKey(sourceType))).etag,baseEtag:'stale-current'}));
+assert.deepEqual(r2.objects.get(currentKey),beforeRace,'concurrent doctor publication rejects stale activation');
+await r2.put('doctor-calendars/v2/build-lease.json',JSON.stringify({id:'running-build',until:Date.now()+60000}));
+const watchdogEnv={ROSTER_FILES:r2,ROSTER_WATCHDOG_TOKEN:'watchdog-fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'build'};
+const watchdogPost=input=>onRequestPost({env:watchdogEnv,request:new Request('https://fixture',{method:'POST',headers:{authorization:'Bearer watchdog-fixture'},body:JSON.stringify(input)})});
+assert.equal((await (await watchdogPost({mode:'check-source'})).json()).status,'busy','watchdog coalesces an active build');
+assert.equal((await watchdogPost({mode:'object',sourceType,key:currentKey})).status,401,'watchdog cannot read private calendar artifacts');
+// Exercise the actual authenticated calendar entry with a legacy cache, rather
+// than proving the helper alone skips its history callback.
+const accounts=new DatabaseSync(':memory:');
+for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(n=>n.endsWith('.sql')).sort())accounts.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
+const email='calendar-fixture@example.test',salt='fixture-salt',password='fixture-password';
+accounts.prepare('INSERT INTO account_profiles(email,real_name,role,password_salt,password_hash) VALUES(?,?,?,?,?)').run(email,'Doctor A','user',salt,hash(salt+':'+password));
+accounts.prepare('INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES(?,?,?,?)').run(email,sourceType,doctor,'Doctor A');
+accounts.prepare('INSERT INTO account_states(email,session_json) VALUES(?,?)').run(email,JSON.stringify({doctorKey:doctor}));
+const legacyBucket=new Bucket(),legacyKey='legacy-fixture.json';
+await legacyBucket.put(legacyKey,JSON.stringify({...historicalSnapshot,session:{doctorKey:doctor}}));
+accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('user-account',email,doctor,snapshotRegistryRangeKey(lazyOptions.range),'legacy-v1','ready',legacyKey);
+const accountDb={prepare(sql){let args=[];return {bind(...values){args=values;return this},async all(){return {results:accounts.prepare(sql).all(...args)}},async first(){return accounts.prepare(sql).get(...args)||null},async run(){throw Error('Calendar reads must never write D1');}}}};
+const calendarPost=cachedRevision=>statePost({data:{stateAction:'loadCalendarEvents'},env:{ROSTER_DB:accountDb,ROSTER_FILES:r2,ROSTER_CACHE:legacyBucket,IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'ready'},request:new Request('https://fixture/api/state',{method:'POST',body:JSON.stringify({action:'loadCalendarEvents',email,password,doctorKey:doctor,startDate:lazyOptions.range.startDate,endDate:lazyOptions.range.endDate,cachedRevision,responseMode:'fast',allowInlineBuild:false})})});
+const firstResponse=await calendarPost('');assert.equal(firstResponse.status,200);const firstPayload=await firstResponse.json();assert.equal(firstPayload.snapshotAvailable,true);
+assert.deepEqual(firstPayload.snapshot.preview.events.map(e=>e.id).sort(),['history','new'],'authenticated route preserves historical shifts and the latest published replacement');
+assert.equal(legacyBucket.reads.filter(k=>k===legacyKey).length,1);
+legacyBucket.reads=[];
+const currentResponse=await calendarPost(firstPayload.calendarRevision);assert.equal(currentResponse.status,200);assert.equal((await currentResponse.json()).snapshotCurrent,true);
+assert.equal(legacyBucket.reads.length,0,'authenticated unchanged browser check never downloads legacy snapshot');
+const originalManifest=Buffer.from(r2.objects.get(facilityMetadataManifestKey(sourceType)));
+await r2.put(facilityMetadataManifestKey(sourceType),JSON.stringify({...JSON.parse(originalManifest),revision:hash('new-parent')}));
+const pendingPayload=await (await calendarPost(firstPayload.calendarRevision)).json();
+assert.equal(pendingPayload.snapshotAvailable,true,'pending publication retains a usable legacy calendar');
+assert.equal(legacyBucket.reads.filter(k=>k===legacyKey).length,1,'pending publication loads legacy fallback only when required');
+assert.equal(JSON.stringify(pendingPayload).includes('historicalRevision'),false,'internal cache descriptors are never included in responses');
+r2.objects.set(facilityMetadataManifestKey(sourceType),originalManifest);
 assert.equal((await onRequestPost({env:{ROSTER_FILES:r2,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true'},request:new Request('https://fixture',{method:'POST',body:'{}'})})).status,401);
 console.log('Doctor calendars pass external assembly, unchanged zero-download/zero-write, colleague isolation, metadata-only checks, grades, ranges, removals and publication failure.');
 
