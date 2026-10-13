@@ -1,4 +1,4 @@
-import { createRosterComparisonCache } from './roster-comparison-cache.js';
+import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final2';
 import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-policy.js';
 const rosterComparisonCache = createRosterComparisonCache();
 import {contactSyncWarning} from './contact-sync-status.js';
@@ -5453,6 +5453,7 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
       includeCs,
       hospitalOptions: [],
     });
+    if (doctorResult.missing?.length) insightsModalBody.insertAdjacentHTML('beforeend', renderFacilityOverviewCoverageNotice(doctorResult));
     return;
   }
   const displayComparisonRows = (rows, revision, status = {}) => {

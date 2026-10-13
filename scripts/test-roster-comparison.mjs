@@ -101,6 +101,7 @@ const boundaryDoctors=await loadRosterComparisonDoctors(boundary,{...boundaryQue
 assert.deepEqual(boundaryDoctors.doctors.map(row=>row.doctorKey),['OTHER NIGHT'],'carry-in discovery never discloses an unreleased term');
 const boundaryEvents=await loadRosterComparison(boundary,{...boundaryQuery,doctorKeys:['PREVIOUS NIGHT','UNRELEASED']},'2026-09-30',comparisonWorkingEvent);
 assert.deepEqual(boundaryEvents.events.map(row=>row.doctorKey),['PREVIOUS NIGHT']);
+assert.equal(boundaryEvents.incomplete,true);boundary.reads=[];const boundaryCheck=await loadRosterComparison(boundary,{...boundaryQuery,doctorKeys:['PREVIOUS NIGHT','UNRELEASED'],cachedRevision:boundaryEvents.revision},'2026-09-30',comparisonWorkingEvent);assert.equal(boundaryCheck.unchanged,true);assert.equal(boundaryCheck.incomplete,true);assert.ok(boundaryCheck.missing.length);assert.equal(boundary.reads.some(key=>key.includes('/people/')),false,'unchanged coverage gaps retain warnings without rereading shifts');
 assert.equal(normalizeComparisonEvent({start:'2026-10-04T15:00:00+11:00',end:'2026-10-04T00:00:00+10:00'}).end,'2026-10-05T00:00:00+11:00');
 assert.equal(comparisonPresence([{title:'PM',start:'2026-10-07T15:00:00+11:00',end:'2026-10-07T00:00:00+11:00'}],'mmc')['2026-10'],192);
 assert.equal((await loadRosterComparison(bucket,{...options,doctorKeys:['A'],doctorIdentities:[{key:'A',sourceType:'mch'}]},today,comparisonWorkingEvent)).events.length,0,'matching names at another source cannot select this identity');

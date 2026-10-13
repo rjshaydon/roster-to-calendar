@@ -55,7 +55,7 @@ export function createRosterComparisonCache({ storage = comparisonStorage(), now
         }
         if (facts.length && facts.every(Boolean)) {
           const data = { ok:true, events:facts.flatMap(fact=>fact.data.events), revision:facts.map(fact=>fact.data.revision).join(':'), personRevisions:Object.assign({},...facts.map(fact=>fact.data.personRevisions)), scopeRevision:scope,
-            accessExpiresAt:new Date(Math.min(...facts.map(fact=>fact.expiresAt))).toISOString(), missing:[] };
+            accessExpiresAt:new Date(Math.min(...facts.map(fact=>fact.expiresAt))).toISOString(), missing:[...new Map(facts.flatMap(fact=>fact.data.missing||[]).map(missing=>[stable(missing),missing])).values()], incomplete:facts.some(fact=>fact.complete===false) };
           record={at:Math.min(...facts.map(fact=>fact.at)),expiresAt:Math.min(...facts.map(fact=>fact.expiresAt)),data};
           remember(key,record);
           return data;
@@ -87,10 +87,10 @@ export function createRosterComparisonCache({ storage = comparisonStorage(), now
           // A selected request requires the same already-verified scope. A
           // changed scope is accepted from the server but stored under its new key.
           const savedKey = keyFor(owner, kind, { ...normalized, ...(kind === 'selected' ? { scopeRevision: scope || response.scopeRevision || '' } : {}) });
-          if (expiresAt > now() && !data.missing?.length) {
-            const entry = { owner, kind, query:normalized, scopeRevision:scope||response.scopeRevision, at: now(), expiresAt, data };
+          if (expiresAt > now()) {
+            const entry = { complete:!data.missing?.length, owner, kind, query:normalized, scopeRevision:scope||response.scopeRevision, at: now(), expiresAt, data };
             if (kind === 'selected') for (const doctorKey of normalized.doctorKeys) {
-              const key = personKey(doctorKey), fact = { ...entry, kind:'person',personKey:doctorKey,query:{...normalized,doctorKeys:[doctorKey],...(normalized.doctorIdentities?{doctorIdentities:normalized.doctorIdentities.filter(identity=>identity.key===doctorKey)}:{})}, data: { ok:true, events:(data.events || []).filter(row=>row.doctorKey===doctorKey), revision:data.revision, personRevisions:{[doctorKey]:data.personRevisions?.[doctorKey]}, scopeRevision:scope, accessExpiresAt:data.accessExpiresAt, missing:[] } };
+              const key = personKey(doctorKey), fact = { ...entry, kind:'person',personKey:doctorKey,query:{...normalized,doctorKeys:[doctorKey],...(normalized.doctorIdentities?{doctorIdentities:normalized.doctorIdentities.filter(identity=>identity.key===doctorKey)}:{})}, data: { ok:true, events:(data.events || []).filter(row=>row.doctorKey===doctorKey), revision:data.revision, personRevisions:{[doctorKey]:data.personRevisions?.[doctorKey]}, scopeRevision:scope, accessExpiresAt:data.accessExpiresAt, missing:data.missing||[], incomplete:!!data.missing?.length } };
               people.delete(key);people.set(key,fact);while(people.size>MAX_ENTRIES)people.delete(people.keys().next().value);
               if (!response.unchanged) void storage.put(key,fact).catch(()=>{});
             }

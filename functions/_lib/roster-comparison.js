@@ -19,10 +19,10 @@ export async function loadRosterComparison(r2, options, today, isWorking) {
   if (prepared.preparing) return { ok: false, unavailable: true, events: [], missing: prepared.missing };
   const personRevisions = Object.fromEntries(await Promise.all(keys.map(async key => [key, await hash([COMPARISON_INDEX_VERSION, scopeRevision, startDate, endDate, key, prepared.personFacts[key] || [], prepared.missing])])));
   const updatedDoctorKeys = keys.filter(key => options.cachedPersonRevisions?.[key] !== personRevisions[key]);
-  if (!prepared.missing.length && (cachedRevision === revision || !updatedDoctorKeys.length)) return { ok:true, unchanged:true, revision, scopeRevision, personRevisions };
+  if (cachedRevision === revision || !updatedDoctorKeys.length) return { ok:true, unchanged:true, revision, scopeRevision, personRevisions, missing:prepared.missing, incomplete:!!prepared.missing.length };
   const rows = filterFacilityRowsBySegments(await prepared.readEvents({doctorKeys:new Set(updatedDoctorKeys)}), authorisedSegments).filter(row => isWorking(row.event, row.sourceType));
   const events = [...new Map(rows.map(row => [`${row.sourceType}|${row.doctorKey}|${row.event.id || ''}|${row.event.start}|${row.event.end}`, row])).values()];
-  return { ok: true, events, revision, scopeRevision, personRevisions, ...(updatedDoctorKeys.length < keys.length ? {delta:true,updatedDoctorKeys} : {}), missing: prepared.missing, source: 'prepared-doctor-comparison' };
+  return { ok: true, events, revision, scopeRevision, personRevisions, incomplete:!!prepared.missing.length, ...(updatedDoctorKeys.length < keys.length ? {delta:true,updatedDoctorKeys} : {}), missing: prepared.missing, source: 'prepared-doctor-comparison' };
 }
 
 export async function loadRosterComparisonDoctors(r2, options, today) {
@@ -56,7 +56,7 @@ export async function loadRosterComparisonDoctors(r2, options, today) {
     }
   }
   const revision = await hash([COMPARISON_INDEX_VERSION, scopeRevision, startDate, endDate, [...mine].sort(), [...exclude].sort(), selected.map(({ sourceType, month, byTerm, pointer }) => [sourceType, month, byTerm, pointer.digest]), missing]);
-  if (!missing.length && revision === cachedRevision) return { ok: true, unchanged: true, revision, scopeRevision };
+  if (revision === cachedRevision) return { ok: true, unchanged: true, revision, scopeRevision, missing, incomplete:!!missing.length };
   const doctors = new Map();
   for (const { sourceType, month, byTerm, pointer } of selected) {
     const data = await loadCachedSnapshot(r2, pointer.key);

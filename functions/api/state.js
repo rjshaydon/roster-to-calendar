@@ -2521,7 +2521,9 @@ async function handleAccountStateRequest(context) {
       const selection = readerSelectionFor(rangeAccess.sourceTypes, !(body?.sourceTypes || []).length);
       const sourceTypes = selection.sources;
       const segments = rangeAccess.segments.filter(segment => sourceTypes.includes(segment.sourceType));
-      const scopeRevision = await sha256(JSON.stringify([rangeAccess.revision, sourceTypes, selection.missing]));
+      const scopeRevision = body?.comparison === true
+        ? await rosterComparisonScopeRevision(facilityOverviewSubject.record, segments, sourceTypes, selection.missing)
+        : await sha256(JSON.stringify([rangeAccess.revision, sourceTypes, selection.missing, access.readerRevision]));
       const readRoute = selection.route;
       if (readRoute === "blocked") return sharedRouteUnavailable();
       const contextOnly = action === "queryFacilityOverviewTogetherContext";
@@ -2610,7 +2612,7 @@ async function handleAccountStateRequest(context) {
       if (invalid) return Response.json({ ok: false, invalid: true, error: invalid, ...empty }, { status: 400 });
       const startedAt = Date.now();
       try {
-        const scopeRevision = await sha256(JSON.stringify([rangeAccess.revision, selection.sources, selection.missing]));
+        const scopeRevision = await rosterComparisonScopeRevision(facilityOverviewSubject.record, queryOptions.authorisedSegments, selection.sources, selection.missing);
         const comparisonStatus = { scopeRevision, accessExpiresAt: rangeAccess.expiresAt, sourceTypes: selection.sources };
         if (body?.comparison === true && context.env.ROSTER_COMPARISON_ENABLED === 'true' && (doctorsOnly || queryOptions.doctorKeys.length)) {
           const options = { ...queryOptions, doctorIdentities: body.doctorIdentities, scopeRevision, cachedRevision: body.cachedRevision, cachedPersonRevisions: body.cachedPersonRevisions };
@@ -3854,6 +3856,14 @@ function directorViewEnabledForRecord(record) {
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   if (role === "creator" || role === "owner") return true;
   return record?.directorViewEnabled === true;
+}
+
+async function rosterComparisonScopeRevision(record, segments, sources, missing) {
+  // Authorization is checked on every request. Data reuse depends on the
+  // resulting scope, not a contribution timestamp rewritten for an unrelated
+  // colleague. A changed claim, hospital, term or reader policy changes this key.
+  const identities = sanitizeClaims(record.claims).map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`).sort();
+  return sha256(JSON.stringify(['comparison-scope-v1', FACILITY_ACCESS_VERSION, normalizeEmail(record.email), identities, segments, sources, missing]));
 }
 
 function isFacilityOverviewWorkingEvent(event, options = {}) {
