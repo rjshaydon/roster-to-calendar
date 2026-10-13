@@ -7,10 +7,9 @@ was deployed successfully as Pages deployment
 `c670fd45-2e57-4cec-921c-dc2d49d91425`; its effective
 `SUBSCRIPTION_ARTIFACT_MODE` is `ready`. Preview remains `off`.
 
-The calendar CPU implementation and rollout are complete. Final additional
-site-specific live comparisons remain subject to approval, and a subsequent
-natural MCH changed-file delivery has not been observed in this pass. These are
-verification items, not evidence of another known calendar CPU defect.
+The calendar implementation, rollout and four-site live comparisons are complete.
+A subsequent natural MCH changed-file delivery has not been observed in this pass;
+that remains a monitoring item, rather than a known calendar CPU defect.
 No clinical roster is changed merely to manufacture a test.
 
 This record supersedes earlier incomplete audit/prime and universal 10-ms
@@ -100,6 +99,25 @@ all current fields against read-only rendering (apart from generated timestamps)
 128 staff events and 155 owner events, with no prior event IDs removed. Actual
 production feed samples used 4–5 ms CPU and zero D1 writes.
 
+The user then explicitly approved the four-site extension. One indexed clinician
+per site was compared against the existing reader, with exact event/review/grade
+field parity and successful conditional no-body responses:
+
+| Site | Events | New full CPU | Conditional CPU | New full time |
+| --- | ---: | ---: | ---: | ---: |
+| MMC | 9 | 6 ms | 4 ms | 489 ms |
+| MCH | 51 | 5 ms | 3 ms | 497 ms |
+| DDH | 40 | 4 ms | 3 ms | 503 ms |
+| VHH | 49 | 4 ms | 3 ms | 488 ms |
+
+Old-reader full samples used 36–75 ms CPU and 1,339–1,719 ms wall time. All twelve
+sampled outcomes were `ok`. Selecting these four profiles read one indexed D1 row
+per site; the comparison Worker itself had no D1 binding or write-capable wrappers.
+These are one-person samples per site, not a claim that every person was tested.
+The temporary Worker and secret were deleted again, its tail stopped, and the local
+access key removed. Only aggregate evidence is committed; private responses remain
+restricted locally.
+
 Settled account analytics at the evening check: approximately 1,290,681 rows read
 and 29,276 written in the current UTC day. This diagnostic sample does not override
 normal admission; its stand-alone report still lacks billing/second-sample
@@ -124,10 +142,8 @@ the assertion has not been weakened to claim a clean broad run.
 
 ## Remaining observation and deferred work
 
-- Additional site-specific live comparison needs explicit approval for sending
-  another clinician's name/identifier to the private temporary test Worker.
-  Automatic approval review rejected that extension; existing account comparisons
-  and workflow logs remain usable. Do not bypass the rejection.
+- The additional four-site comparison passed after the user's explicit approval;
+  no approval block remains for that completed test.
 - Observe the next genuine MCH changed-file import and resulting calendar delivery.
   Existing MCH import and prepared source generation are present, but a newly
   edited clinical file was not manufactured for acceptance tonight.
