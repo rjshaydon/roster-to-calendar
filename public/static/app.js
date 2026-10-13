@@ -15033,6 +15033,9 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
   }
   if (cachedCalendarCurrent) {
     renderLoginState();
+    // Calendar freshness does not establish today's shift eligibility. Run
+    // the normal startup check after the entered account's access is restored.
+    launchClinicalOnShiftWorkspace(options, 0);
     return;
   }
   await hydrateAuthenticatedWorkspace({

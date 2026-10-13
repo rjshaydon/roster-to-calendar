@@ -4,7 +4,7 @@ import { runInNewContext } from 'node:vm';
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 function section(start, end) { return app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start))); }
 const validate = section('async function validateClaimedAccountCalendarInBackground(', 'async function validateDoctorProfileCalendarInBackground(');
-let requests = [], rendered = 0;
+let requests = [], rendered = 0, startupChecks = [];
 const globals = {
   currentSnapshot: {preview:{}, cacheKey:'calendar', calendarRevision:'current'}, currentSnapshotStale:false,
   visibleSnapshotIsCurrent:()=>true, normalizeEmail:v=>v, OWNER_EMAIL:'creator@example.com',
@@ -12,6 +12,7 @@ const globals = {
   restoreCloudState:async options=> { requests.push(options); globals.enabled = options.adminTargetEmail === 'titus@example.com' || !options.adminTargetEmail; },
   hydrateAuthenticatedWorkspace:async()=> { throw new Error('current calendar must not require full hydration'); },
   renderLoginState:()=>rendered++, enabled:false,
+  launchClinicalOnShiftWorkspace:options=>startupChecks.push({enabled:globals.enabled,transition:options.transition}),
 };
 runInNewContext(`${validate}; this.validate = validateClaimedAccountCalendarInBackground`,globals);
 for (const [email, enabled] of [['tinnie@example.com',false], ['titus@example.com',true], ['creator@example.com',true], ['titus@example.com',true]]) {
@@ -21,6 +22,44 @@ for (const [email, enabled] of [['tinnie@example.com',false], ['titus@example.co
 assert.equal(requests.length,4);
 assert.ok(requests.every(request=>request.responseMode==='fast' && request.allowInlineBuild===false));
 assert.equal(rendered,4);
+assert.deepEqual(startupChecks.map(check=>check.enabled),[false,true,true,true], 'cached entry checks shift eligibility after restoring each account permission');
+
+// Exercise cached God mode entry with the actual startup and eligibility
+// functions. The viewed account remains restricted until the server confirms.
+let eligibilityReply, authReply, eligibilityCount=0, opened=0, transition=1;
+const noop=()=>{};
+const cachedEntry={
+ currentSnapshot:{preview:{events:[]},cacheKey:'tony',calendarRevision:'current'},currentSnapshotStale:false,
+ visibleSnapshotIsCurrent:()=>true,calendarSnapshotMatchesActiveContext:()=>true,normalizeEmail:v=>v,OWNER_EMAIL:'creator@example.com',
+ calendarTransitionStillCurrent:t=>t===transition,activeCalendarTransitionKey:()=>`account:${transition}`,calendarTransitionRunId:1,
+ restoreCloudState:()=>new Promise(resolve=>{authReply=()=>{cachedEntry.currentOnShiftForAllEnabled=true;resolve();};}),
+ hydrateAuthenticatedWorkspace:async()=>{throw Error('cached entry must not rebuild the calendar');},renderLoginState:noop,
+ clinicalOnShiftStartupPending:true,clinicalOnShiftWindowPromise:null,currentFacilityOverviewAutomaticLaunchEnabled:true,
+ currentFacilityOverviewMaintenance:false,currentNonClinical:false,currentOnShiftForAllEnabled:false,
+ canUseFacilityOverview:()=>false,canUseFullFacilityOverview:()=>false,activeCalendarMode:()=> 'claimed-account',
+ authUserEmail:'creator@example.com',authUserPassword:'fixture',facilityOverviewTargetEmail:()=> 'tony@example.com',
+ fetch:async(url,request)=>{eligibilityCount++;const body=JSON.parse(request.body);assert.equal(body.action,'queryFacilityOverviewLaunchWindow');assert.equal(body.targetEmail,'tony@example.com');return new Promise(resolve=>{eligibilityReply=resolve;});},
+ readJsonResponse:async response=>response,applyOnShiftAccessWindow:window=>{cachedEntry.accessWindow=window;},syncFacilityOverviewAccess:noop,
+ facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{},applyFacilityOverviewSiteScope:noop,
+ openFacilityOverview:async()=>{opened++;},markLoginPhase:noop,
+};
+runInNewContext(`${validate};${section('function requestClinicalStartupShiftWindow(', 'async function loginWithEmail(')};this.validate=validateClaimedAccountCalendarInBackground`,cachedEntry);
+const enter=()=>cachedEntry.validate({ownerEmail:'tony@example.com'},{preserveRenderedSnapshot:true,transition});
+const pending=enter();assert.equal(eligibilityCount,0,'no shift check before the access envelope is authenticated');
+authReply();await pending;assert.equal(eligibilityCount,1,'a current calendar still checks the entered staff shift');
+assert.equal(opened,0,'personal cache cannot grant overview access');
+const confirmed={facilityKey:'DDH',rosterDate:'2026-10-13',start:1791889200000,end:1791923400000};
+eligibilityReply({shiftWindow:confirmed});await cachedEntry.clinicalOnShiftWindowPromise;
+assert.equal(opened,1);assert.equal(cachedEntry.facilityOverviewState.date,confirmed.rosterDate);assert.equal(cachedEntry.facilityOverviewState.facilityKey,'DDH');
+assert.equal(cachedEntry.clinicalOnShiftStartupPending,false);
+
+cachedEntry.clinicalOnShiftStartupPending=true;cachedEntry.clinicalOnShiftWindowPromise=null;
+const off=enter();authReply();await off;eligibilityReply({shiftWindow:null});await cachedEntry.clinicalOnShiftWindowPromise;
+assert.equal(opened,1,'off-shift cached accounts stay on the calendar');
+
+cachedEntry.clinicalOnShiftWindowPromise=null;const staleEntry=enter();transition=2;cachedEntry.calendarTransitionRunId=2;authReply();await staleEntry;
+assert.equal(eligibilityCount,2,'a superseded account entry cannot launch a shift check');
+console.log('Cached God mode startup passed authenticated eligibility, restricted automatic opening, off-shift behaviour and stale account cancellation.');
 
 const access = section('async function loadDoctorProfileFacilityOverviewAccess(', 'async function loadUnclaimedSourceImports(');
 const profile = {id:'titus',doctorKey:'TITUS'};
