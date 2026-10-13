@@ -34,6 +34,22 @@ External preparation run 38350316863 yielded at its time bound after completing
 MMC month derivatives; the watchdog automatically started continuation run
 38351770569. A successful yielded run is progress, not a completed backfill.
 
+## Small identity index groups
+
+Doctor-source publication now prepares 16 immutable SHA-selected index groups
+outside Cloudflare. The current source pointer carries shared term/month metadata
+and group pointers. Calendar checks read only the group(s) containing the approved
+aliases, instead of parsing every doctor's pointer at that site. This adds no D1
+queries and retains the existing number of R2 reads for a single alias at a site.
+The full catalogue remains available to external builders and as a migration
+fallback. Unchanged group content is reused, and promotion requires all 16 group
+objects to exist. Missing groups defer delivery rather than appearing empty.
+
+Tests verify exact event/review parity, unchanged and colleague-only revisions,
+one-group reads, missing-group handling and old catalogue compatibility. The
+watchdog requests conversion of existing ungrouped generations; the interactive
+reader still awaits native CPU acceptance before activation.
+
 Status: **not accepted**. No safeguards or clinical data were changed in this pass.
 
 ## Passed

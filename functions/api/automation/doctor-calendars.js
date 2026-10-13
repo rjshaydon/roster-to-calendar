@@ -1,5 +1,5 @@
 import {guardedFetch} from '../../_lib/outbound-network.js';
-import {DOCTOR_SOURCE_VERSION,doctorSourceKey,doctorSourceCurrentKey} from '../../_lib/doctor-source-artifacts.js';
+import {DOCTOR_SOURCE_VERSION,DOCTOR_SOURCE_LAYOUT,doctorSourceKey,doctorSourceCurrentKey} from '../../_lib/doctor-source-artifacts.js';
 import {automatedRosterWritesEnabled,rosterWritePausedResponse} from '../../_lib/roster-automation-guard.js';
 import {loadCachedSnapshot} from '../../_lib/d1-calendar.js';
 import {doctorMonthIndexKey,doctorMonthRowsKey,validDoctorMonth,DOCTOR_CALENDAR_MAX_BYTES,DOCTOR_CALENDAR_VERSION} from '../../_lib/doctor-calendar-artifacts.js';
@@ -45,6 +45,13 @@ export async function onRequestPost({request,env}){
   if(['prepare-source','activate-source'].includes(input.mode)){
    if(!/^[a-f0-9]{64}$/.test(input.digest)||input.catalogueKey!==doctorSourceKey(input.sourceType,'catalogues',input.digest)||!await r2.head(input.catalogueKey))return bad();
    const value={version:DOCTOR_SOURCE_VERSION,catalogueKey:input.catalogueKey,digest:input.digest,manifestRevision:input.manifestRevision,baseEtag:input.baseEtag||''};
+   if(input.layout!==undefined){
+    if(input.layout!==DOCTOR_SOURCE_LAYOUT||!Array.isArray(input.metadata?.terms)||!Array.isArray(input.metadata?.months)||!input.shards||Object.keys(input.shards).length!==16)return bad();
+    const ready=await Promise.all(Array.from({length:16},async(_,i)=>{
+     const pointer=input.shards[i.toString(16)];return pointer&&pointer.key===doctorSourceKey(input.sourceType,'catalogues',pointer.digest)&&Boolean(await r2.head(pointer.key));
+    }));if(!ready.every(Boolean))return bad();
+    Object.assign(value,{layout:input.layout,metadata:input.metadata,shards:input.shards});
+   }
    if(input.mode==='prepare-source'){
     if(!/^[a-f0-9]{64}$/.test(input.operationRevision)||!/^[a-f0-9]{64}$/.test(input.manifestRevision))return bad();
     const key=doctorSourceKey(input.sourceType,'generations',input.operationRevision),old=await r2.get(key),prior=old?await new Response(old.body).json():null;
@@ -91,7 +98,7 @@ async function checkDoctorSourceBuild(env){
  if(!automatedRosterWritesEnabled(env)||!['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE))return Response.json({status:'disabled'});
  const r2=env.ROSTER_FILES,key='doctor-calendars/v2/build-lease.json',object=await r2.get(key),lease=object?await new Response(object.body).json():{};
  if(lease.until>Date.now())return Response.json({status:'busy'});
- const states=await Promise.all(['mmc','mch','ddh','vhh','casey'].map(async source=>{const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(source)),loadCachedSnapshot(r2,doctorSourceCurrentKey(source))]);return Boolean(head)&&(!current||current.version!==DOCTOR_SOURCE_VERSION||current.parentEtag!==head.etag);}));
+ const states=await Promise.all(['mmc','mch','ddh','vhh','casey'].map(async source=>{const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(source)),loadCachedSnapshot(r2,doctorSourceCurrentKey(source))]);return Boolean(head)&&(!current||current.version!==DOCTOR_SOURCE_VERSION||current.layout!==DOCTOR_SOURCE_LAYOUT||current.parentEtag!==head.etag);}));
  if(!states.some(Boolean))return Response.json({status:'unchanged'});
  if(!env.GITHUB_ACTIONS_TOKEN)return Response.json({status:'dispatch-unconfigured'});
  const next={id:crypto.randomUUID(),until:Date.now()+20*60000};if(!await r2.put(key,JSON.stringify(next),{onlyIf:object?{etagMatches:object.etag}:{etagDoesNotMatch:'*'}}))return Response.json({status:'busy'});

@@ -1,6 +1,8 @@
 import {loadCachedSnapshot} from './d1-calendar.js';
 import {rosterTermVisible} from '../../public/static/roster-term-policy.js';
 export const DOCTOR_SOURCE_VERSION='doctor-source-v2';
+export const DOCTOR_SOURCE_LAYOUT='hashed-catalogue-v1';
+export async function doctorCatalogueShard(doctorKey){const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(doctorKey)));return (digest[0]>>4).toString(16);}
 const validSource=s=>['mmc','mch','ddh','vhh','casey'].includes(s);
 export function doctorSourceKey(source,kind,digest){if(!validSource(source)||!['people','catalogues','generations','prepared-people'].includes(kind)||!/^[a-f0-9]{64}$/.test(digest))throw Error('Invalid doctor source artifact.');return `doctor-calendars/v2/${source}/${kind}/${digest}.json`;}
 export function doctorSourceCurrentKey(source){if(!validSource(source))throw Error('Invalid doctor source.');return `doctor-calendars/v2/${source}/current.json`;}
@@ -13,7 +15,19 @@ export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,en
   if(!head){missing.push({sourceType,startDate,endDate,reason:'manifest-unavailable'});return;}
   if(!current||current.version!==DOCTOR_SOURCE_VERSION||current.parentEtag!==head.etag){pending=true;return;}
   if(current.catalogueKey!==doctorSourceKey(sourceType,'catalogues',current.digest)){pending=true;return;}
-  const catalogue=await loadCachedSnapshot(r2,current.catalogueKey);
+  let catalogue;
+  if(current.layout===DOCTOR_SOURCE_LAYOUT&&current.metadata&&current.shards){
+   const keys=[...markers].filter(marker=>marker.startsWith(sourceType+'|')).map(marker=>marker.slice(sourceType.length+1));
+   const shards=[...new Set(await Promise.all(keys.map(doctorCatalogueShard)))];
+   const pieces=await Promise.all(shards.map(async shard=>{
+    const pointer=current.shards[shard];
+    if(!pointer||pointer.key!==doctorSourceKey(sourceType,'catalogues',pointer.digest))return null;
+    const value=await loadCachedSnapshot(r2,pointer.key);
+    return value?.version===DOCTOR_SOURCE_VERSION&&value.sourceType===sourceType&&value.shard===shard&&value.doctors&&Object.keys(value.doctors).length<=4096?value:null;
+   }));
+   if(pieces.some(piece=>!piece)){pending=true;return;}
+   catalogue={version:DOCTOR_SOURCE_VERSION,sourceType,terms:current.metadata.terms,months:current.metadata.months,doctors:Object.assign(Object.create(null),...pieces.map(piece=>piece.doctors))};
+  }else catalogue=await loadCachedSnapshot(r2,current.catalogueKey);
   if(!catalogue||catalogue.version!==DOCTOR_SOURCE_VERSION||catalogue.sourceType!==sourceType||!Array.isArray(catalogue.terms)||!Array.isArray(catalogue.months)||!catalogue.doctors||Object.keys(catalogue.doctors).length>4096){pending=true;return;}
   const terms=catalogue.terms.filter(term=>rosterTermVisible(term,today)&&term.termEnd>=startDate&&term.termStart<=endDate);
   if(!terms.length){missing.push({sourceType,startDate,endDate,reason:'history-unavailable'});return;}

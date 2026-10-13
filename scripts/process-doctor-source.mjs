@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
-import {DOCTOR_SOURCE_VERSION,doctorSourceKey} from '../functions/_lib/doctor-source-artifacts.js';
+import {DOCTOR_SOURCE_VERSION,DOCTOR_SOURCE_LAYOUT,doctorSourceKey} from '../functions/_lib/doctor-source-artifacts.js';
 import {publishDoctorMonth} from './process-doctor-calendars.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const decode=bytes=>JSON.parse(Buffer.from(bytes).subarray(0,2).equals(Buffer.from([31,139]))?gunzipSync(bytes).toString('utf8'):Buffer.from(bytes).toString('utf8'));
@@ -8,7 +8,7 @@ export async function publishDoctorSource({sourceType,request,manifestKey,operat
  const downloaded=await request({mode:'object',sourceType,key:manifestKey||`facility-overview/v1/${sourceType}/manifest.json`},{binary:true,metadata:true});
  const manifest=decode(downloaded.bytes),previous=await request({mode:'source-current',sourceType});
  const oldCatalogue=previous.current?.catalogueKey?decode(await request({mode:'object',sourceType,key:previous.current.catalogueKey},{binary:true})):null;
- if(!operationRevision&&previous.current?.version===DOCTOR_SOURCE_VERSION&&Array.isArray(oldCatalogue?.months)&&previous.current?.parentEtag===downloaded.etag)return {status:'unchanged',changed:0};
+ if(!operationRevision&&previous.current?.version===DOCTOR_SOURCE_VERSION&&previous.current.layout===DOCTOR_SOURCE_LAYOUT&&Array.isArray(oldCatalogue?.months)&&previous.current?.parentEtag===downloaded.etag)return {status:'unchanged',changed:0};
  const months=Object.entries(manifest.months||{}).sort(([a],[b])=>a<b?-1:a>b?1:0),byDoctor=new Map();
  for(const [month,pointer] of months){
   await publishDoctorMonth({sourceType,month,revision:pointer.revision,request});
@@ -48,6 +48,15 @@ export async function publishDoctorSource({sourceType,request,manifestKey,operat
  }
  const ordered=Object.fromEntries(Object.keys(doctors).sort().map(k=>[k,doctors[k]])),body=JSON.stringify({version:DOCTOR_SOURCE_VERSION,sourceType,terms,months:months.map(([month])=>month),doctors:ordered}),digest=hash(body),catalogueKey=doctorSourceKey(sourceType,'catalogues',digest);
  await request({sourceType,kind:'source-catalogue',digest,manifestKey:manifestKey||`facility-overview/v1/${sourceType}/manifest.json`},{body});
- const result=await request({mode:operationRevision?'prepare-source':'activate-source',sourceType,operationRevision,manifestRevision:manifest.revision,manifestEtag:downloaded.etag,catalogueKey,digest,baseEtag:previous.etag||''});
+ const shards=Object.create(null),groups=Array.from({length:16},()=>Object.create(null));
+ for(const [doctorKey,pointer] of Object.entries(ordered))groups[parseInt(hash(doctorKey)[0],16)][doctorKey]=pointer;
+ for(let offset=0;offset<16;offset+=4){
+  const results=await Promise.allSettled(groups.slice(offset,offset+4).map(async(doctors,index)=>{
+   const shard=(offset+index).toString(16),body=JSON.stringify({version:DOCTOR_SOURCE_VERSION,sourceType,shard,doctors}),digest=hash(body),key=doctorSourceKey(sourceType,'catalogues',digest);
+   if(previous.current?.shards?.[shard]?.digest!==digest)await request({sourceType,kind:'source-catalogue',digest,manifestKey:manifestKey||`facility-overview/v1/${sourceType}/manifest.json`},{body});
+   shards[shard]={key,digest};
+  }));for(const result of results)if(result.status==='rejected')throw result.reason;
+ }
+ const result=await request({mode:operationRevision?'prepare-source':'activate-source',sourceType,operationRevision,manifestRevision:manifest.revision,manifestEtag:downloaded.etag,catalogueKey,digest,baseEtag:previous.etag||'',layout:DOCTOR_SOURCE_LAYOUT,metadata:{terms,months:months.map(([month])=>month)},shards});
  if(!['complete','unchanged'].includes(result.status))throw Error('Doctor source activation did not complete.');return {status:'complete',changed,doctors:entries.length};
 }
