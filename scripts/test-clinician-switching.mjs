@@ -32,7 +32,7 @@ const cachedEntry={
  currentSnapshot:{preview:{events:[]},cacheKey:'tony',calendarRevision:'current'},currentSnapshotStale:false,
  visibleSnapshotIsCurrent:()=>true,calendarSnapshotMatchesActiveContext:()=>true,normalizeEmail:v=>v,OWNER_EMAIL:'creator@example.com',
  calendarTransitionStillCurrent:t=>t===transition,activeCalendarTransitionKey:()=>`account:${transition}`,calendarTransitionRunId:1,
- restoreCloudState:()=>new Promise(resolve=>{authReply=()=>{cachedEntry.currentOnShiftForAllEnabled=true;resolve();};}),
+ restoreCloudState:()=>new Promise(resolve=>{authReply=()=>{cachedEntry.currentOnShiftForAllEnabled=true;cachedEntry.currentFacilityOverviewMaintenance=false;resolve();};}),
  hydrateAuthenticatedWorkspace:async()=>{throw Error('cached entry must not rebuild the calendar');},renderLoginState:noop,
  clinicalOnShiftStartupPending:true,clinicalOnShiftWindowPromise:null,currentFacilityOverviewAutomaticLaunchEnabled:true,
  currentFacilityOverviewMaintenance:false,currentNonClinical:false,currentOnShiftForAllEnabled:false,
@@ -40,10 +40,17 @@ const cachedEntry={
  authUserEmail:'creator@example.com',authUserPassword:'fixture',facilityOverviewTargetEmail:()=> 'tony@example.com',
  fetch:async(url,request)=>{eligibilityCount++;const body=JSON.parse(request.body);assert.equal(body.action,'queryFacilityOverviewLaunchWindow');assert.equal(body.targetEmail,'tony@example.com');return new Promise(resolve=>{eligibilityReply=resolve;});},
  readJsonResponse:async response=>response,applyOnShiftAccessWindow:window=>{cachedEntry.accessWindow=window;},syncFacilityOverviewAccess:noop,
- facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{},applyFacilityOverviewSiteScope:noop,
+ facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{requestId:0,byStreamRequestId:0},applyFacilityOverviewSiteScope:noop,
+ clearOnShiftAccess:noop,cancelFacilityOverviewAccessWait:noop,syncFacilityOverviewAccess:noop,formatDateKey:()=> '2026-10-13',
+ facilityOverviewOpeningRunId:0,cancelFacilityOverviewDataRequest:noop,collapseFacilityOverviewContactReview:noop,
+ stopFacilityOverviewContactRefresh:noop,clearFacilityOverviewStaffMultiSelect:noop,resetFacilityOverviewScroll:noop,
+ syncFacilityOverviewNavigationState:noop,form:null,facilityOverviewSection:null,previewSection:null,latestPreview:null,
  openFacilityOverview:async()=>{opened++;},markLoginPhase:noop,
 };
 runInNewContext(`${validate};${section('function requestClinicalStartupShiftWindow(', 'async function loginWithEmail(')};this.validate=validateClaimedAccountCalendarInBackground`,cachedEntry);
+runInNewContext(`${section('function resetFacilityOverviewAccessForEnteredUser(', 'function facilityOverviewTargetEmail(')};${section('function closeFacilityOverview(', 'function cancelFacilityOverviewDataRequest(')};this.reset=resetFacilityOverviewAccessForEnteredUser;this.close=closeFacilityOverview`,cachedEntry);
+cachedEntry.reset();
+assert.equal(cachedEntry.clinicalOnShiftStartupPending,true,'account cleanup must preserve the new startup intent');
 const enter=()=>cachedEntry.validate({ownerEmail:'tony@example.com'},{preserveRenderedSnapshot:true,transition});
 const pending=enter();assert.equal(eligibilityCount,0,'no shift check before the access envelope is authenticated');
 authReply();await pending;assert.equal(eligibilityCount,1,'a current calendar still checks the entered staff shift');
@@ -59,6 +66,7 @@ assert.equal(opened,1,'off-shift cached accounts stay on the calendar');
 
 cachedEntry.clinicalOnShiftWindowPromise=null;const staleEntry=enter();transition=2;cachedEntry.calendarTransitionRunId=2;authReply();await staleEntry;
 assert.equal(eligibilityCount,2,'a superseded account entry cannot launch a shift check');
+cachedEntry.close();assert.equal(cachedEntry.clinicalOnShiftStartupPending,false,'manual close still cancels pending automatic opening');
 console.log('Cached God mode startup passed authenticated eligibility, restricted automatic opening, off-shift behaviour and stale account cancellation.');
 
 const access = section('async function loadDoctorProfileFacilityOverviewAccess(', 'async function loadUnclaimedSourceImports(');

@@ -9917,7 +9917,7 @@ function resetFacilityOverviewAccessForEnteredUser() {
     preferredFacilityKey: "",
     today: formatDateKey(new Date()),
   };
-  closeFacilityOverview();
+  closeFacilityOverview({ preserveStartup: true });
   syncFacilityOverviewAccess();
 }
 
@@ -10071,9 +10071,9 @@ async function openFacilityOverviewByStream() {
   await loadFacilityOverviewByStream();
 }
 
-function closeFacilityOverview() {
+function closeFacilityOverview(options = {}) {
   cancelFacilityOverviewAccessWait();
-  clinicalOnShiftStartupPending = false;
+  if (options.preserveStartup !== true) clinicalOnShiftStartupPending = false;
   facilityOverviewOpeningRunId += 1;
   facilityOverviewOpeningPromise = null;
   cancelFacilityOverviewDataRequest();
