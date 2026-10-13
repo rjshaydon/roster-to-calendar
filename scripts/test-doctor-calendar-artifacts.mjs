@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {readdir,readFile} from 'node:fs/promises';
 import {onRequestPost as statePost} from '../functions/api/state.js';
-import {snapshotRegistryRangeKey} from '../functions/_lib/d1-calendar.js';
+import {snapshotRegistryRangeKey,loadCachedSnapshot} from '../functions/_lib/d1-calendar.js';
 import {loadCalendarPresentationInputs} from '../functions/_lib/d1-calendar.js';
 import {doctorRangeGaps,doctorSourceKey,doctorSourceCurrentKey,doctorCatalogueShard} from '../functions/_lib/doctor-source-artifacts.js';
 import {publishDoctorSource} from './process-doctor-source.mjs';
@@ -15,10 +15,10 @@ import {facilityMetadataManifestKey,facilityMonthObjectKey} from '../functions/_
 import {loadPublishedDoctorCalendar} from '../functions/_lib/published-doctor-calendar.js';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 class Bucket{
- objects=new Map();reads=[];writes=[];failRows=false;failCatalogue=false;
+ objects=new Map();metadata=new Map();reads=[];writes=[];failRows=false;failCatalogue=false;
  async head(key){return this.objects.has(key)?{key,etag:hash(this.objects.get(key))}:null;}
- async get(key){this.reads.push(key);const entry=this.objects.get(key);return entry?{body:entry,etag:hash(entry),async arrayBuffer(){return entry.buffer.slice(entry.byteOffset,entry.byteOffset+entry.length)}}:null;}
- async put(key,value,options={}){if(this.failRows&&key.includes('/rows/')||this.failCatalogue&&key.includes('/catalogues/'))throw Error('Injected failure');if(options.onlyIf?.etagDoesNotMatch==='*'&&this.objects.has(key)||options.onlyIf?.etagMatches&&(!this.objects.has(key)||hash(this.objects.get(key))!==options.onlyIf.etagMatches))return null;const bytes=typeof value==='string'?Buffer.from(value):value instanceof ReadableStream?Buffer.from(await new Response(value).arrayBuffer()):Buffer.from(value);if(options.sha256)assert.equal(hash(bytes),Buffer.from(options.sha256).toString('hex'));this.objects.set(key,bytes);this.writes.push(key);return {key};}
+ async get(key){this.reads.push(key);const entry=this.objects.get(key);return entry?{body:entry,customMetadata:this.metadata.get(key)||{},etag:hash(entry),async arrayBuffer(){return entry.buffer.slice(entry.byteOffset,entry.byteOffset+entry.length)}}:null;}
+ async put(key,value,options={}){if(this.failRows&&key.includes('/rows/')||this.failCatalogue&&key.includes('/catalogues/'))throw Error('Injected failure');if(options.onlyIf?.etagDoesNotMatch==='*'&&this.objects.has(key)||options.onlyIf?.etagMatches&&(!this.objects.has(key)||hash(this.objects.get(key))!==options.onlyIf.etagMatches))return null;const bytes=typeof value==='string'?Buffer.from(value):value instanceof ReadableStream?Buffer.from(await new Response(value).arrayBuffer()):Buffer.from(value);if(options.sha256)assert.equal(hash(bytes),Buffer.from(options.sha256).toString('hex'));this.objects.set(key,bytes);this.metadata.set(key,options.customMetadata||{});this.writes.push(key);return {key};}
 }
 const r2=new Bucket(),sourceType='mmc',month='2026-10',doctor='DOCTOR A';
 const event=(id,doctorKey,seniority='Junior Registrar')=>({sourceType,doctorKey,seniority,event:{id,doctorKey,source:'MMC',title:'AM shift',start:'2026-10-07T08:00:00+11:00',end:'2026-10-07T16:00:00+11:00',seniority,rawValue:'AM'}});
@@ -61,6 +61,7 @@ const lazyCurrent=await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,c
 assert.equal(lazyCurrent.snapshotCurrent,true);assert.equal(historicalReads,1,'unchanged calendar never downloads or processes legacy history');
 const historyChanged=await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,historicalRevision:'immutable-history-v2',cachedRevision:lazyCalendar.calendarRevision});
 assert.notEqual(historyChanged.snapshotCurrent,true);assert.equal(historicalReads,2,'new historical artifact invalidates the browser calendar');
+assert.equal((await loadPublishedDoctorCalendar(r2,profile,{...lazyOptions,previousSnapshotLoader:async()=>null})).snapshotAvailable,false,'missing pinned history defers rather than silently dropping shifts');
 r2.reads=[];calendar=await loadPublishedDoctorCalendar(r2,profile,{...options,cachedRevision:personalRevision});assert.equal(calendar.snapshotCurrent,true);assert.equal(r2.reads.some(k=>k.includes('/rows/')||k.includes('/months/')||k.includes('/people/')),false,'unchanged check loads neither doctor shifts nor site roster');
 const shardCurrent=JSON.parse(r2.objects.get(doctorSourceCurrentKey(sourceType))),ownShard=await doctorCatalogueShard(doctor);
 assert.equal(r2.reads.includes(shardCurrent.catalogueKey),false,'calendar never loads the full site identity catalogue when small groups are available');
@@ -115,7 +116,7 @@ accounts.prepare('INSERT INTO account_profiles(email,real_name,role,password_sal
 accounts.prepare('INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES(?,?,?,?)').run(email,sourceType,doctor,'Doctor A');
 accounts.prepare('INSERT INTO account_states(email,session_json) VALUES(?,?)').run(email,JSON.stringify({doctorKey:doctor}));
 const legacyBucket=new Bucket(),legacyKey='legacy-fixture.json';
-await legacyBucket.put(legacyKey,JSON.stringify({...historicalSnapshot,session:{doctorKey:doctor}}));
+await legacyBucket.put(legacyKey,JSON.stringify({...historicalSnapshot,session:{doctorKey:doctor}}),{customMetadata:{revision:'legacy-v1'}});
 accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('user-account',email,doctor,snapshotRegistryRangeKey(lazyOptions.range),'legacy-v1','ready',legacyKey);
 const accountDb={prepare(sql){let args=[];return {bind(...values){args=values;return this},async all(){return {results:accounts.prepare(sql).all(...args)}},async first(){return accounts.prepare(sql).get(...args)||null},async run(){throw Error('Calendar reads must never write D1');}}}};
 const calendarPost=cachedRevision=>statePost({data:{stateAction:'loadCalendarEvents'},env:{ROSTER_DB:accountDb,ROSTER_FILES:r2,ROSTER_CACHE:legacyBucket,IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'ready'},request:new Request('https://fixture/api/state',{method:'POST',body:JSON.stringify({action:'loadCalendarEvents',email,password,doctorKey:doctor,startDate:lazyOptions.range.startDate,endDate:lazyOptions.range.endDate,cachedRevision,responseMode:'fast',allowInlineBuild:false})})});
@@ -132,8 +133,28 @@ assert.equal(pendingPayload.snapshotAvailable,true,'pending publication retains 
 assert.equal(legacyBucket.reads.filter(k=>k===legacyKey).length,1,'pending publication loads legacy fallback only when required');
 assert.equal(JSON.stringify(pendingPayload).includes('historicalRevision'),false,'internal cache descriptors are never included in responses');
 r2.objects.set(facilityMetadataManifestKey(sourceType),originalManifest);
+accounts.prepare("UPDATE account_profiles SET role='creator' WHERE email=?").run(email);
+accounts.prepare('DELETE FROM account_claims WHERE email=?').run(email);
+accounts.prepare('INSERT INTO canonical_doctors(canonical_key,display_name,aliases_json) VALUES(?,?,?)').run(doctor,'Doctor A',JSON.stringify([{sourceType,key:doctor,displayName:'Doctor A'}]));
+accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('creator-account',email,doctor,snapshotRegistryRangeKey(lazyOptions.range),'legacy-v1','ready',legacyKey);
+const creatorInitial=await (await calendarPost('')).json();assert.equal(creatorInitial.snapshotAvailable,true);
+assert.deepEqual(creatorInitial.snapshot.doctorOptions[0].sourceTypes,[sourceType],'indexed Creator selection preserves exact alias sites');
+assert.deepEqual(creatorInitial.snapshot.preview.events,firstPayload.snapshot.preview.events);
+legacyBucket.reads=[];
+assert.equal((await (await calendarPost(creatorInitial.calendarRevision)).json()).snapshotCurrent,true);
+assert.equal(legacyBucket.reads.length,0,'Creator without claims uses indexed selection instead of full legacy cache');
+legacyBucket.metadata.set(legacyKey,{revision:'replacement-in-progress'});
+assert.equal((await (await calendarPost('')).json()).snapshotAvailable,false,'cache overwritten before registry update cannot publish under the previous revision');
+legacyBucket.metadata.set(legacyKey,{revision:'legacy-v1'});
 assert.equal((await onRequestPost({env:{ROSTER_FILES:r2,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true'},request:new Request('https://fixture',{method:'POST',body:'{}'})})).status,401);
 console.log('Doctor calendars pass external assembly, unchanged zero-download/zero-write, colleague isolation, metadata-only checks, grades, ranges, removals and publication failure.');
+
+for(const compressed of [false,true]){
+ const value={events:[{id:'stream-fixture',title:'Résumé'}]},bytes=compressed?gzipSync(JSON.stringify(value)):Buffer.from(JSON.stringify(value));
+ const streamBucket={async get(){return {customMetadata:{revision:'stream-v1'},httpMetadata:{contentType:'application/json',...(compressed?{contentEncoding:'gzip'}:{})},body:new ReadableStream({start(controller){controller.enqueue(bytes);controller.close()}}),async arrayBuffer(){return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);}}}};
+ assert.deepEqual(await loadCachedSnapshot(streamBucket,'stream.json',{revision:'stream-v1'}),value,'JSON/gzip retains exact Unicode content');
+ assert.equal(await loadCachedSnapshot(streamBucket,'stream.json',{revision:'stream-v2'}),null,'cache checks the expected revision before decoding its body');
+}
 
 // Interval gaps must exactly reproduce the old daily coverage semantics.
 for(const terms of [[],[{termStart:'2026-08-03',termEnd:'2026-11-01',empty:true,coverage:[]}],[{termStart:'2026-08-03',termEnd:'2026-11-01',empty:false,coverage:[{startDate:'2026-08-05',endDate:'2026-08-10'},{startDate:'2026-09-01',endDate:'2026-10-30'}]}]]){

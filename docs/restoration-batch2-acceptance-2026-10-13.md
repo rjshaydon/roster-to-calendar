@@ -12,10 +12,10 @@ current calendar CPU acceptance work.
 
 The optimized authenticated calendar path previously loaded the old account
 snapshot before checking the browser's publication revision. For accounts with
-claims, it now pins the immutable legacy artifact key and built revision, and
+claims, it now pins the legacy cache key and built revision, and
 loads historical content only when assembling a changed calendar or returning
-a fallback during publication. Creator views without claims retain their existing
-snapshot-based selection semantics.
+a fallback during publication. Creator views without claims initially retained their snapshot-based selection
+semantics; the indexed selection follow-up below removes that read as well.
 
 The route also no longer builds an identity-filtered preview that is immediately
 discarded when a published calendar is available. Historical selection itself
@@ -49,6 +49,50 @@ Tests verify exact event/review parity, unchanged and colleague-only revisions,
 one-group reads, missing-group handling and old catalogue compatibility. The
 watchdog requests conversion of existing ungrouped generations; the interactive
 reader still awaits native CPU acceptance before activation.
+
+## Live read-only comparison and indexed Creator selection
+
+The user explicitly approved a temporary authenticated read-only Worker in their
+own Cloudflare account, using private subscription tokens and local private
+responses. The probe rejected D1/R2 mutations, read the real account/roster/cache
+inputs, and substituted a temporary authentication hash in memory. No production
+accounts were edited. Its CPU timings are native full-request samples, but are
+not a universal Pages performance guarantee.
+The temporary Worker, its secret and its local access-key file were removed after
+the comparison; private response/proof files remain restricted to the local user.
+
+Creator aliases can now be obtained through a primary-key `canonical_doctors`
+join in the existing snapshot-registry query. This adds at most one indexed row
+read, with no extra SQL statement. Missing canonical selection retains the
+previous snapshot-based selection. Approved identity expansion still applies.
+The legacy cache loader checks stored revision metadata before decoding history;
+a missing or concurrently replaced historical cache defers instead of silently
+publishing a calendar without those shifts.
+
+Across live comparisons, all 128 standard-user events and 150 Creator events,
+including review fields and ordering, matched the existing reader exactly.
+Optimized initial requests took about 0.65–0.92 seconds versus about 1.5–2.8
+seconds for the existing reader. Unchanged checks took about 0.29–0.45 seconds
+and performed zero legacy-cache downloads. Native CPU ranged 13–24 ms for
+initial requests, 5–9 ms for standard-user unchanged checks, and 6–11 ms for
+Creator unchanged checks. Thus acceptance still fails; `build` mode remains.
+
+Stream-based cache decoding and a date-sort fast path were tested privately and
+discarded because native samples did not establish sufficient CPU improvement.
+The remaining full-response assembly/decoding should be profiled or moved out of
+interactive Worker execution; do not enable the candidate merely because it is
+much faster than the existing reader.
+
+External preparation run 38357051324 completed (not yielded) at 06:40 UTC.
+Read-only readiness confirmed matching source generations and grouped catalogues
+for MMC/MCH/DDH/VHH. Casey has no shared source manifest in this pipeline and is
+still part of the later Casey restoration batch.
+
+Targeted doctor, subscription, materialization, authentication containment,
+clinician-switching and cold-start checks pass. The broad `test:fixtures` run
+reaches an existing source-text assertion at line 922 expecting the former
+active-file-selection implementation in the unmodified `derived.js`; record
+this separately from calendar runtime parity rather than weakening that test.
 
 Status: **not accepted**. No safeguards or clinical data were changed in this pass.
 

@@ -6069,21 +6069,30 @@ export function snapshotArtifactKey({ ownerType = "", ownerId = "", doctorKey = 
   return `snapshots/${parts.join("/")}.json.gz`;
 }
 
-export async function loadSnapshotRegistryEntry(db, key = {}) {
+export async function loadSnapshotRegistryEntry(db, key = {}, options = {}) {
   if (!db?.prepare) return null;
   await ensureCalendarSchema(db);
   const row = await db.prepare(`
     SELECT owner_type, owner_id, doctor_key, range_key, requested_revision, built_revision, status, artifact_key,
-           built_at, size_bytes, build_ms, last_error, updated_at
+           built_at, size_bytes, build_ms, last_error, snapshot_registry.updated_at
+           ${options.includeDoctorSelection ? ', canonical_doctors.aliases_json AS selected_aliases_json, canonical_doctors.display_name AS selected_display_name' : ''}
     FROM snapshot_registry
+    ${options.includeDoctorSelection ? 'LEFT JOIN canonical_doctors ON canonical_doctors.canonical_key = ?' : ''}
     WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?
   `).bind(
+    ...(options.includeDoctorSelection ? [String(key.doctorKey || key.doctor_key || "")] : []),
     String(key.ownerType || ""),
     normalizeOwnerIdValue(key.ownerId || key.owner_id || ""),
     String(key.doctorKey || key.doctor_key || ""),
     String(key.rangeKey || key.range_key || ""),
   ).first();
-  return snapshotRegistryEntryFromRow(row);
+  const entry=snapshotRegistryEntryFromRow(row);
+  if(entry&&options.includeDoctorSelection){
+    let aliases=[];try{aliases=JSON.parse(row.selected_aliases_json||'[]');}catch{}
+    entry.selectedDoctorAliases=Array.isArray(aliases)?aliases:[];
+    entry.selectedDoctorDisplayName=String(row.selected_display_name||'');
+  }
+  return entry;
 }
 
 export async function upsertSnapshotRegistryEntry(db, entry = {}) {
@@ -6204,18 +6213,20 @@ export function memoizeSnapshotReads(bucket) {
   return reader;
 }
 
-export async function loadCachedSnapshot(r2, artifactKey) {
+export async function loadCachedSnapshot(r2, artifactKey, options = {}) {
   const cache = r2 && snapshotReadCaches.get(r2);
-  if (!cache) return readCachedSnapshot(r2, artifactKey);
-  if (!cache.has(artifactKey)) cache.set(artifactKey, readCachedSnapshot(r2, artifactKey));
-  return cache.get(artifactKey);
+  if (!cache) return readCachedSnapshot(r2, artifactKey, options);
+  const cacheKey=options.revision?artifactKey+'\0'+options.revision:artifactKey;
+  if (!cache.has(cacheKey)) cache.set(cacheKey, readCachedSnapshot(r2, artifactKey, options));
+  return cache.get(cacheKey);
 }
 
-async function readCachedSnapshot(r2, artifactKey) {
+async function readCachedSnapshot(r2, artifactKey, options = {}) {
   if (!r2?.get || !artifactKey) return null;
   try {
     const object = await r2.get(artifactKey);
     if (!object) return null;
+    if(options.revision && object.customMetadata?.revision!==options.revision)return null;
     const bytes = await object.arrayBuffer();
     const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
     const isGzip = header.length === 2 && header[0] === 0x1f && header[1] === 0x8b;

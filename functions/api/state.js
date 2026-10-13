@@ -4539,19 +4539,19 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
   if (String(context.env.BOUNDED_MANUAL_ROSTER_ENABLED || "").toLowerCase() !== "true") return loadLegacyFastAccountSnapshotPayload(context, params);
   const session = params.prepared?.state?.session || params.targetRecord?.state?.session || {};
   const claims = sanitizeClaims(params.prepared?.claims || params.targetRecord?.claims);
-  // Claims supply aliases independently of the old snapshot. Creator views
-  // without claims still read it to preserve their existing doctor selections.
-  const deferSnapshotRead = context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready' && context.env.IDENTITY_REVIEW_ENABLED==='true' && claims.length>0;
+  // Claims or the indexed canonical selection can supply aliases without
+  // reading the full legacy snapshot on every browser revision check.
+  const deferSnapshotRead = context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready' && context.env.IDENTITY_REVIEW_ENABLED==='true';
   const cached = await loadLegacyFastAccountSnapshotPayload(context, { ...params, cachedRevision: "", deferSnapshotRead });
   const resolveCached = async () => {
-    const {readSnapshot,historicalRevision,...payload}=cached;
+    const {readSnapshot,historicalRevision,selectedDoctor,...payload}=cached;
     if(readSnapshot)payload.snapshot=await readSnapshot();
     if(readSnapshot&&!payload.snapshot)return {...payload,snapshotAvailable:false,snapshotSource:'server-cache-miss'};
     if(context.env.IDENTITY_REVIEW_ENABLED==='true'&&payload.snapshot)payload.snapshot=filterSnapshotByIdentityAliases(payload.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
     return payload;
   };
   const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
-  const option = (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
+  const option = cached.selectedDoctor || (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
   let aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
   if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await calendarIdentityAliases(context.env.ROSTER_DB,{role:params.prepared?.role||params.targetRecord.role,email:params.targetRecord.email,doctorKey,aliases});
   const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
@@ -4592,7 +4592,7 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
   const lookupStartedAt = Date.now();
   const registryStartedAt = Date.now();
-  const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
+  const registry = await loadSnapshotRegistryEntry(db, descriptor, {includeDoctorSelection:params.deferSnapshotRead&&!sanitizeClaims(prepared?.claims||targetRecord?.claims).length}).catch(() => null);
   const registryLookupMs = Date.now() - registryStartedAt;
   const registryRevision = String(registry?.builtRevision || "");
   const cachedRevision = String(params.cachedRevision || "");
@@ -4634,12 +4634,15 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
   }
 
   if (readyArtifact) {
-    if(params.deferSnapshotRead) return {
+    const selectionAliases=sanitizeDoctorAccountResolutionInput({aliases:registry.selectedDoctorAliases}).aliases;
+    const claims=sanitizeClaims(prepared?.claims||targetRecord?.claims);
+    if(params.deferSnapshotRead&&(claims.length||selectionAliases.length)) return {
       ok:true,snapshot:null,snapshotAvailable:true,snapshotStale:false,
       snapshotBuiltAt:registry.builtAt || '',calendarRevision:registryRevision,
       historicalRevision:JSON.stringify([registry.artifactKey,registryRevision]),
+      selectedDoctor:selectionAliases.length?{key:doctorKey,aliases:selectionAliases,displayName:registry.selectedDoctorDisplayName}:null,
       readSnapshot:async()=>{
-        const snapshot=await loadCachedSnapshot(cacheBucket,registry.artifactKey).catch(()=>null);
+        const snapshot=await loadCachedSnapshot(cacheBucket,registry.artifactKey,{revision:registryRevision}).catch(()=>null);
         return snapshot?filterSnapshotCalendarEvents(snapshot):null;
       },
       ...snapshotRegistryState('ready',{snapshotSource:'server-cache',snapshotRevision:registryRevision}),

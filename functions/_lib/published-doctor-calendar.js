@@ -28,14 +28,18 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
   });
   const session = profile.state?.session || {};
   const settings = { ...defaultSettings(), ...(session.settings || {}) };
-  // The immutable legacy artifact identity pins historical content without
+  // The legacy cache key and registry revision identify historical content without
   // downloading and rebuilding that snapshot on every unchanged browser check.
   const lazyHistory = profile.doctorArtifactsEnabled && previousSnapshotLoader && historicalRevision;
   let historical = lazyHistory ? null : historicalEvents(previousSnapshot);
   const bytes = new TextEncoder().encode(JSON.stringify([published.revision, aliases, session, locations, lazyHistory ? ['legacy-artifact', historicalRevision] : historical,profile.doctorArtifactsEnabled?range:null]));
   const revision = 'published-profile:' + [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join('');
   if(profile.doctorArtifactsEnabled&&cachedRevision===revision)return {snapshot:null,snapshotCurrent:true,snapshotAvailable:true,snapshotRevision:revision,calendarRevision:revision};
-  if(lazyHistory) historical = historicalEvents(await previousSnapshotLoader());
+  if(lazyHistory){
+    const previous=await previousSnapshotLoader();
+    if(!previous)return {snapshot:null,snapshotAvailable:false,snapshotCurrent:false,snapshotStatus:'missing',snapshotSource:'server-cache-miss',calendarRevision:''};
+    historical=historicalEvents(previous);
+  }
   if(profile.doctorArtifactsEnabled&&sources.length)published.events=await published.readEvents();
   const seen = new Set();
   const roster = published.events.filter(row => {
