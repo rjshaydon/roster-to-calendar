@@ -168,7 +168,8 @@ const legacyRequest=async(input,{binary=false}={})=>{
  return binary?new Uint8Array(await response.arrayBuffer()):response.json();
 };
 assert.equal((await prepareLegacyCalendarCoverage({request:legacyRequest})).prepared,1);
-const storedSummary=JSON.parse(historyStore.objects.get(await legacyCoverageKey(historyKey,historyRevision)));assert.deepEqual(storedSummary,historySummary);
+const storedSummary=JSON.parse(historyStore.objects.get(await legacyCoverageKey(historyKey,historyRevision)));const expectedSummary={...historySummary,scope:await legacyCoverageKey(historyKey,historyRevision)};delete expectedSummary.revision;assert.deepEqual(storedSummary,expectedSummary);
+assert.equal(legacyHistoryIsCovered(storedSummary,historyKey,historyRevision,options.range,currentTerms,expectedSummary.scope),true);
 historyStore.reads=[];assert.equal((await prepareLegacyCalendarCoverage({request:legacyRequest})).prepared,0);
 assert.equal(historyStore.reads.includes(historyKey),false,'completed backfill never downloads an unchanged legacy snapshot');
 await assert.rejects(legacyRequest({mode:'legacy-publish',key:historyKey,revision:historyRevision,etag:'stale',summary:historySummary}),'stale raw history cannot publish coverage');

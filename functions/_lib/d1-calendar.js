@@ -6254,7 +6254,7 @@ export async function storeCachedSnapshot(r2, artifactKey, snapshot, metadata = 
     },
     httpMetadata: { contentType: "application/json", contentEncoding: "gzip" },
   });
-  if(metadata.revision&&validLegacySnapshotKey(artifactKey))await r2.put(await legacyCoverageKey(artifactKey,metadata.revision),JSON.stringify(summarizeLegacyCoverage(snapshot,artifactKey,metadata.revision)),{httpMetadata:{contentType:'application/json'}});
+  if(metadata.revision&&validLegacySnapshotKey(artifactKey)){const scope=await legacyCoverageKey(artifactKey,metadata.revision),summary=summarizeLegacyCoverage(snapshot,artifactKey,metadata.revision);summary.scope=scope;delete summary.revision;await r2.put(scope,JSON.stringify(summary),{httpMetadata:{contentType:'application/json'}});}
   return true;
 }
 

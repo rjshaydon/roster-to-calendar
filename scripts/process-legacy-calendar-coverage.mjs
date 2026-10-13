@@ -1,5 +1,5 @@
 import {gunzipSync} from 'node:zlib';
-import {summarizeLegacyCoverage,LEGACY_COVERAGE_VERSION} from '../functions/_lib/legacy-calendar-coverage.js';
+import {summarizeLegacyCoverage,legacyCoverageKey,LEGACY_COVERAGE_VERSION} from '../functions/_lib/legacy-calendar-coverage.js';
 export async function prepareLegacyCalendarCoverage({request}){
  let prepared=0;
  for(;;){
@@ -13,6 +13,7 @@ export async function prepareLegacyCalendarCoverage({request}){
     const snapshot=JSON.parse(bytes.subarray(0,2).equals(Buffer.from([31,139]))?gunzipSync(bytes,{maxOutputLength:64*1024*1024}).toString('utf8'):bytes.toString('utf8'));
     summary=summarizeLegacyCoverage(snapshot,item.key,item.revision);
    }catch{summary={version:LEGACY_COVERAGE_VERSION,key:item.key,revision:item.revision,safe:false,bounds:[]};}
+   summary.scope=await legacyCoverageKey(item.key,item.revision);delete summary.revision;
    const result=await request({...item,mode:'legacy-publish',summary});
    if(result.status!=='complete')throw Error('Legacy coverage did not complete.');prepared++;
   }

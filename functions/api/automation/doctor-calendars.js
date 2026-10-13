@@ -130,12 +130,13 @@ async function legacyCoverageOperation(env,input){
   await bucket.put(progressKey,JSON.stringify({version:LEGACY_COVERAGE_VERSION,cursor:input.cursor,complete:input.complete}));
   return Response.json({status:'complete'});
  }
- if(!validLegacySnapshotKey(input.key)||typeof input.revision!=='string'||!input.revision||input.revision.length>2048)return bad();
+ if(!validLegacySnapshotKey(input.key)||typeof input.revision!=='string'||!input.revision||input.revision.length>65536)return bad();
  const object=input.mode==='legacy-object'?await bucket.get(input.key):await bucket.head(input.key);
  if(!object||object.etag!==input.etag||object.customMetadata?.revision!==input.revision)return Response.json({status:'stale'},{status:409});
  if(input.mode==='legacy-object')return new Response(object.body,{headers:{'Content-Type':'application/octet-stream'}});
- if(input.mode!=='legacy-publish'||input.summary?.version!==LEGACY_COVERAGE_VERSION||input.summary.key!==input.key||input.summary.revision!==input.revision||typeof input.summary.safe!=='boolean'||!Array.isArray(input.summary.bounds)||input.summary.bounds.length>5)return bad();
+ const scope=await legacyCoverageKey(input.key,input.revision);
+ if(input.mode!=='legacy-publish'||input.summary?.version!==LEGACY_COVERAGE_VERSION||input.summary.key!==input.key||!(input.summary.revision===input.revision||input.summary.scope===scope)||typeof input.summary.safe!=='boolean'||!Array.isArray(input.summary.bounds)||input.summary.bounds.length>5)return bad();
  const serialized=JSON.stringify(input.summary);if(serialized.length>4096)return bad();
- await bucket.put(await legacyCoverageKey(input.key,input.revision),serialized,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}});
+ await bucket.put(scope,serialized,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}});
  return Response.json({status:'complete'});
 }

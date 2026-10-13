@@ -19,8 +19,8 @@ export function summarizeLegacyCoverage(snapshot,key,revision){
 }
 // Conservative bounds can require an unnecessary history read, but cannot
 // omit a historical shift: every date in the intersecting interval is covered.
-export function legacyHistoryIsCovered(summary,key,revision,range,visibleTerms){
- if(summary?.version!==LEGACY_COVERAGE_VERSION||summary.key!==key||summary.revision!==revision||summary.safe!==true||!Array.isArray(summary.bounds)||summary.bounds.length>5)return false;
+export function legacyHistoryIsCovered(summary,key,revision,range,visibleTerms,scope=''){
+ if(summary?.version!==LEGACY_COVERAGE_VERSION||summary.key!==key||!(summary.revision===revision||scope&&summary.scope===scope)||summary.safe!==true||!Array.isArray(summary.bounds)||summary.bounds.length>5)return false;
  const next=date=>{const d=new Date(date+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10);};
  for(const bound of summary.bounds){
   if(!['mmc','mch','ddh','vhh','casey'].includes(bound.sourceType)||!validDate(bound.startDate)||!validDate(bound.endDate)||bound.endDate<bound.startDate)return false;

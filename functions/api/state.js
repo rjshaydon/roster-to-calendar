@@ -4644,8 +4644,9 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
       selectedDoctor:selectionAliases.length?{key:doctorKey,aliases:selectionAliases,displayName:registry.selectedDoctorDisplayName}:null,
       readSnapshot:async(historyContext)=>{
         if(historyContext){
-          const summary=await loadCachedSnapshot(cacheBucket,await legacyCoverageKey(registry.artifactKey,registryRevision));
-          if(legacyHistoryIsCovered(summary,registry.artifactKey,registryRevision,historyContext.range,historyContext.visibleTerms))return {preview:{events:[]}};
+          const scope=await legacyCoverageKey(registry.artifactKey,registryRevision);
+          const summary=await loadCachedSnapshot(cacheBucket,scope);
+          if(legacyHistoryIsCovered(summary,registry.artifactKey,registryRevision,historyContext.range,historyContext.visibleTerms,scope))return {preview:{events:[]}};
         }
         const snapshot=await loadCachedSnapshot(cacheBucket,registry.artifactKey,{revision:registryRevision}).catch(()=>null);
         return snapshot?filterSnapshotCalendarEvents(snapshot):null;
