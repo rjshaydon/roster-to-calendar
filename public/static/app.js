@@ -18048,15 +18048,19 @@ async function refreshVisibleRosterView(view) {
   }
   const sessionBefore = JSON.stringify(buildActiveSessionState());
   const stillCurrent = () => calendarRevisionView()?.key === view.key && calendarRevisionRefreshAllowed() && JSON.stringify(buildActiveSessionState()) === sessionBefore;
+  const cachedRevision = currentSnapshot && !currentSnapshotStale ? String(currentSnapshot.calendarRevision || currentCalendarRevision || '') : '';
+  let unchanged = false;
   let loaded;
   if (activeDoctorProfile) {
     const response = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
       action: 'loadDoctorProfile', email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
       profileId: activeDoctorProfile.id, doctorKey: activeDoctorProfile.doctorKey, displayName: activeDoctorProfile.displayName, sourceTypes: activeDoctorProfile.sourceTypes,
-      allowInlineBuild: false,
+      allowInlineBuild: false, cachedRevision,
     }) });
     const data = await readJsonResponse(response, 'Doctor calendar refresh delayed.');
-    if (!stillCurrent() || !data.snapshot || data.snapshotStale === true) return false;
+    if (!stillCurrent() || data.snapshotStale === true) return false;
+    if (data.snapshotCurrent === true) return Boolean(currentSnapshot);
+    if (!data.snapshot) return false;
     const viewSettings = buildActiveSessionState().settings;
     const refreshed = sanitizeWorkspaceSnapshot(data.snapshot);
     if (!refreshed) return false;
@@ -18069,9 +18073,11 @@ async function refreshVisibleRosterView(view) {
     loaded = true;
   } else {
     loaded = await loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : '',
+      cachedRevision, onUnchanged: () => { unchanged = true; },
       allowInlineBuild: false, skipRebuild: true, preserveExistingSnapshot: true, preserveViewFilters: true, requireFreshSnapshot: true, isCurrent: stillCurrent });
   }
   if (!loaded || calendarRevisionView()?.key !== view.key) return false;
+  if (unchanged) return true;
   renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || {}, { suppressInsightWarmup: true, preserveScroll: true });
   return true;
 }
@@ -18129,12 +18135,7 @@ async function loadCloudCalendarEvents(options = {}) {
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   if (data.snapshotCurrent === true) {
     if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
-    if (currentSnapshot) {
-      saveCalendarSnapshotCacheForContext(currentSnapshot, {
-        ownerEmail: adminTargetEmail || viewedAccountEmail(),
-        doctorKey: preferredDoctorKey || currentSnapshot?.session?.doctorKey || "",
-      });
-    }
+    if (currentSnapshot) options.onUnchanged?.();
     return Boolean(currentSnapshot);
   }
   if (!data.snapshot && options.preserveExistingSnapshot === true) {

@@ -8,6 +8,34 @@ is required. Check keyboard/viewport offsets and app resume behavior, preserving
 the normal bottom placement. Reported 13 October; intentionally not part of the
 current calendar CPU acceptance work.
 
+## Evening completion pass — conditional refresh and historical coverage
+
+The actual automatic refresh omitted `cachedRevision` for personal/admin and
+doctor-profile views. It now supplies that revision, acknowledges unchanged
+profile responses, and avoids repainting or sanitizing/persisting an unchanged
+snapshot. Tests execute the actual browser functions and verify changed data,
+preserved filters, and late-response account isolation.
+
+A paired private native ablation measured full requests at 11–24 ms versus
+7–11 ms without legacy-history decoding; events/review remained identical in
+these captured accounts because their published windows already covered history.
+Metadata-only checks used 4–6 ms. No sampled invocation exceeded resources.
+
+Prepared coverage summaries now allow skipping compressed legacy snapshots only
+when all relevant historical date bounds are inside published term windows or
+outside the requested dates. Any gap, invalid summary or different revision
+retains the full historical read. The summaries are prepared in Node using the
+existing bounded/resumable doctor-cache workflow, without D1 queries/writes,
+unchanged snapshot downloads after completion, or reuploading calendar content.
+Normal future legacy-cache writers prepare their matching summary as well.
+Corrupt/oversized old snapshots receive an unsafe marker, never permission to
+omit history, so one malformed object cannot block preparation for everyone.
+
+Acceptance evaluates native cold/warm workloads and actual `exceededCpu`
+outcomes alongside CPU distributions: an occasional over-10-ms sample alone
+is not a failed Free-tier invocation. Production activation and final evidence
+remain to be recorded after summary preparation.
+
 ## Conditional legacy history read follow-up
 
 The optimized authenticated calendar path previously loaded the old account

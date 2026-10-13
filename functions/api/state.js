@@ -1,4 +1,5 @@
 import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
+import {legacyCoverageKey,legacyHistoryIsCovered} from '../_lib/legacy-calendar-coverage.js';
 import {normalizeEmail} from "../_lib/email.js";
 export {normalizeEmail} from "../_lib/email.js";
 import {identityTermHistory} from '../_lib/identity-term-history.js';
@@ -4641,7 +4642,11 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
       snapshotBuiltAt:registry.builtAt || '',calendarRevision:registryRevision,
       historicalRevision:JSON.stringify([registry.artifactKey,registryRevision]),
       selectedDoctor:selectionAliases.length?{key:doctorKey,aliases:selectionAliases,displayName:registry.selectedDoctorDisplayName}:null,
-      readSnapshot:async()=>{
+      readSnapshot:async(historyContext)=>{
+        if(historyContext){
+          const summary=await loadCachedSnapshot(cacheBucket,await legacyCoverageKey(registry.artifactKey,registryRevision));
+          if(legacyHistoryIsCovered(summary,registry.artifactKey,registryRevision,historyContext.range,historyContext.visibleTerms))return {preview:{events:[]}};
+        }
         const snapshot=await loadCachedSnapshot(cacheBucket,registry.artifactKey,{revision:registryRevision}).catch(()=>null);
         return snapshot?filterSnapshotCalendarEvents(snapshot):null;
       },

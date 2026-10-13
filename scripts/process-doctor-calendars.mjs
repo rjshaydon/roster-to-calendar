@@ -1,4 +1,5 @@
 import {publishDoctorSource} from './process-doctor-source.mjs';
+import {prepareLegacyCalendarCoverage} from './process-legacy-calendar-coverage.mjs';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {pathToFileURL} from 'node:url';
@@ -52,6 +53,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
    for(const [month,pointer] of Object.entries(months))console.log(JSON.stringify({sourceType,month,...await publishDoctorMonth({sourceType,month,revision:pointer.revision,request})}));
    console.log(JSON.stringify({sourceType,...await publishDoctorSource({sourceType,request})}));
   }
+  console.log(JSON.stringify({legacyCoverage:await prepareLegacyCalendarCoverage({request})}));
   settled=true;console.log(JSON.stringify({status:'complete'}));
  }catch(error){
   if(error.code!=='DOCTOR_BUILD_YIELD')throw error;

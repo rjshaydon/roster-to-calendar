@@ -1,4 +1,5 @@
 import {guardedFetch} from '../../_lib/outbound-network.js';
+import {legacyCoverageKey,validLegacySnapshotKey,LEGACY_COVERAGE_VERSION} from '../../_lib/legacy-calendar-coverage.js';
 import {DOCTOR_SOURCE_VERSION,DOCTOR_SOURCE_LAYOUT,doctorSourceKey,doctorSourceCurrentKey} from '../../_lib/doctor-source-artifacts.js';
 import {automatedRosterWritesEnabled,rosterWritePausedResponse} from '../../_lib/roster-automation-guard.js';
 import {loadCachedSnapshot} from '../../_lib/d1-calendar.js';
@@ -29,6 +30,7 @@ export async function onRequestPost({request,env}){
   const input=await request.json();
   if(input.mode==='check-source')return checkDoctorSourceBuild(env);
   if(input.mode==='finish-source'){const lease=await r2.get('doctor-calendars/v2/build-lease.json'),value=lease?await new Response(lease.body).json():null;if(value?.id===input.dispatchId)await r2.put('doctor-calendars/v2/build-lease.json',JSON.stringify({...value,until:0}),{onlyIf:{etagMatches:lease.etag}});return Response.json({status:'complete'});}
+  if(input.mode?.startsWith('legacy-'))return legacyCoverageOperation(env,input);
   if(!['mmc','mch','ddh','vhh','casey'].includes(input.sourceType))return bad();
   if(input.mode==='object'){
    if(!validExportKey(input.sourceType,input.key))return bad();
@@ -99,9 +101,41 @@ async function checkDoctorSourceBuild(env){
  const r2=env.ROSTER_FILES,key='doctor-calendars/v2/build-lease.json',object=await r2.get(key),lease=object?await new Response(object.body).json():{};
  if(lease.until>Date.now())return Response.json({status:'busy'});
  const states=await Promise.all(['mmc','mch','ddh','vhh','casey'].map(async source=>{const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(source)),loadCachedSnapshot(r2,doctorSourceCurrentKey(source))]);return Boolean(head)&&(!current||current.version!==DOCTOR_SOURCE_VERSION||current.layout!==DOCTOR_SOURCE_LAYOUT||current.parentEtag!==head.etag);}));
- if(!states.some(Boolean))return Response.json({status:'unchanged'});
+ const coverage=env.ROSTER_CACHE?await loadCachedSnapshot(env.ROSTER_CACHE,'legacy-calendar/v1/progress.json'):null;
+ if(!states.some(Boolean)&&(!env.ROSTER_CACHE||coverage?.version===LEGACY_COVERAGE_VERSION&&coverage.complete))return Response.json({status:'unchanged'});
  if(!env.GITHUB_ACTIONS_TOKEN)return Response.json({status:'dispatch-unconfigured'});
  const next={id:crypto.randomUUID(),until:Date.now()+20*60000};if(!await r2.put(key,JSON.stringify(next),{onlyIf:object?{etagMatches:object.etag}:{etagDoesNotMatch:'*'}}))return Response.json({status:'busy'});
  const response=await guardedFetch(env,'https://api.github.com/repos/rjshaydon/roster-to-calendar/actions/workflows/doctor-calendars.yml/dispatches',{method:'POST',headers:{Authorization:'Bearer '+env.GITHUB_ACTIONS_TOKEN,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'roster-to-calendar','X-GitHub-Api-Version':'2022-11-28'},body:JSON.stringify({ref:env.ROSTER_GITHUB_WORKFLOW_REF||'main',inputs:{dispatch_id:next.id}}),signal:AbortSignal.timeout(15000)},{label:'Doctor calendar dispatch'});
  return Response.json({status:response.ok?'dispatched':'dispatch-uncertain'});
+}
+
+async function legacyCoverageOperation(env,input){
+ const bucket=env.ROSTER_CACHE;if(!bucket)return Response.json({status:'complete'});
+ const progressKey='legacy-calendar/v1/progress.json';
+ if(input.mode==='legacy-page'){
+  const progress=await loadCachedSnapshot(bucket,progressKey);
+  if(progress?.version===LEGACY_COVERAGE_VERSION&&progress.complete)return Response.json({status:'complete'});
+  const cursor=progress?.version===LEGACY_COVERAGE_VERSION?progress.cursor||undefined:undefined;
+  const page=await bucket.list({prefix:'snapshots/',limit:8,cursor}),pending=[];
+  for(const object of page.objects){
+   if(!validLegacySnapshotKey(object.key))continue;
+   const head=await bucket.head(object.key),revision=head?.customMetadata?.revision;
+   if(!revision)continue;
+   if(!await bucket.head(await legacyCoverageKey(object.key,revision)))pending.push({key:object.key,revision,etag:head.etag});
+  }
+  return Response.json({status:'running',pending,cursor:page.truncated?page.cursor:'',complete:!page.truncated});
+ }
+ if(input.mode==='legacy-advance'){
+  if(typeof input.cursor!=='string'||input.cursor.length>4096||typeof input.complete!=='boolean')return bad();
+  await bucket.put(progressKey,JSON.stringify({version:LEGACY_COVERAGE_VERSION,cursor:input.cursor,complete:input.complete}));
+  return Response.json({status:'complete'});
+ }
+ if(!validLegacySnapshotKey(input.key)||typeof input.revision!=='string'||!input.revision||input.revision.length>512)return bad();
+ const object=input.mode==='legacy-object'?await bucket.get(input.key):await bucket.head(input.key);
+ if(!object||object.etag!==input.etag||object.customMetadata?.revision!==input.revision)return Response.json({status:'stale'},{status:409});
+ if(input.mode==='legacy-object')return new Response(object.body,{headers:{'Content-Type':'application/octet-stream'}});
+ if(input.mode!=='legacy-publish'||input.summary?.version!==LEGACY_COVERAGE_VERSION||input.summary.key!==input.key||input.summary.revision!==input.revision||typeof input.summary.safe!=='boolean'||!Array.isArray(input.summary.bounds)||input.summary.bounds.length>5)return bad();
+ const serialized=JSON.stringify(input.summary);if(serialized.length>4096)return bad();
+ await bucket.put(await legacyCoverageKey(input.key,input.revision),serialized,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'application/json'}});
+ return Response.json({status:'complete'});
 }

@@ -6,6 +6,7 @@ import {
   serializeEvent,
 } from "./roster.js";
 import { rosterTermAvailableFrom } from '../../public/static/roster-term-policy.js';
+import {legacyCoverageKey,summarizeLegacyCoverage,validLegacySnapshotKey} from './legacy-calendar-coverage.js';
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch", "vhh"];
 // Only a successfully activated parse may carry this version. Older rows are
@@ -6253,6 +6254,7 @@ export async function storeCachedSnapshot(r2, artifactKey, snapshot, metadata = 
     },
     httpMetadata: { contentType: "application/json", contentEncoding: "gzip" },
   });
+  if(metadata.revision&&validLegacySnapshotKey(artifactKey))await r2.put(await legacyCoverageKey(artifactKey,metadata.revision),JSON.stringify(summarizeLegacyCoverage(snapshot,artifactKey,metadata.revision)),{httpMetadata:{contentType:'application/json'}});
   return true;
 }
 

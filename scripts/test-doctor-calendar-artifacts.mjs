@@ -1,3 +1,5 @@
+import {prepareLegacyCalendarCoverage} from './process-legacy-calendar-coverage.mjs';
+import {legacyCoverageKey,summarizeLegacyCoverage,legacyHistoryIsCovered} from '../functions/_lib/legacy-calendar-coverage.js';
 import {DatabaseSync} from 'node:sqlite';
 import {readdir,readFile} from 'node:fs/promises';
 import {onRequestPost as statePost} from '../functions/api/state.js';
@@ -16,7 +18,8 @@ import {loadPublishedDoctorCalendar} from '../functions/_lib/published-doctor-ca
 const hash=v=>createHash('sha256').update(v).digest('hex');
 class Bucket{
  objects=new Map();metadata=new Map();reads=[];writes=[];failRows=false;failCatalogue=false;
- async head(key){return this.objects.has(key)?{key,etag:hash(this.objects.get(key))}:null;}
+ async list({prefix='',limit=8,cursor=''}){const keys=[...this.objects.keys()].filter(k=>k.startsWith(prefix)&&k>cursor).sort();const selected=keys.slice(0,limit);return {objects:selected.map(key=>({key})),truncated:keys.length>limit,cursor:selected.at(-1)||''};}
+ async head(key){return this.objects.has(key)?{key,etag:hash(this.objects.get(key)),customMetadata:this.metadata.get(key)||{}}:null;}
  async get(key){this.reads.push(key);const entry=this.objects.get(key);return entry?{body:entry,customMetadata:this.metadata.get(key)||{},etag:hash(entry),async arrayBuffer(){return entry.buffer.slice(entry.byteOffset,entry.byteOffset+entry.length)}}:null;}
  async put(key,value,options={}){if(this.failRows&&key.includes('/rows/')||this.failCatalogue&&key.includes('/catalogues/'))throw Error('Injected failure');if(options.onlyIf?.etagDoesNotMatch==='*'&&this.objects.has(key)||options.onlyIf?.etagMatches&&(!this.objects.has(key)||hash(this.objects.get(key))!==options.onlyIf.etagMatches))return null;const bytes=typeof value==='string'?Buffer.from(value):value instanceof ReadableStream?Buffer.from(await new Response(value).arrayBuffer()):Buffer.from(value);if(options.sha256)assert.equal(hash(bytes),Buffer.from(options.sha256).toString('hex'));this.objects.set(key,bytes);this.metadata.set(key,options.customMetadata||{});this.writes.push(key);return {key};}
 }
@@ -148,6 +151,35 @@ assert.equal((await (await calendarPost('')).json()).snapshotAvailable,false,'ca
 legacyBucket.metadata.set(legacyKey,{revision:'legacy-v1'});
 assert.equal((await onRequestPost({env:{ROSTER_FILES:r2,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true'},request:new Request('https://fixture',{method:'POST',body:'{}'})})).status,401);
 console.log('Doctor calendars pass external assembly, unchanged zero-download/zero-write, colleague isolation, metadata-only checks, grades, ranges, removals and publication failure.');
+
+const historyKey='snapshots/user-account/fixture@test/DOCTOR/2026.json.gz',historyRevision='history-v1';
+const historySummary=summarizeLegacyCoverage(historicalSnapshot,historyKey,historyRevision);
+const currentTerms=[{sourceType,termStart:'2026-10-01',termEnd:'2026-10-31'}];
+assert.equal(legacyHistoryIsCovered(historySummary,historyKey,historyRevision,options.range,currentTerms),true,'history outside requested dates requires no decoding');
+assert.equal(legacyHistoryIsCovered(historySummary,historyKey,historyRevision,lazyOptions.range,currentTerms),false,'published October must not discard retained July shifts');
+assert.equal(legacyHistoryIsCovered(historySummary,historyKey,'different',options.range,currentTerms),false,'another historical generation cannot authorize skipping');
+const allTerms=[{sourceType,termStart:'2026-07-01',termEnd:'2026-08-31'},{sourceType,termStart:'2026-09-01',termEnd:'2026-10-31'}];
+assert.equal(legacyHistoryIsCovered(historySummary,historyKey,historyRevision,lazyOptions.range,allTerms),true,'adjacent terms cover the whole historical interval');
+assert.equal(legacyHistoryIsCovered(historySummary,historyKey,historyRevision,lazyOptions.range,[allTerms[0],{...allTerms[1],termStart:'2026-09-02'}]),false,'a one-day gap forces the full historical read');
+const historyStore=new Bucket();await historyStore.put(historyKey,gzipSync(JSON.stringify(historicalSnapshot)),{customMetadata:{revision:historyRevision}});
+const legacyRequest=async(input,{binary=false}={})=>{
+ const response=await onRequestPost({env:{ROSTER_FILES:r2,ROSTER_CACHE:historyStore,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true'},request:new Request('https://fixture',{method:'POST',headers:{authorization:'Bearer fixture'},body:JSON.stringify(input)})});
+ if(!response.ok)throw Error('Legacy coverage callback '+response.status);
+ return binary?new Uint8Array(await response.arrayBuffer()):response.json();
+};
+assert.equal((await prepareLegacyCalendarCoverage({request:legacyRequest})).prepared,1);
+const storedSummary=JSON.parse(historyStore.objects.get(await legacyCoverageKey(historyKey,historyRevision)));assert.deepEqual(storedSummary,historySummary);
+historyStore.reads=[];assert.equal((await prepareLegacyCalendarCoverage({request:legacyRequest})).prepared,0);
+assert.equal(historyStore.reads.includes(historyKey),false,'completed backfill never downloads an unchanged legacy snapshot');
+await assert.rejects(legacyRequest({mode:'legacy-publish',key:historyKey,revision:historyRevision,etag:'stale',summary:historySummary}),'stale raw history cannot publish coverage');
+// Proven coverage is used by the actual account route, not only the predicate.
+await legacyBucket.put(await legacyCoverageKey(legacyKey,'legacy-v1'),JSON.stringify(summarizeLegacyCoverage(historicalSnapshot,legacyKey,'legacy-v1')));
+legacyBucket.reads=[];
+const octoberOnly={...lazyOptions.range,startDate:'2026-10-01'};
+accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('creator-account',email,doctor,snapshotRegistryRangeKey(octoberOnly),'legacy-v1','ready',legacyKey);
+const coveredResponse=await statePost({data:{stateAction:'loadCalendarEvents'},env:{ROSTER_DB:accountDb,ROSTER_FILES:r2,ROSTER_CACHE:legacyBucket,IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'ready'},request:new Request('https://fixture/api/state',{method:'POST',body:JSON.stringify({action:'loadCalendarEvents',email,password,doctorKey:doctor,startDate:octoberOnly.startDate,endDate:octoberOnly.endDate,responseMode:'fast',allowInlineBuild:false})})});
+assert.equal((await coveredResponse.json()).snapshot.preview.events[0].id,'new');
+assert.equal(legacyBucket.reads.includes(legacyKey),false,'account route skips compressed historical body only with complete coverage proof');
 
 for(const compressed of [false,true]){
  const value={events:[{id:'stream-fixture',title:'Résumé'}]},bytes=compressed?gzipSync(JSON.stringify(value)):Buffer.from(JSON.stringify(value));
