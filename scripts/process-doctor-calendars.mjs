@@ -1,3 +1,4 @@
+import {publishDoctorSource} from './process-doctor-source.mjs';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {pathToFileURL} from 'node:url';
@@ -42,7 +43,6 @@ export function doctorCalendarRequest({base,token,deadlineAt=Infinity}){return a
 };}
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  if(!process.env.ROSTER_AUTOMATION_BASE_URL||!process.env.ROSTER_AUTOMATION_TOKEN)throw Error('Doctor calendar credentials unavailable.');
- const {publishDoctorSource}=await import('./process-doctor-source.mjs');
  const base=process.env.ROSTER_AUTOMATION_BASE_URL,token=process.env.ROSTER_AUTOMATION_TOKEN;
  const request=doctorCalendarRequest({base,token,deadlineAt:Date.now()+12*60000});let settled=false;
  try{
