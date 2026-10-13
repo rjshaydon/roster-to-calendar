@@ -135,14 +135,13 @@ assert.deepEqual((await executeBoundedRosterImport(replacement.plan,body=>call(r
 const partial=await plan('2026-10-01','2026-11-01',2);
 await assert.rejects(executeBoundedRosterImport(partial.plan,body=>call(partial.file,body)),/full retained term range/);
 const raced=await plan('2026-08-03','2026-11-01',2);
-await executeBoundedRosterImport(raced.plan,async body=>{
+await assert.rejects(executeBoundedRosterImport(raced.plan,async body=>{
   if(body.phase==='bounded-activate') db.beforeBatch=statements=>{
     // Reservation is the first batch; inject at the actual promotion transaction.
     db.beforeBatch=()=>sqlite.prepare("UPDATE roster_files SET parsed_at='changed' WHERE id=?").run(replacement.file.id);
   };
-  if(body.phase==='bounded-activate') return assert.rejects(call(raced.file,body),/Concurrent roster change/);
   return call(raced.file,body);
-});
+}), /Concurrent roster change/);
 assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(replacement.file.id).active,1);
 assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(raced.file.id).active,0);
 beginMaintenanceAccounting(db,'removal-fixture',true);

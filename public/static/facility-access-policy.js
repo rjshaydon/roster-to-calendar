@@ -21,7 +21,7 @@ export function nextFacilityDate(date) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0,10);
 }
 let melbourneOffsetFormatter;
-function melbourneMidnight(date) {
+export function melbourneMidnight(date) {
   // Melbourne midnight occurs before the 02:00/03:00 DST transition.
   const sample = new Date(Date.parse(`${date}T00:00:00Z`) - 10 * 60 * 60 * 1000);
   melbourneOffsetFormatter ||= new Intl.DateTimeFormat("en", { timeZone: "Australia/Melbourne", timeZoneName: "longOffset" });

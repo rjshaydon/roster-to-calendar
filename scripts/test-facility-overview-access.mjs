@@ -187,7 +187,7 @@ function onShiftHarness(options = {}) {
     loadPublishedFacilityDays:async()=>{calls.push('roster'); return options.roster ? options.roster : published;},
     loadPublishedFacilityContacts:async()=>{calls.push('contacts'); return options.contact ? options.contact : {status:'available', contacts:[]};},
     isFacilityOverviewWorkingEvent:()=>true, issueFacilityContactAccessToken:async()=>{calls.push('token');return 'token';},
-    publishedReadRevision:async()=> 'revision',
+    publishedReadRevision:async()=> 'revision', loadRosterDeliveryWarnings:async()=>[],
     loadPublishedPreviousDdhNight:async()=>{calls.push('previous-night');return {rows:[]};},
     facilityOverviewPreparingResponse:()=>Response.json({preparing:true,events:[]},{status:503}),
     sharedRouteUnavailable:()=>Response.json({unavailable:true},{status:503})};

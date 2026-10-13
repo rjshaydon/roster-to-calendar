@@ -1,3 +1,6 @@
+import { createRosterComparisonCache } from './roster-comparison-cache.js';
+import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-policy.js';
+const rosterComparisonCache = createRosterComparisonCache();
 import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261012-external-audit';
@@ -5013,7 +5016,7 @@ async function renderInsightsModal() {
   if (insightsState.mode === "who") {
     await renderWhoInsight();
   } else if (insightsState.mode === "when") {
-    renderWhenInsightLoading();
+    if (!insightsState.lastComparisonRenderKey) renderWhenInsightLoading();
     showInsightsModal();
     await renderWhenInsight({ renderRunId });
     return;
@@ -5101,8 +5104,51 @@ function selectedInsightDoctorKeys() {
   ].map(normalizeRosterName).filter(Boolean))];
 }
 
-async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
+function comparisonDoctorIdentities(doctor) {
+  const aliases = (doctor?.aliases || []).filter(alias => alias.sourceType && alias.key).map(alias => ({ sourceType: String(alias.sourceType).toLowerCase(), key: normalizeRosterName(alias.key) }));
+  const base = normalizedDoctorSourceTypes(doctor).map(sourceType => ({ sourceType: String(sourceType).toLowerCase(), key: normalizeRosterName(doctor?.key || doctor?.doctorKey || '') }));
+  return [...new Map([...base, ...aliases].filter(identity => identity.key).map(identity => [`${identity.sourceType}|${identity.key}`, identity])).values()];
+}
+
+function comparisonWorkspaceKey() {
+  return `${normalizeEmail(authUserEmail || currentUserEmail)}:${activeWorkspaceOwnerKey()}:${facilityOverviewTargetEmail()}`;
+}
+
+async function requestRosterComparison({ kind, feature, query, action, onCached, leaseQuery = query, force = false }) {
+  const owner = comparisonWorkspaceKey();
+  const email = authUserEmail || currentUserEmail, password = authUserPassword || currentUserPassword;
+  const targetEmail = facilityOverviewTargetEmail();
+  // Three aliases per request bounds catalogue and body reads even across five
+  // sites. Larger existing UI selections are assembled from bounded requests.
+  const keys = [...new Set(query.doctorKeys || [])].sort();
+  if (kind === 'selected' && keys.length > 3) {
+    const results = [];
+    for (let offset = 0; offset < keys.length; offset += 3) results.push(await requestRosterComparison({ kind, feature, query: { ...query, doctorKeys: keys.slice(offset, offset + 3), ...(query.doctorIdentities ? { doctorIdentities: query.doctorIdentities.filter(identity => keys.slice(offset, offset + 3).includes(identity.key)) } : {}) }, action, leaseQuery, force }));
+    return { ...results[0], revision: results.map(result => result.revision).join(':'), events: results.flatMap(result => result.events || []), coworkers: results.flatMap(result => result.events || []), missing: results.flatMap(result => result.missing || []) };
+  }
+  return rosterComparisonCache.request({ owner, kind, feature, query, onCached, leaseQuery, force,
+    send: async (payload, cachedRevision, cachedPersonRevisions) => {
+      const response = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, action, email, password, targetEmail, comparison: true, cachedRevision, cachedPersonRevisions }) });
+      let data;
+      try { data = await readJsonResponse(response, 'Could not load this roster comparison.'); }
+      catch (error) { error.status = response.status; throw error; }
+      if (!response.ok || !data.ok) throw Object.assign(Error(data.error || 'This roster comparison is unavailable.'), { status: response.status });
+      if (kind === 'selected' && !data.unchanged) { const {coworkers,...facts}=data; return {...facts,events:data.events||coworkers||[]}; }
+      return data;
+    },
+  });
+}
+
+async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [], allowFallback = true, comparison = false, doctorIdentities, onComparisonCached } = {}) {
   if (!cloudAvailable || !startDate) return { ok: false, unavailable: true, rows: [] };
+  if (comparison) {
+    try {
+      const data = await requestRosterComparison({ kind: 'selected', feature: 'when', action: 'queryRosterInsights',
+        query: { startDate, endDate, sourceTypes, doctorKeys, ...(doctorIdentities ? { doctorIdentities } : {}) }, onCached: onComparisonCached });
+      return { ...data, rows: data.events || [] };
+    } catch (error) { return { ok: false, unavailable: true, rows: [], error: error.message }; }
+  }
   const cacheKey = `${rosterInsightCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, doctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
   if (visibleInsightWarmCache.has(cacheKey) && Date.now()-visibleInsightWarmCache.get(cacheKey).savedAt < 5*60*1000) {
     return { ok: true, rows: visibleInsightWarmCache.get(cacheKey).value, elapsedMs: 0, cached: true };
@@ -5143,8 +5189,13 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
   }
 }
 
-async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
+async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [], allowFallback = true, comparison = false } = {}) {
   if (!cloudAvailable || !startDate || !overlapDoctorKeys.length) return { ok: false, unavailable: true, doctors: [] };
+  if (comparison) {
+    try { return await requestRosterComparison({ kind: 'discover', feature: 'when', action: 'queryRosterOverlapDoctors',
+      query: { startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys } }); }
+    catch (error) { return { ok: false, unavailable: true, doctors: [], error: error.message }; }
+  }
   const cacheKey = `${rosterOverlapDoctorCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
   if (visibleInsightWarmCache.has(cacheKey) && Date.now()-visibleInsightWarmCache.get(cacheKey).savedAt < 5*60*1000) {
     return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey).value, elapsedMs: 0, cached: true };
@@ -5302,6 +5353,7 @@ function writePersistentRosterOverlapDoctors(cacheKey, doctors = []) {
 }
 
 function resetVisibleInsightWarmCache() {
+  rosterComparisonCache.clear();
   visibleInsightWarmCache = new Map();
   visibleInsightWarmKey = "";
 }
@@ -5364,6 +5416,7 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
   const doctorResult = await fetchRosterOverlapDoctors({
+    comparison: true,
     startDate: fromDate,
     endDate: toDate,
     sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
@@ -5374,6 +5427,7 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
   if (!doctorResult.ok) {
     insightsModalTitle.textContent = "When am I working with…?";
     insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
+    insightsState.lastComparisonRenderKey = '';
     insightsModalBody.innerHTML = renderRosterInsightUnavailable();
     return;
   }
@@ -5401,28 +5455,39 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
     });
     return;
   }
+  const displayComparisonRows = (rows, revision, status = {}) => {
+    if (!isCurrentInsightRender(renderRunId, 'when')) return;
+    const renderKey = JSON.stringify([fromDate, toDate, hospitalFilters, includeCs, selectedKey, revision, currentCalendarRevision, options, doctorResult.missing, status.missing, status.refreshError]);
+    if (insightsState.lastComparisonRenderKey === renderKey) return;
+    const serverRows = rows.filter(row => comparisonWorkingEvent(row.event, { facilityKey: row.sourceType }));
+    const selectedComparison = options.find(doctor => doctor.key === selectedKey) || null;
+    const serverEvents = insightRowsToEventsByDoctor(serverRows);
+    const mine = filterWhenInsightEvents(selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters), includeCs);
+    const theirs = selectedComparison ? filterWhenInsightEvents(serverEvents.get(selectedComparison.key) || [], includeCs) : [];
+    renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, includeCs,
+      hospitalOptions: availableHospitalsFromInsightEvents([...mine, ...[...serverEvents.values()].flat()]) });
+    if (doctorResult.missing?.length || status.missing?.length) insightsModalBody.insertAdjacentHTML('beforeend', renderFacilityOverviewCoverageNotice({ missing: [...(doctorResult.missing || []), ...(status.missing || [])] }));
+    if (status.refreshError) insightsModalBody.insertAdjacentHTML('beforeend', '<p class="muted">Showing the saved comparison; the latest refresh could not complete.</p>');
+    insightsState.lastComparisonRenderKey = renderKey;
+  };
   const serverResult = await fetchRosterInsightRows({
     startDate: fromDate,
     endDate: toDate,
     sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
-    doctorKeys: [selectedKey],
+    doctorKeys: [...new Set([...selectedInsightDoctorKeys(), selectedKey])],
+    comparison: true,
+    doctorIdentities: [...comparisonDoctorIdentities(selectedDoctor()), ...comparisonDoctorIdentities(options.find(doctor => doctor.key === selectedKey))],
+    onComparisonCached: data => displayComparisonRows(data.events || [], data.revision, data),
     overlapDoctorKeys: [],
   });
   if (!isCurrentInsightRender(renderRunId, "when")) return;
   if (serverResult.ok) {
-    const serverRows = serverResult.rows;
-    const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
-    const serverEvents = insightRowsToEventsByDoctor(serverRows);
-    const mine = filterWhenInsightEvents(selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters), includeCs);
-    const theirs = selectedComparison
-      ? filterWhenInsightEvents(serverEvents.get(selectedComparison.key) || [], includeCs)
-      : [];
-    const hospitalOptions = availableHospitalsFromInsightEvents([...mine, ...[...serverEvents.values()].flat()]);
-    renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, includeCs, hospitalOptions });
+    displayComparisonRows(serverResult.rows, serverResult.revision, serverResult);
     return;
   }
   insightsModalTitle.textContent = "When am I working with…?";
   insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
+  insightsState.lastComparisonRenderKey = '';
   insightsModalBody.innerHTML = renderRosterInsightUnavailable();
 }
 
@@ -9902,6 +9967,9 @@ function applyFacilityOverviewSiteScope() {
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  rosterComparisonCache.clear();
+  facilityOverviewState.togetherResultKey = "";
+  facilityOverviewState.togetherContent = "";
   clearOnShiftAccess();
   currentOnShiftForAllEnabled = false;
   cancelFacilityOverviewAccessWait();
@@ -10698,69 +10766,58 @@ function facilityOverviewTogetherDoctorKeys(doctor) {
 }
 
 async function loadFacilityOverviewTogether() {
-  if (!canUseFullFacilityOverview()) return;
-  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "together") return;
+  if (!canUseFullFacilityOverview() || !canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== 'together') return;
   const { startDate, endDate } = facilityOverviewTogetherDateRange();
   const requestId = ++facilityOverviewState.requestId;
-  let refreshed = false;
-  const controller = beginFacilityOverviewDataRequest();
   const contextKey = facilityOverviewTogetherContextKey();
   facilityOverviewState.togetherHasSearched = true;
-  facilityOverviewState.togetherContent = `<article class="issue-card"><p>Loading authorised roster history…</p></article>`;
-  renderFacilityOverview();
-  const stillCurrent = () => facilityOverviewState.requestId === requestId && facilityOverviewState.tab === "together" && contextKey === facilityOverviewTogetherContextKey();
-  const query = async payload => {
-    const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
-      body: JSON.stringify({ email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
-        targetEmail: facilityOverviewTargetEmail(), startDate, endDate, ...payload }) });
-    return readJsonResponse(response, payload.action === "queryFacilityOverviewTogetherContext"
-      ? "Could not load authorised staff for this period." : "Could not load roster history for this period.");
-  };
+  if (!facilityOverviewState.togetherContent) {
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Loading working together…</p></article>`;
+    renderFacilityOverview();
+  }
+  const stillCurrent = () => facilityOverviewState.requestId === requestId && facilityOverviewState.tab === 'together' && contextKey === facilityOverviewTogetherContextKey();
+  const contextQuery = { startDate, endDate, sourceTypes: [] };
   try {
-    if (!validFacilityDateRange(startDate, endDate)) throw new Error("Choose a valid date range of up to one year.");
-    const context = await query({ action: "queryFacilityOverviewTogetherContext" });
+    if (!validFacilityDateRange(startDate, endDate)) throw new Error('Choose a valid date range of up to one year.');
+    const context = await requestRosterComparison({ kind: 'context', feature: 'together', action: 'queryFacilityOverviewTogetherContext', query: contextQuery });
     if (!stillCurrent()) return;
     facilityOverviewState.togetherContext = { ...context, key: contextKey };
+    refreshFacilityOverviewSnapshotAccess(context);
     const facilities = (context.sourceTypes || []).map(source => source.toUpperCase());
-    if (facilityOverviewState.togetherFacilityKey !== "ALL" && !facilities.includes(facilityOverviewState.togetherFacilityKey)) facilityOverviewState.togetherFacilityKey = "ALL";
+    if (facilityOverviewState.togetherFacilityKey !== 'ALL' && !facilities.includes(facilityOverviewState.togetherFacilityKey)) facilityOverviewState.togetherFacilityKey = 'ALL';
     initializeFacilityOverviewTogetherState();
-    renderFacilityOverview();
     const options = facilityOverviewTogetherStaffOptions();
     const selectedDoctors = facilityOverviewState.togetherStaffKeys.map(identity => options.find(doctor => doctor.identity === identity)).filter(Boolean);
     if (!selectedDoctors.length) {
       facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice(context) + renderFacilityOverviewTogetherEmptyState();
-      return;
-    }
-    const cacheQuery = { startDate, endDate, scopeRevision: context.scopeRevision,
-      doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(),
-      sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey] };
-    // Historical cached results require freshly verified period entitlements.
-    refreshFacilityOverviewSnapshotAccess(context);
-    const cached = await loadFacilityOverviewSnapshot("working-together", cacheQuery);
-    if (!stillCurrent()) return;
-    if (cached) {
-      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing: [...(context.missing || []), ...(cached.missing || [])] })
-        + renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate });
       renderFacilityOverview();
+      return true;
     }
-    const data = await query({ action: "queryFacilityOverviewWorkingTogether", ...cacheQuery, cachedRevision: cached?.revision || "" });
+    const query = { startDate, endDate, doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(), doctorIdentities: selectedDoctors.flatMap(comparisonDoctorIdentities),
+      sourceTypes: facilityOverviewState.togetherFacilityKey === 'ALL' ? [] : [facilityOverviewState.togetherFacilityKey.toLowerCase()] };
+    const display = data => {
+      if (!stillCurrent()) return;
+      const key = JSON.stringify([contextKey, query, selectedDoctors.map(doctor => doctor.identity), data.revision, context.missing, data.missing, data.refreshError]);
+      if (facilityOverviewState.togetherResultKey === key && facilityOverviewState.togetherContent === facilityOverviewState.togetherRenderedContent) return;
+      facilityOverviewState.togetherResultKey = key;
+      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing: [...(context.missing || []), ...(data.missing || [])] })
+        + (data.refreshError ? '<p class="muted">Showing the saved comparison; the latest refresh could not complete.</p>' : '')
+        + renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
+      facilityOverviewState.togetherRenderedContent = facilityOverviewState.togetherContent;
+      renderFacilityOverview();
+    };
+    const data = await requestRosterComparison({ kind: 'selected', feature: 'together', action: 'queryFacilityOverviewWorkingTogether', query, leaseQuery: contextQuery, onCached: display });
     if (!stillCurrent()) return;
     refreshFacilityOverviewSnapshotAccess(data);
-    const payload = data.unchanged && cached ? cached : data;
-    const missing = [...(context.missing || []), ...(payload.missing || [])];
-    facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing })
-      + (missing.length && !payload.events?.length ? "" : renderFacilityOverviewTogetherResults(payload.events || [], selectedDoctors, { startDate, endDate }));
-    refreshed = true;
-    if (!data.unchanged) void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
+    display(data);
+    return true;
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error) || !stillCurrent()) return;
-    facilityOverviewState.togetherContext = null;
-    facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Roster history is unavailable for this period.")}</p></article>`;
-  } finally {
-    finishFacilityOverviewDataRequest(controller);
-    if (stillCurrent()) renderFacilityOverview();
+    facilityOverviewState.togetherResultKey = '';
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || 'This roster comparison is unavailable.')}</p></article>`;
+    renderFacilityOverview();
+    return false;
   }
-  return refreshed;
 }
 
 function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
@@ -10830,26 +10887,7 @@ function facilityOverviewTogetherPairs(indexed) {
 }
 
 function facilityOverviewIntervalMatches(indexed, range) {
-  if (!indexed.length || indexed.some((entry) => !entry.intervals.length)) return [];
-  const rangeStart = new Date(`${range.startDate}T00:00:00`);
-  const rangeEnd = new Date(`${range.endDate}T00:00:00`);
-  rangeEnd.setDate(rangeEnd.getDate() + 1);
-  const matches = [];
-  const visit = (index, facility, start, end, people) => {
-    if (index === indexed.length) {
-      if (start < end) matches.push({ facility, start, end, people });
-      return;
-    }
-    for (const interval of indexed[index].intervals) {
-      if (facility && interval.facility !== facility) continue;
-      const nextStart = start && start > interval.start ? start : interval.start;
-      const nextEnd = end && end < interval.end ? end : interval.end;
-      if (nextStart >= nextEnd || nextEnd <= rangeStart || nextStart >= rangeEnd) continue;
-      visit(index + 1, facility || interval.facility, nextStart, nextEnd, [...people, { doctor: indexed[index].doctor, event: interval.event }]);
-    }
-  };
-  visit(0, "", null, null, []);
-  return matches.sort(facilityOverviewCompareMatches);
+  return comparisonIntervalMatches(indexed, range, facilityOverviewCompareMatches);
 }
 
 function facilityOverviewUnionIntervalsByFacility(matches) {
@@ -16979,6 +17017,7 @@ function closeLoginModal() {
 }
 
 async function logoutCurrentUser() {
+  rosterComparisonCache.clear();
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewAutomaticLaunchEnabled = false;
@@ -17999,10 +18038,11 @@ async function applyCloudStateData(data, options = {}) {
 function calendarRevisionView() {
   if (document.hidden || !currentUserEmail || !currentUserPassword || !cloudAvailable) return null;
   const overview = isFacilityOverviewOpen();
-  const available = overview ? facilityOverviewFacilityOptions() : normalizedDoctorSourceTypes(selectedDoctor());
+  const when = insightsState?.mode === 'when' && !insightsModal.classList.contains('hidden');
+  const available = when ? (insightsState.hospitalFilters?.length ? insightsState.hospitalFilters : ['mmc', 'mch', 'ddh', 'vhh']) : overview ? facilityOverviewFacilityOptions() : normalizedDoctorSourceTypes(selectedDoctor());
   const sources = [...new Set(available.map(source => String(source).toLowerCase()))].filter(source => ['mmc', 'mch', 'ddh', 'vhh'].includes(source)).sort();
   if (!sources.length) return null;
-  return { key: `${activeCalendarTransitionKey()}:${overview ? JSON.stringify([facilityOverviewState.tab, facilityOverviewState.facilityKey, facilityOverviewState.staffTermStart, facilityOverviewState.date, facilityOverviewState.byStreamFrom, facilityOverviewState.byStreamTo, facilityOverviewState.byStreamRows, facilityOverviewState.togetherFrom, facilityOverviewState.togetherTo, facilityOverviewState.togetherTermStart, facilityOverviewState.togetherStaffKeys, facilityOverviewState.togetherFacilityKey]) : 'calendar'}:${sources.join(',')}`, sources, overview };
+  return { key: `${activeCalendarTransitionKey()}:${overview ? JSON.stringify([facilityOverviewState.tab, facilityOverviewState.facilityKey, facilityOverviewState.staffTermStart, facilityOverviewState.date, facilityOverviewState.byStreamFrom, facilityOverviewState.byStreamTo, facilityOverviewState.byStreamRows, facilityOverviewState.togetherFrom, facilityOverviewState.togetherTo, facilityOverviewState.togetherTermStart, facilityOverviewState.togetherStaffKeys, facilityOverviewState.togetherFacilityKey]) : when ? JSON.stringify(['when', insightsState.fromDate, insightsState.termEnd, insightsState.comparisonDoctorKey, insightsState.hospitalFilters]) : 'calendar'}:${sources.join(',')}`, sources, overview, when };
 }
 
 function calendarRevisionRefreshAllowed() {
@@ -18038,6 +18078,19 @@ async function readSharedRosterRevision(sources) {
 
 async function refreshVisibleRosterView(view) {
   if (!calendarRevisionRefreshAllowed() || calendarRevisionView()?.key !== view.key) return false;
+  if (view.when) {
+    // Keep the calendar's saved overrides/custom events, while refreshing the
+    // owner's roster too. A colleague-only publication is a cheap no-op here.
+    if (!await refreshVisibleRosterView({ ...view, when: false, overview: false })) return false;
+    if (calendarRevisionView()?.key !== view.key) return false;
+    rosterComparisonCache.invalidate();
+    await renderInsightsModal();
+    return calendarRevisionView()?.key === view.key;
+  }
+  if (view.overview && facilityOverviewState.tab === 'together') {
+    rosterComparisonCache.invalidate();
+    return await loadFacilityOverviewTogether();
+  }
   if (view.overview) {
     facilityOverviewState.byStreamMetadataKey = "";
     if (!await loadFacilityOverviewMetadata({ requireFresh: true })) return false;

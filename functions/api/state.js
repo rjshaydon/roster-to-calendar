@@ -1,3 +1,5 @@
+import { loadRosterComparison, loadRosterComparisonDoctors } from '../_lib/roster-comparison.js';
+import { comparisonWorkingEvent } from '../../public/static/comparison-policy.js';
 import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
 import {legacyCoverageKey,legacyHistoryIsCovered} from '../_lib/legacy-calendar-coverage.js';
 import {normalizeEmail} from "../_lib/email.js";
@@ -13,7 +15,7 @@ import { refreshAccountMaintenanceBudget } from "./automation/account-budget.js"
 import { onRequestPost as processFacilityRefresh } from "./automation/facility-refresh.js";
 import { saveSessionSettings } from "../_lib/session-settings.js";
 import { loadPublishedDoctorCalendar, filterSnapshotByIdentityAliases } from "../_lib/published-doctor-calendar.js";
-import { loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
+import { validateCachedInsightOptions, loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../_lib/roster-maintenance-budget.js";
@@ -2512,14 +2514,14 @@ async function handleAccountStateRequest(context) {
       if (!validFacilityDateRange(startDate, endDate)) return Response.json({ error: "Choose a valid date range of up to one year." }, { status: 400 });
       const access = await facilityOverviewAccess();
       const rangeAccess = await resolveFacilityOverviewRangeAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }, access, {
-        startDate, endDate, sourceTypes: body?.sourceTypes || [],
+        startDate, endDate, sourceTypes: body?.sourceTypes || [], ...(body?.comparison === true ? { availableSources: facilityReaderSources(context.env) } : {}),
       });
       if (rangeAccess.invalid) return Response.json({ error: "Choose valid hospitals and dates." }, { status: 400 });
       if (rangeAccess.mode === "denied") return facilityOverviewAccessDeniedResponse(rangeAccess);
       const selection = readerSelectionFor(rangeAccess.sourceTypes, !(body?.sourceTypes || []).length);
       const sourceTypes = selection.sources;
       const segments = rangeAccess.segments.filter(segment => sourceTypes.includes(segment.sourceType));
-      const scopeRevision = await sha256(JSON.stringify([rangeAccess.revision, sourceTypes, selection.missing, access.readerRevision]));
+      const scopeRevision = await sha256(JSON.stringify([rangeAccess.revision, sourceTypes, selection.missing]));
       const readRoute = selection.route;
       if (readRoute === "blocked") return sharedRouteUnavailable();
       const contextOnly = action === "queryFacilityOverviewTogetherContext";
@@ -2543,6 +2545,12 @@ async function handleAccountStateRequest(context) {
             scopeRevision, facilityOverviewAccess: access, accessExpiresAt: rangeAccess.expiresAt });
         }
         if (readRoute === "shared" && !sharedFacilityDaysEnabled) return sharedRouteUnavailable();
+        if (body?.comparison === true && context.env.ROSTER_COMPARISON_ENABLED === 'true' && readRoute === 'shared' && doctorKeys.length) {
+          const result = await loadRosterComparison(context.env.ROSTER_FILES, { startDate, endDate, sourceTypes, authorisedSegments: segments,
+            doctorKeys, doctorIdentities: body.doctorIdentities, scopeRevision, cachedRevision: body.cachedRevision, cachedPersonRevisions: body.cachedPersonRevisions }, australianDateKey(), event => isFacilityOverviewWorkingEvent(event, { includeClinicalSupport: true }));
+          return Response.json({ ...result, startDate, endDate, sourceTypes, segments, missing: [...selection.missing, ...(result.missing || [])],
+            facilityOverviewAccess: access, accessExpiresAt: rangeAccess.expiresAt }, { status: result.invalid ? 400 : result.ok ? 200 : 503 });
+        }
         const rows = [];
         const revisions = [];
         const missing = [...selection.missing];
@@ -2590,7 +2598,7 @@ async function handleAccountStateRequest(context) {
       const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
       const insightRecord = { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role, facilityOverviewEnabled: true };
       const insightAccess = await resolveFacilityOverviewAccess(context.env.ROSTER_DB, insightRecord, { materializedOnly: materializedAccessFor(account.record, insightRecord) });
-      const rangeAccess = await resolveFacilityOverviewRangeAccess(context.env.ROSTER_DB, insightRecord, insightAccess, { startDate, endDate, sourceTypes });
+      const rangeAccess = await resolveFacilityOverviewRangeAccess(context.env.ROSTER_DB, insightRecord, insightAccess, { startDate, endDate, sourceTypes, ...(body?.comparison === true ? { availableSources: facilityReaderSources(context.env) } : {}) });
       if (rangeAccess.invalid) return Response.json({ error: "Choose valid hospitals and dates." }, { status: 400 });
       if (rangeAccess.mode === "denied") return facilityOverviewAccessDeniedResponse(rangeAccess);
       const selection = readerSelectionFor(rangeAccess.sourceTypes, !sourceTypes.length);
@@ -2598,12 +2606,25 @@ async function handleAccountStateRequest(context) {
       for (const field of ["doctorKeys", "excludeDoctorKeys", "overlapDoctorKeys"]) queryOptions[field] = (Array.isArray(body?.[field]) ? body[field] : []).map(normalizeRosterName).filter(Boolean);
       if (selection.route !== "shared") return Response.json({ ok: false, unavailable: true, ...empty }, { status: 503 });
       if (doctorsOnly && !queryOptions.overlapDoctorKeys.length) return Response.json({ ok: true, doctors: [], source: "published-roster" });
+      const invalid = validateCachedInsightOptions(queryOptions);
+      if (invalid) return Response.json({ ok: false, invalid: true, error: invalid, ...empty }, { status: 400 });
       const startedAt = Date.now();
       try {
+        const scopeRevision = await sha256(JSON.stringify([rangeAccess.revision, selection.sources, selection.missing]));
+        const comparisonStatus = { scopeRevision, accessExpiresAt: rangeAccess.expiresAt, sourceTypes: selection.sources };
+        if (body?.comparison === true && context.env.ROSTER_COMPARISON_ENABLED === 'true' && (doctorsOnly || queryOptions.doctorKeys.length)) {
+          const options = { ...queryOptions, doctorIdentities: body.doctorIdentities, scopeRevision, cachedRevision: body.cachedRevision, cachedPersonRevisions: body.cachedPersonRevisions };
+          const result = doctorsOnly
+            ? await loadRosterComparisonDoctors(context.env.ROSTER_FILES, options, australianDateKey())
+            : await loadRosterComparison(context.env.ROSTER_FILES, options, australianDateKey(), event => isFacilityOverviewWorkingEvent(event, { includeClinicalSupport: true }));
+          const { events, ...status } = result;
+          return Response.json({ ...status, ...comparisonStatus, ...(events ? { coworkers: events } : {}), missing: [...selection.missing, ...(status.missing || [])], queryMs: Date.now()-startedAt },
+            { status: result.invalid ? 400 : result.ok ? 200 : 503 });
+        }
         const result = await loadCachedRosterInsights(context.env.ROSTER_FILES, queryOptions, australianDateKey(),
           (event, sourceType) => isFacilityOverviewWorkingEvent(event, { facilityKey: sourceType, includeClinicalSupport: true }));
         const { coworkers, doctors, ...status } = result;
-        return Response.json({ ...status, missing: [...selection.missing, ...(status.missing || [])], ...(doctorsOnly ? { doctors } : { coworkers }), queryMs: Date.now()-startedAt },
+        return Response.json({ ...status, ...comparisonStatus, missing: [...selection.missing, ...(status.missing || [])], ...(doctorsOnly ? { doctors } : { coworkers }), queryMs: Date.now()-startedAt },
           { status: result.invalid ? 400 : result.ok ? 200 : 503 });
       } catch (error) {
         console.error("Cached roster insight unavailable", { action, error: error.message });
@@ -3836,13 +3857,8 @@ function directorViewEnabledForRecord(record) {
 }
 
 function isFacilityOverviewWorkingEvent(event, options = {}) {
-  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
-  if (String(event?.status || "").toLowerCase() === "unknown" || String(event?.kind || "").toLowerCase() === "unknown") return false;
-  if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
-  if (text.includes("phnw") || text.includes("public holiday")) return false;
-  if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
   if (options.includeClinicalSupport !== true && isClinicalSupportRosterEvent(event)) return false;
-  return true;
+  return comparisonWorkingEvent(event, { ...options, includeClinicalSupport: true });
 }
 
 function facilityOverviewEventPeriod(event) {

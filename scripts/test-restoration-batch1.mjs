@@ -107,6 +107,7 @@ const start = app.indexOf('async function refreshVisibleRosterView(');
 const code = app.slice(start,app.indexOf('async function loadCloudCalendarEvents(',start));
 let responseResolver, rendered = 0, session = { settings: { dateFrom:'2026-05-01',dateTo:'2026-12-01',hospitalFilter:'MMC' },customEvents:[] };
 const globals = {
+ currentSnapshot:null,currentSnapshotStale:false,currentCalendarRevision:'',
  calendarRevisionRefreshAllowed:()=>true,calendarRevisionView:()=>({key:globals.key}),key:'profile-A',
  activeDoctorProfile:{id:'A',doctorKey:'EXAMPLE',sourceTypes:['mmc']},
  currentUserEmail:'fixture',currentUserPassword:'fixture',authUserEmail:'fixture',authUserPassword:'fixture',

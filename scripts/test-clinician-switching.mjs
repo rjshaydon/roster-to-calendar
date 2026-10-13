@@ -29,6 +29,7 @@ assert.deepEqual(startupChecks.map(check=>check.enabled),[false,true,true,true],
 let eligibilityReply, authReply, eligibilityCount=0, opened=0, transition=1;
 const noop=()=>{};
 const cachedEntry={
+ rosterComparisonCache:{clear:()=>{}},
  currentSnapshot:{preview:{events:[]},cacheKey:'tony',calendarRevision:'current'},currentSnapshotStale:false,
  visibleSnapshotIsCurrent:()=>true,calendarSnapshotMatchesActiveContext:()=>true,normalizeEmail:v=>v,OWNER_EMAIL:'creator@example.com',
  calendarTransitionStillCurrent:t=>t===transition,activeCalendarTransitionKey:()=>`account:${transition}`,calendarTransitionRunId:1,

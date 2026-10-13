@@ -49,6 +49,7 @@
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
     "test:source-isolation": "node scripts/test-roster-source-isolation.mjs",
     "test:roster-idempotency": "node --no-warnings scripts/test-roster-ingress-idempotency.mjs",
+    "test:roster-comparison": "node --no-warnings scripts/test-roster-comparison.mjs",
     "test:cached-roster-insights": "node --no-warnings scripts/test-cached-roster-insights.mjs",
     "test:roster-delivery-reliability": "node --no-warnings scripts/test-roster-delivery-reliability.mjs",
     "test:account-maintenance-summaries": "node --no-warnings scripts/test-account-maintenance-summaries.mjs",

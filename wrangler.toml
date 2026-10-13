@@ -10,6 +10,7 @@ binding = "REQUEST_ANALYTICS"
 dataset = "roster_api_invocations"
 
 [vars]
+ROSTER_COMPARISON_ENABLED = "false"
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"
 FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "true"
 ON_SHIFT_FOR_ALL_ENABLED = "true"
@@ -84,6 +85,7 @@ bucket_name = "roster-converter-cache"
 preview_bucket_name = "roster-converter-cache-preview"
 
 [env.preview.vars]
+ROSTER_COMPARISON_ENABLED = "false"
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
 FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "false"
 ON_SHIFT_FOR_ALL_ENABLED = "false"

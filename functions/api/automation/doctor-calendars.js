@@ -1,3 +1,4 @@
+import {COMPARISON_INDEX_VERSION} from '../../_lib/roster-comparison.js';
 import {guardedFetch} from '../../_lib/outbound-network.js';
 import {legacyCoverageKey,validLegacySnapshotKey,LEGACY_COVERAGE_VERSION} from '../../_lib/legacy-calendar-coverage.js';
 import {DOCTOR_SOURCE_VERSION,DOCTOR_SOURCE_LAYOUT,doctorSourceKey,doctorSourceCurrentKey} from '../../_lib/doctor-source-artifacts.js';
@@ -13,7 +14,7 @@ export async function onRequestPost({request,env}){
  const r2=env.ROSTER_FILES;if(!r2)return Response.json({error:'Artifact store unavailable.'},{status:503});
  try{
   if(request.headers.get('content-type')==='application/octet-stream'){
-   const header=request.headers.get('x-doctor-artifact')||'';if(header.length>4096)return bad();
+   const header=request.headers.get('x-doctor-artifact')||'';if(header.length>16384)return bad();
    const m=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(header),c=>c.charCodeAt(0))));
    const sourceKind=['source-person','source-catalogue'].includes(m.kind);
    if((sourceKind?!validManifestKey(m.sourceType,m.manifestKey):!validDoctorMonth(m.sourceType,m.month,m.parentRevision))||!/^[a-f0-9]{64}$/.test(m.digest)||!Number.isSafeInteger(m.bytes)||m.bytes<2||m.bytes>DOCTOR_CALENDAR_MAX_BYTES||Number(request.headers.get('content-length'))!==m.bytes||!request.body||!['index','rows','source-person','source-catalogue'].includes(m.kind))return bad();
@@ -36,6 +37,11 @@ export async function onRequestPost({request,env}){
    if(!validExportKey(input.sourceType,input.key))return bad();
    const object=await r2.get(input.key);return object?new Response(object.body,{headers:{'Content-Type':'application/octet-stream','x-object-etag':object.etag||''}}):Response.json({status:'gone'},{status:409});
   }
+  if(input.mode==='source-reuse'){
+   if(!validManifestKey(input.sourceType,input.manifestKey)||!/^[a-f0-9]{64}$/.test(input.digest)||!/^[a-f0-9]{64}$/.test(input.inputSignature)||typeof input.doctorKey!=='string'||input.doctorKey.length>512||!await r2.head(input.manifestKey))return bad();
+   const key=doctorSourceKey(input.sourceType,'people',input.digest);if(!await r2.head(key))return Response.json({status:'gone'},{status:409});
+   await sourceReceipt(r2,input,key);return Response.json({status:'unchanged'});
+  }
   if(input.mode==='source-receipt'){
    if(!/^[a-f0-9]{64}$/.test(input.inputSignature))return bad();
    return Response.json({receipt:await loadCachedSnapshot(r2,doctorSourceKey(input.sourceType,'prepared-people',input.inputSignature))});
@@ -52,6 +58,15 @@ export async function onRequestPost({request,env}){
     const ready=await Promise.all(Array.from({length:16},async(_,i)=>{
      const pointer=input.shards[i.toString(16)];return pointer&&pointer.key===doctorSourceKey(input.sourceType,'catalogues',pointer.digest)&&Boolean(await r2.head(pointer.key));
     }));if(!ready.every(Boolean))return bad();
+    if(input.comparisonIndexes!==undefined){
+     if(!input.comparisonIndexes||Object.keys(input.comparisonIndexes).length>120||input.metadata.months.some(month=>!input.comparisonIndexes[month]))return bad();
+     const certificate=input.comparisonCertificate;
+     if(!certificate||certificate.key!==doctorSourceKey(input.sourceType,'catalogues',certificate.digest))return bad();
+     const completed=await loadCachedSnapshot(r2,certificate.key);
+     if(completed?.version!==COMPARISON_INDEX_VERSION||completed.sourceType!==input.sourceType||!completed.indexes||Object.keys(completed.indexes).length!==Object.keys(input.comparisonIndexes).length)return bad();
+     for(const [month,pointer] of Object.entries(input.comparisonIndexes))if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)||!pointer||pointer.key!==doctorSourceKey(input.sourceType,'catalogues',pointer.digest)||completed.indexes[month]?.digest!==pointer.digest||completed.indexes[month]?.key!==pointer.key)return bad();
+     value.comparisonIndexes=input.comparisonIndexes;value.comparisonCertificate=certificate;value.comparisonVersion=COMPARISON_INDEX_VERSION;
+    }
     Object.assign(value,{layout:input.layout,metadata:input.metadata,shards:input.shards});
    }
    if(input.mode==='prepare-source'){
@@ -93,14 +108,14 @@ function validExportKey(source,key){return validManifestKey(source,key)||new Reg
 
 async function sourceReceipt(r2,m,key){
  if(!/^[a-f0-9]{64}$/.test(m.inputSignature||'')||typeof m.doctorKey!=='string'||m.doctorKey.length>512)return;
- await r2.put(doctorSourceKey(m.sourceType,'prepared-people',m.inputSignature),JSON.stringify({doctorKey:m.doctorKey,pointer:{key,digest:m.digest,inputSignature:m.inputSignature}}),{onlyIf:{etagDoesNotMatch:'*'}});
+ await r2.put(doctorSourceKey(m.sourceType,'prepared-people',m.inputSignature),JSON.stringify({doctorKey:m.doctorKey,pointer:{key,digest:m.digest,inputSignature:m.inputSignature,...(m.presence?{presence:m.presence}:{})}}),{onlyIf:{etagDoesNotMatch:'*'}});
 }
 
 async function checkDoctorSourceBuild(env){
  if(!automatedRosterWritesEnabled(env)||!['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE))return Response.json({status:'disabled'});
  const r2=env.ROSTER_FILES,key='doctor-calendars/v2/build-lease.json',object=await r2.get(key),lease=object?await new Response(object.body).json():{};
  if(lease.until>Date.now())return Response.json({status:'busy'});
- const states=await Promise.all(['mmc','mch','ddh','vhh','casey'].map(async source=>{const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(source)),loadCachedSnapshot(r2,doctorSourceCurrentKey(source))]);return Boolean(head)&&(!current||current.version!==DOCTOR_SOURCE_VERSION||current.layout!==DOCTOR_SOURCE_LAYOUT||current.parentEtag!==head.etag);}));
+ const states=await Promise.all(['mmc','mch','ddh','vhh','casey'].map(async source=>{const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(source)),loadCachedSnapshot(r2,doctorSourceCurrentKey(source))]);return Boolean(head)&&(!current||current.version!==DOCTOR_SOURCE_VERSION||current.layout!==DOCTOR_SOURCE_LAYOUT||current.parentEtag!==head.etag||!current.comparisonIndexes||!current.comparisonCertificate||current.comparisonVersion!==COMPARISON_INDEX_VERSION);}));
  const coverage=env.ROSTER_CACHE?await loadCachedSnapshot(env.ROSTER_CACHE,'legacy-calendar/v1/progress.json'):null;
  if(!states.some(Boolean)&&(!env.ROSTER_CACHE||coverage?.version===LEGACY_COVERAGE_VERSION&&coverage.complete))return Response.json({status:'unchanged'});
  if(!env.GITHUB_ACTIONS_TOKEN)return Response.json({status:'dispatch-unconfigured'});

@@ -1,3 +1,4 @@
+import {normalizeComparisonEvent} from '../../public/static/comparison-policy.js';
 import {loadCachedSnapshot} from './d1-calendar.js';
 import {rosterTermVisible} from '../../public/static/roster-term-policy.js';
 export const DOCTOR_SOURCE_VERSION='doctor-source-v2';
@@ -6,7 +7,7 @@ export async function doctorCatalogueShard(doctorKey){const digest=new Uint8Arra
 const validSource=s=>['mmc','mch','ddh','vhh','casey'].includes(s);
 export function doctorSourceKey(source,kind,digest){if(!validSource(source)||!['people','catalogues','generations','prepared-people'].includes(kind)||!/^[a-f0-9]{64}$/.test(digest))throw Error('Invalid doctor source artifact.');return `doctor-calendars/v2/${source}/${kind}/${digest}.json`;}
 export function doctorSourceCurrentKey(source){if(!validSource(source))throw Error('Invalid doctor source.');return `doctor-calendars/v2/${source}/current.json`;}
-export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,endDate,today,markers){
+export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,endDate,today,markers,options={}){
  const length=(Date.parse(endDate+'T12:00:00Z')-Date.parse(startDate+'T12:00:00Z'))/86400000;
  if(!Number.isFinite(length)||length<0||length>400)return {preparing:true,events:[],missing:[],visibleTerms:[],revision:''};
  const selected=[],missing=[];let pending=false;
@@ -29,7 +30,8 @@ export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,en
    catalogue={version:DOCTOR_SOURCE_VERSION,sourceType,terms:current.metadata.terms,months:current.metadata.months,doctors:Object.assign(Object.create(null),...pieces.map(piece=>piece.doctors))};
   }else catalogue=await loadCachedSnapshot(r2,current.catalogueKey);
   if(!catalogue||catalogue.version!==DOCTOR_SOURCE_VERSION||catalogue.sourceType!==sourceType||!Array.isArray(catalogue.terms)||!Array.isArray(catalogue.months)||!catalogue.doctors||Object.keys(catalogue.doctors).length>4096){pending=true;return;}
-  const terms=catalogue.terms.filter(term=>rosterTermVisible(term,today)&&term.termEnd>=startDate&&term.termStart<=endDate);
+  const carryStart=options.includeCarryIn?new Date(Date.parse(startDate+'T12:00:00Z')-86400000).toISOString().slice(0,10):startDate;
+  const terms=catalogue.terms.filter(term=>rosterTermVisible(term,today)&&term.termEnd>=carryStart&&term.termStart<=endDate);
   if(!terms.length){missing.push({sourceType,startDate,endDate,reason:'history-unavailable'});return;}
   if(!terms.every(t=>t.empty)){
    const first=startDate.slice(0,7),last=endDate.slice(0,7);
@@ -45,19 +47,19 @@ export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,en
    if(pointer&&pointer.key!==doctorSourceKey(sourceType,'people',pointer.digest)){pending=true;return;}
    doctors.push({doctorKey:key,pointer});
   }
-  selected.push({sourceType,terms,doctors});
+  selected.push({sourceType,terms,doctors,comparisonIndexes:current.comparisonIndexes,comparisonMonths:catalogue.months});
  }));
  selected.sort((a,b)=>sourceTypes.indexOf(a.sourceType)-sourceTypes.indexOf(b.sourceType));missing.sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
  const facts=selected.map(s=>[s.sourceType,s.terms,s.doctors.map(d=>[d.doctorKey,d.pointer?.digest||'absent'])]);
  const revision=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([facts,missing]))))].map(v=>v.toString(16).padStart(2,'0')).join('');
- return {preparing:pending||!selected.length,events:[],missing,revision,visibleTerms:selected.flatMap(s=>s.terms.map(t=>({sourceType:s.sourceType,termStart:t.termStart,termEnd:t.termEnd}))),
-  async readEvents(){
+ return {preparing:pending||!selected.length,events:[],missing,revision,personFacts:Object.fromEntries([...new Set(selected.flatMap(s=>s.doctors.map(d=>d.doctorKey)))].map(key=>[key,selected.map(s=>[s.sourceType,s.terms,s.doctors.filter(d=>d.doctorKey===key).map(d=>d.pointer?.digest||'absent')])])),comparisonMonths:Object.fromEntries(selected.map(s=>[s.sourceType,s.comparisonMonths])),comparisonIndexes:Object.fromEntries(selected.map(s=>[s.sourceType,s.comparisonIndexes])),visibleTerms:selected.flatMap(s=>s.terms.map(t=>({sourceType:s.sourceType,termStart:t.termStart,termEnd:t.termEnd}))),
+  async readEvents({doctorKeys=null}={}){
    const groups=await Promise.all(selected.map(async source=>{
-    const docs=await Promise.all(source.doctors.map(async({doctorKey,pointer})=>{
+    const docs=await Promise.all(source.doctors.filter(d=>!doctorKeys||doctorKeys.has(d.doctorKey)).map(async({doctorKey,pointer})=>{
      if(!pointer)return [];
      const data=await loadCachedSnapshot(r2,pointer.key);
      if(!data||data.version!==DOCTOR_SOURCE_VERSION||data.sourceType!==source.sourceType||data.doctorKey!==doctorKey||!Array.isArray(data.events)||data.events.length>50000)throw Error('Complete doctor calendar artifact unavailable.');
-     return data.events.filter(event=>{const date=String(event.start||'').slice(0,10);return date>=startDate&&date<=endDate&&source.terms.some(t=>!t.empty&&t.termStart<=date&&t.termEnd>=date);}).map(event=>({sourceType:source.sourceType,doctorKey,event}));
+     return data.events.map(event=>options.includeCarryIn?normalizeComparisonEvent(event):event).filter(event=>{const date=String(event.start||'').slice(0,10),end=String(event.end||event.start||'').slice(0,10);return (options.includeCarryIn?end>=startDate:date>=startDate)&&date<=endDate&&source.terms.some(t=>!t.empty&&t.termStart<=(options.includeCarryIn?end:date)&&t.termEnd>=date);}).map(event=>({sourceType:source.sourceType,doctorKey,event}));
     }));return docs.flat();
    }));return groups.flat();
   }};
