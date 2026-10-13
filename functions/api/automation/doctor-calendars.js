@@ -130,7 +130,7 @@ async function legacyCoverageOperation(env,input){
   await bucket.put(progressKey,JSON.stringify({version:LEGACY_COVERAGE_VERSION,cursor:input.cursor,complete:input.complete}));
   return Response.json({status:'complete'});
  }
- if(!validLegacySnapshotKey(input.key)||typeof input.revision!=='string'||!input.revision||input.revision.length>512)return bad();
+ if(!validLegacySnapshotKey(input.key)||typeof input.revision!=='string'||!input.revision||input.revision.length>2048)return bad();
  const object=input.mode==='legacy-object'?await bucket.get(input.key):await bucket.head(input.key);
  if(!object||object.etag!==input.etag||object.customMetadata?.revision!==input.revision)return Response.json({status:'stale'},{status:409});
  if(input.mode==='legacy-object')return new Response(object.body,{headers:{'Content-Type':'application/octet-stream'}});

@@ -39,7 +39,7 @@ export function doctorCalendarRequest({base,token,deadlineAt=Infinity}){return a
  const headers={authorization:'Bearer '+token,'Content-Type':'application/json'};let payload=JSON.stringify(input);
  if(body!==undefined){payload=Buffer.from(body);headers['Content-Type']='application/octet-stream';headers['Content-Length']=String(payload.length);headers['x-doctor-artifact']=Buffer.from(JSON.stringify({...input,bytes:payload.length})).toString('base64');}
  const response=await fetch(base+'/api/automation/doctor-calendars',{method:'POST',headers,body:payload,signal:AbortSignal.timeout(120000)});
- if(!response.ok)throw Error('Doctor calendar callback failed: '+response.status);
+ if(!response.ok)throw Error('Doctor calendar callback failed: '+response.status+' mode='+String(input.mode||input.kind||'unknown')+' keyLength='+String(input.key?.length||0)+' revisionLength='+String(input.revision?.length||0));
  if(binary){const bytes=new Uint8Array(await response.arrayBuffer());return metadata?{bytes,etag:response.headers.get('x-object-etag')||'',key:input.key}:bytes;}return response.json();
 };}
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
