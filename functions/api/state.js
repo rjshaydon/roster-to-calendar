@@ -4192,7 +4192,7 @@ function boundedCalendarEventRange(input = {}) {
   let startDate = requestedStart || `${currentYear}-01-01`;
   let endDate = requestedEnd || `${currentYear + 1}-01-31`;
   if (endDate < startDate) endDate = startDate;
-  const maxEndDate = isoDateKey(addUtcDays(startDate, 370));
+  const maxEndDate = isoDateKey(addUtcDays(startDate, 400));
   if (endDate > maxEndDate) endDate = maxEndDate;
   return { startDate, endDate };
 }
@@ -4593,7 +4593,15 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
   const lookupStartedAt = Date.now();
   const registryStartedAt = Date.now();
-  const registry = await loadSnapshotRegistryEntry(db, descriptor, {includeDoctorSelection:params.deferSnapshotRead&&!sanitizeClaims(prepared?.claims||targetRecord?.claims).length}).catch(() => null);
+  // Preserve the former 370-day cache during the annual-window expansion.
+  // Both candidates use the registry primary key; the exact range wins.
+  const formerEnd = isoDateKey(addUtcDays(requestedRange.startDate, 370));
+  const fallbackRangeKey = requestedRange.endDate > formerEnd
+    ? snapshotRegistryRangeKey({startDate:requestedRange.startDate,endDate:formerEnd}) : '';
+  const registry = await loadSnapshotRegistryEntry(db, descriptor, {
+    includeDoctorSelection:params.deferSnapshotRead&&!sanitizeClaims(prepared?.claims||targetRecord?.claims).length,
+    fallbackRangeKey,
+  }).catch(() => null);
   const registryLookupMs = Date.now() - registryStartedAt;
   const registryRevision = String(registry?.builtRevision || "");
   const cachedRevision = String(params.cachedRevision || "");
@@ -4610,7 +4618,7 @@ async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
     descriptor,
   });
 
-  if (readyArtifact && cachedRevision && cachedRevision === registryRevision) {
+  if (readyArtifact && registry.rangeKey === descriptor.rangeKey && cachedRevision && cachedRevision === registryRevision) {
     return {
       ok: true,
       snapshot: null,

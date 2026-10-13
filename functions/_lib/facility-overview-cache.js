@@ -562,7 +562,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
   const start = new Date(`${startDate}T12:00:00Z`);
   const end = new Date(`${endDate}T12:00:00Z`);
   const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
-  if (!Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370) return { preparing: true, events: [], coverage: [], revision: "" };
+  if (!Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 400) return { preparing: true, events: [], coverage: [], revision: "" };
   const months = monthsInRange(startDate, endDate);
   const selected = [];
   const missing = [];

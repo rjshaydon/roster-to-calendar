@@ -8,7 +8,7 @@ export function doctorSourceKey(source,kind,digest){if(!validSource(source)||!['
 export function doctorSourceCurrentKey(source){if(!validSource(source))throw Error('Invalid doctor source.');return `doctor-calendars/v2/${source}/current.json`;}
 export async function loadPublishedDoctorSourceRange(r2,sourceTypes,startDate,endDate,today,markers){
  const length=(Date.parse(endDate+'T12:00:00Z')-Date.parse(startDate+'T12:00:00Z'))/86400000;
- if(!Number.isFinite(length)||length<0||length>370)return {preparing:true,events:[],missing:[],visibleTerms:[],revision:''};
+ if(!Number.isFinite(length)||length<0||length>400)return {preparing:true,events:[],missing:[],visibleTerms:[],revision:''};
  const selected=[],missing=[];let pending=false;
  await Promise.all(sourceTypes.map(async sourceType=>{
   const [head,current]=await Promise.all([r2.head(`facility-overview/v1/${sourceType}/manifest.json`),loadCachedSnapshot(r2,doctorSourceCurrentKey(sourceType))]);

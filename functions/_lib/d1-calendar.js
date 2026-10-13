@@ -6079,13 +6079,15 @@ export async function loadSnapshotRegistryEntry(db, key = {}, options = {}) {
            ${options.includeDoctorSelection ? ', canonical_doctors.aliases_json AS selected_aliases_json, canonical_doctors.display_name AS selected_display_name' : ''}
     FROM snapshot_registry
     ${options.includeDoctorSelection ? 'LEFT JOIN canonical_doctors ON canonical_doctors.canonical_key = ?' : ''}
-    WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?
+    WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key ${options.fallbackRangeKey ? 'IN (?, ?)' : '= ?'}
+    ${options.fallbackRangeKey ? 'ORDER BY CASE WHEN range_key = ? THEN 0 ELSE 1 END LIMIT 1' : ''}
   `).bind(
     ...(options.includeDoctorSelection ? [String(key.doctorKey || key.doctor_key || "")] : []),
     String(key.ownerType || ""),
     normalizeOwnerIdValue(key.ownerId || key.owner_id || ""),
     String(key.doctorKey || key.doctor_key || ""),
     String(key.rangeKey || key.range_key || ""),
+    ...(options.fallbackRangeKey ? [options.fallbackRangeKey, String(key.rangeKey || key.range_key || "")] : []),
   ).first();
   const entry=snapshotRegistryEntryFromRow(row);
   if(entry&&options.includeDoctorSelection){

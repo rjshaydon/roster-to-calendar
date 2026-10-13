@@ -30,7 +30,7 @@ export async function onRequestPost({request,env}){
   const input=await request.json();
   if(input.mode==='check-source')return checkDoctorSourceBuild(env);
   if(input.mode==='finish-source'){const lease=await r2.get('doctor-calendars/v2/build-lease.json'),value=lease?await new Response(lease.body).json():null;if(value?.id===input.dispatchId)await r2.put('doctor-calendars/v2/build-lease.json',JSON.stringify({...value,until:0}),{onlyIf:{etagMatches:lease.etag}});return Response.json({status:'complete'});}
-  if(input.mode?.startsWith('legacy-'))return legacyCoverageOperation(env,input);
+  if(input.mode?.startsWith('legacy-'))return await legacyCoverageOperation(env,input);
   if(!['mmc','mch','ddh','vhh','casey'].includes(input.sourceType))return bad();
   if(input.mode==='object'){
    if(!validExportKey(input.sourceType,input.key))return bad();

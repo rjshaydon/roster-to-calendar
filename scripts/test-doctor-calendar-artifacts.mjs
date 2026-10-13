@@ -3,7 +3,7 @@ import {legacyCoverageKey,summarizeLegacyCoverage,legacyHistoryIsCovered} from '
 import {DatabaseSync} from 'node:sqlite';
 import {readdir,readFile} from 'node:fs/promises';
 import {onRequestPost as statePost} from '../functions/api/state.js';
-import {snapshotRegistryRangeKey,loadCachedSnapshot} from '../functions/_lib/d1-calendar.js';
+import {snapshotRegistryRangeKey,loadSnapshotRegistryEntry,loadCachedSnapshot} from '../functions/_lib/d1-calendar.js';
 import {loadCalendarPresentationInputs} from '../functions/_lib/d1-calendar.js';
 import {doctorRangeGaps,doctorSourceKey,doctorSourceCurrentKey,doctorCatalogueShard} from '../functions/_lib/doctor-source-artifacts.js';
 import {publishDoctorSource} from './process-doctor-source.mjs';
@@ -152,7 +152,7 @@ legacyBucket.metadata.set(legacyKey,{revision:'legacy-v1'});
 assert.equal((await onRequestPost({env:{ROSTER_FILES:r2,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_AUTOMATION_WRITES_ENABLED:'true'},request:new Request('https://fixture',{method:'POST',body:'{}'})})).status,401);
 console.log('Doctor calendars pass external assembly, unchanged zero-download/zero-write, colleague isolation, metadata-only checks, grades, ranges, removals and publication failure.');
 
-const historyKey='snapshots/user-account/fixture@test/DOCTOR/2026.json.gz',historyRevision='history-v1';
+const historyKey='snapshots/user-account/fixture@test/DOCTOR/2026.json.gz',historyRevision='history-v1:'+ 'x'.repeat(5000);
 const historySummary=summarizeLegacyCoverage(historicalSnapshot,historyKey,historyRevision);
 const currentTerms=[{sourceType,termStart:'2026-10-01',termEnd:'2026-10-31'}];
 assert.equal(legacyHistoryIsCovered(historySummary,historyKey,historyRevision,options.range,currentTerms),true,'history outside requested dates requires no decoding');
@@ -181,6 +181,28 @@ accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,r
 const coveredResponse=await statePost({data:{stateAction:'loadCalendarEvents'},env:{ROSTER_DB:accountDb,ROSTER_FILES:r2,ROSTER_CACHE:legacyBucket,IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'ready'},request:new Request('https://fixture/api/state',{method:'POST',body:JSON.stringify({action:'loadCalendarEvents',email,password,doctorKey:doctor,startDate:octoberOnly.startDate,endDate:octoberOnly.endDate,responseMode:'fast',allowInlineBuild:false})})});
 assert.equal((await coveredResponse.json()).snapshot.preview.events[0].id,'new');
 assert.equal(legacyBucket.reads.includes(legacyKey),false,'account route skips compressed historical body only with complete coverage proof');
+
+// The normal annual browser window includes the following January and keeps
+// historical shifts from an existing cache keyed to the former 370-day bound.
+const annualMonths={...JSON.parse(r2.objects.get(facilityMetadataManifestKey(sourceType))).months};
+for(const annualMonth of ['2026-11','2026-12','2027-01']){
+ const annualRows=annualMonth==='2027-01'?[{sourceType,doctorKey:doctor,event:{...rows[0].event,id:'late-january',start:'2027-01-25T08:00:00+11:00',end:'2027-01-25T16:00:00+11:00'}}]:[];
+ const annualRevision=hash(JSON.stringify(annualRows)),key=facilityMonthObjectKey(sourceType,annualMonth,annualRevision);
+ await r2.put(key,JSON.stringify({version:1,sourceType,month:annualMonth,revision:annualRevision,rows:annualRows}));
+ await publishDoctorMonth({sourceType,month:annualMonth,revision:annualRevision,request});annualMonths[annualMonth]={key,revision:annualRevision};
+}
+const annualStaffKey='facility-overview/v1/mmc/staff/2026-11-02/'+hash('annual-staff')+'.json.gz';
+await r2.put(annualStaffKey,JSON.stringify({coverage:[{startDate:'2026-11-02',endDate:'2027-01-31'}],seniorityOverrides:[]}));
+const annualManifest=JSON.parse(r2.objects.get(facilityMetadataManifestKey(sourceType)));
+await r2.put(facilityMetadataManifestKey(sourceType),JSON.stringify({...annualManifest,revision:hash('annual'),months:annualMonths,terms:[...annualManifest.terms,{termStart:'2026-11-02',termEnd:'2027-01-31',staffKey:annualStaffKey}]}));
+await publishDoctorSource({sourceType,request});
+const oldAnnual={startDate:'2026-01-01',endDate:'2027-01-06'},annual={...oldAnnual,endDate:'2027-01-31'};
+accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('creator-account',email,doctor,snapshotRegistryRangeKey(oldAnnual),'legacy-v1','ready',legacyKey);
+const annualPost=()=>statePost({data:{stateAction:'loadCalendarEvents'},env:{ROSTER_DB:accountDb,ROSTER_FILES:r2,ROSTER_CACHE:legacyBucket,IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true',SUBSCRIPTION_ARTIFACT_MODE:'ready'},request:new Request('https://fixture/api/state',{method:'POST',body:JSON.stringify({action:'loadCalendarEvents',email,password,doctorKey:doctor,...annual,responseMode:'fast',allowInlineBuild:false})})});
+assert.deepEqual((await (await annualPost()).json()).snapshot.preview.events.map(e=>e.id).sort(),['history','late-january','new'],'annual window delivers late January without discarding the old historical cache');
+accounts.prepare('INSERT INTO snapshot_registry(owner_type,owner_id,doctor_key,range_key,built_revision,status,artifact_key) VALUES(?,?,?,?,?,?,?)').run('creator-account',email,doctor,snapshotRegistryRangeKey(annual),'legacy-v1','ready',legacyKey);
+const exactEntry=await loadSnapshotRegistryEntry(accountDb,{ownerType:'creator-account',ownerId:email,doctorKey:doctor,rangeKey:snapshotRegistryRangeKey(annual)},{fallbackRangeKey:snapshotRegistryRangeKey(oldAnnual)});
+assert.equal(exactEntry.rangeKey,snapshotRegistryRangeKey(annual),'an exact annual cache takes priority over migration fallback');
 
 for(const compressed of [false,true]){
  const value={events:[{id:'stream-fixture',title:'Résumé'}]},bytes=compressed?gzipSync(JSON.stringify(value)):Buffer.from(JSON.stringify(value));
