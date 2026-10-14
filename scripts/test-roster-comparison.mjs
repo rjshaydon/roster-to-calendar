@@ -200,7 +200,7 @@ await filterCache.request({owner:'filters',feature:'when',kind:'selected',query:
 const narrowed=await filterCache.request({owner:'filters',feature:'when',kind:'selected',query:{...broadSelected,sourceTypes:['ddh']},leaseQuery:{...broad,sourceTypes:['ddh']},send:async()=>{throw Error('Narrowing should use cached facts');}});
 assert.equal(narrowed.events.length,2);assert.deepEqual(narrowed.missing,[]);assert.equal(narrowed.incomplete,false,'unselected hospital gaps do not warn on a complete narrowed result');
 // Exercise the actual UI adapter and loader with the real cache implementation.
-let uiCalls=0,uiRenders=0;
+let uiCalls=0,uiRenders=0,uiContextMissing=[];
 const uiState={requestId:0,tab:'together',togetherContent:'',togetherStaffKeys:['A','B'],togetherFacilityKey:'ALL'};
 const ui={rosterComparisonCache:createRosterComparisonCache({storage:{get:async()=>null,put:async()=>{}}}),
   normalizeEmail:value=>value,currentUserEmail:'creator@test',currentUserPassword:'fixture',authUserEmail:'creator@test',authUserPassword:'fixture',
@@ -210,10 +210,10 @@ const ui={rosterComparisonCache:createRosterComparisonCache({storage:{get:async(
   renderFacilityOverview:()=>uiRenders++,refreshFacilityOverviewSnapshotAccess:()=>{},initializeFacilityOverviewTogetherState:()=>{},
   facilityOverviewTogetherStaffOptions:()=>[{key:'A',identity:'A',displayName:'A',sourceTypes:['mmc']},{key:'B',identity:'B',displayName:'B',sourceTypes:['mmc']}],
   facilityOverviewTogetherDoctorKeys:doctor=>[doctor.key],normalizedDoctorSourceTypes:doctor=>doctor.sourceTypes,normalizeRosterName:value=>value,
-  validFacilityDateRange:()=>true,renderFacilityOverviewCoverageNotice:()=>'',renderFacilityOverviewTogetherResults:rows=>`Matched ${rows.length} shifts`,
+  validFacilityDateRange:()=>true,renderFacilityOverviewCoverageNotice:data=>data.missing?.length?'coverage':'',renderFacilityOverviewTogetherResults:rows=>`Matched ${rows.length} shifts`,
   facilityOverviewRequestWasCancelled:error=>error.name==='AbortError',escapeHtml:value=>value,
   readJsonResponse:response=>response.json(),fetch:async(_,request)=>{uiCalls++;const body=JSON.parse(request.body);assert.equal(body.targetEmail,'viewed@test');assert.equal(body.comparison,true);
-    return Response.json({ok:true,sourceTypes:['mmc'],scopeRevision:'ui',revision:'ui-facts',accessExpiresAt:new Date(Date.now()+600000).toISOString(),...(body.action==='queryFacilityOverviewTogetherContext'?{members:[]}:{events:together.events})});},
+    return Response.json({ok:true,sourceTypes:['mmc'],scopeRevision:'ui',revision:'ui-facts',accessExpiresAt:new Date(Date.now()+600000).toISOString(),...(body.action==='queryFacilityOverviewTogetherContext'?{members:[],missing:uiContextMissing}:{events:together.events})});},
 };
 const adapters=app.slice(app.indexOf('function comparisonDoctorIdentities('),app.indexOf('async function fetchRosterInsightRows('));
 const togetherLoader=app.slice(app.indexOf('async function loadFacilityOverviewTogether()'),app.indexOf('function renderFacilityOverviewTogetherResults('));
@@ -221,6 +221,8 @@ runInNewContext(`${adapters};${togetherLoader};this.load=loadFacilityOverviewTog
 assert.equal(await ui.load(),true);assert.equal(uiCalls,2);assert.equal(uiState.togetherContent,'Matched 2 shifts');
 const firstRenders=uiRenders;assert.equal(await ui.load(),true);assert.equal(uiCalls,2);assert.equal(uiRenders,firstRenders,'fresh reopen performs neither network nor result repaint');
 uiState.togetherContent='';assert.equal(await ui.load(),true);assert.equal(uiState.togetherContent,'Matched 2 shifts','returning to an earlier picker selection cannot strand the loading message');
+ui.rosterComparisonCache.invalidate();uiContextMissing=[{sourceType:'ddh'}];uiState.togetherFacilityKey='MMC';
+assert.equal(await ui.load(),true);assert.equal(uiState.togetherContent,'Matched 2 shifts','broad authorization-context warnings also respect the selected hospital');
 console.log('Shared comparisons pass real publication/API parity, metadata-only checks, peer invalidation, carry-in, access isolation, explicit matching modes and cache lifecycle.');
 
 // Synthetic scale check: selected event reads stay fixed as the department grows.

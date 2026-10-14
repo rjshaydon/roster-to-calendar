@@ -10787,10 +10787,12 @@ async function loadFacilityOverviewTogether() {
     const facilities = (context.sourceTypes || []).map(source => source.toUpperCase());
     if (facilityOverviewState.togetherFacilityKey !== 'ALL' && !facilities.includes(facilityOverviewState.togetherFacilityKey)) facilityOverviewState.togetherFacilityKey = 'ALL';
     initializeFacilityOverviewTogetherState();
+    const contextMissing = (context.missing || []).filter(item => facilityOverviewState.togetherFacilityKey === 'ALL'
+      || String(item.sourceType || '').toUpperCase() === facilityOverviewState.togetherFacilityKey);
     const options = facilityOverviewTogetherStaffOptions();
     const selectedDoctors = facilityOverviewState.togetherStaffKeys.map(identity => options.find(doctor => doctor.identity === identity)).filter(Boolean);
     if (!selectedDoctors.length) {
-      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice(context) + renderFacilityOverviewTogetherEmptyState();
+      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing:contextMissing }) + renderFacilityOverviewTogetherEmptyState();
       renderFacilityOverview();
       return true;
     }
@@ -10798,10 +10800,10 @@ async function loadFacilityOverviewTogether() {
       sourceTypes: facilityOverviewState.togetherFacilityKey === 'ALL' ? [] : [facilityOverviewState.togetherFacilityKey.toLowerCase()] };
     const display = data => {
       if (!stillCurrent()) return;
-      const key = JSON.stringify([contextKey, query, selectedDoctors.map(doctor => doctor.identity), data.revision, context.missing, data.missing, data.refreshError]);
+      const key = JSON.stringify([contextKey, query, selectedDoctors.map(doctor => doctor.identity), data.revision, contextMissing, data.missing, data.refreshError]);
       if (facilityOverviewState.togetherResultKey === key && facilityOverviewState.togetherContent === facilityOverviewState.togetherRenderedContent) return;
       facilityOverviewState.togetherResultKey = key;
-      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing: [...(context.missing || []), ...(data.missing || [])] })
+      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing: [...contextMissing, ...(data.missing || [])] })
         + (data.refreshError ? '<p class="muted">Showing the saved comparison; the latest refresh could not complete.</p>' : '')
         + renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
       facilityOverviewState.togetherRenderedContent = facilityOverviewState.togetherContent;
