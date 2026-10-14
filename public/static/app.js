@@ -1,4 +1,4 @@
-import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final2';
+import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
 import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-policy.js';
 const rosterComparisonCache = createRosterComparisonCache();
 import {contactSyncWarning} from './contact-sync-status.js';

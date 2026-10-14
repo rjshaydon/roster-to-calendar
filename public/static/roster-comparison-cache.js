@@ -3,6 +3,12 @@ const MAX_ENTRIES = 60;
 const MAX_BYTES = 5 * 1024 * 1024;
 const stable = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const canonical = query => ({ ...query, sourceTypes: [...new Set(query.sourceTypes || [])].map(s => s.toLowerCase()).sort(), doctorKeys: [...new Set(query.doctorKeys || [])].sort(), ...(query.doctorIdentities ? { doctorIdentities: [...new Map(query.doctorIdentities.map(identity => [identity.sourceType + '|' + identity.key, identity])).values()].sort((a, b) => (a.sourceType + '|' + a.key).localeCompare(b.sourceType + '|' + b.key)) } : {}) });
+const narrowData = (data, sources) => {
+  if (!sources.length) return data;
+  const includes = row => sources.includes(String(row.sourceType || '').toLowerCase());
+  const missing = data.missing?.filter(includes);
+  return { ...data, ...(data.events ? { events:data.events.filter(includes) } : {}), ...(data.doctors ? { doctors:data.doctors.filter(includes) } : {}), ...(missing ? { missing, incomplete:!!missing.length } : {}) };
+};
 
 // Permission leases are memory-only. A persisted result never authenticates a
 // new session. All network requests still authenticate on the server.
@@ -29,12 +35,13 @@ export function createRosterComparisonCache({ storage = comparisonStorage(), now
       const key = keyFor(owner, kind, { ...normalized, ...(kind === 'selected' ? { scopeRevision: scope || '' } : {}) });
       let record = memory.get(key);
       if (!record && scope) record = await storage.get(key).catch(() => null);
+      if (record) record = { ...record, data:narrowData(record.data, normalized.sourceTypes) };
       if (epoch !== generation) throw Object.assign(Error('Comparison context changed.'), { name: 'AbortError' });
       const authorized = valid(lease) && now() - lease.at < freshness;
       if (!record && kind==='discover' && authorized && normalized.sourceTypes.length) {
         const broader=[...memory.values()].find(value=>value.owner===owner && value.kind===kind && !value.query.sourceTypes.length && valid(value) && value.at>=invalidatedAt && now()-value.at<freshness
           && stable({...value.query,sourceTypes:[]})===stable({...normalized,sourceTypes:[]}));
-        if(broader){record={...broader,query:normalized,data:{...broader.data,doctors:broader.data.doctors.filter(doctor=>normalized.sourceTypes.includes(doctor.sourceType))}};remember(key,record);}
+        if(broader){record={...broader,query:normalized,data:narrowData(broader.data,normalized.sourceTypes)};remember(key,record);}
       }
       const personKey = doctorKey => keyFor(owner, 'person', { ...normalized, doctorKeys: [doctorKey], scopeRevision: scope || '',
         ...(normalized.doctorIdentities ? {doctorIdentities:normalized.doctorIdentities.filter(identity=>identity.key===doctorKey)} : {}) });
@@ -44,7 +51,7 @@ export function createRosterComparisonCache({ storage = comparisonStorage(), now
           if(!value && normalized.sourceTypes.length){
             value=[...people.values()].find(fact=>fact.owner===owner && fact.personKey===doctorKey && fact.scopeRevision===scope && fact.query.startDate===normalized.startDate && fact.query.endDate===normalized.endDate && !fact.query.sourceTypes.length
               && (!normalized.doctorIdentities || normalized.doctorIdentities.filter(identity=>identity.key===doctorKey&&normalized.sourceTypes.includes(identity.sourceType)).every(identity=>fact.query.doctorIdentities?.some(item=>item.key===identity.key&&item.sourceType===identity.sourceType))));
-            if(value)value={...value,data:{...value.data,events:value.data.events.filter(row=>normalized.sourceTypes.includes(row.sourceType))}};
+            if(value){const data=narrowData(value.data,normalized.sourceTypes);value={...value,complete:!data.incomplete,data};}
           }
           return valid(value) && now()-value.at < freshness && value.at >= invalidatedAt ? value : null;
         }));

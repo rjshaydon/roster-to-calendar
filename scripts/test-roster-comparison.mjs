@@ -194,6 +194,11 @@ const discoverySend=async()=>{filteredRequests++;return {ok:true,scopeRevision:'
 await filterCache.request({owner:'filters',feature:'when',kind:'discover',query:{...broad,overlapDoctorKeys:['A']},send:discoverySend});
 const filtered=await filterCache.request({owner:'filters',feature:'when',kind:'discover',query:{...broad,sourceTypes:['mmc'],overlapDoctorKeys:['A']},send:discoverySend});
 assert.deepEqual(filtered.doctors.map(row=>row.doctorKey),['B']);assert.equal(filteredRequests,1,'narrowing a fresh authorized directory is local');
+const missing=[{sourceType:'mmc',startDate,endDate,reason:'history-unavailable'}];
+const broadSelected={...broad,doctorKeys:['A','B']};
+await filterCache.request({owner:'filters',feature:'when',kind:'selected',query:broadSelected,leaseQuery:broad,send:async()=>({ok:true,revision:'broad',scopeRevision:'scope',accessExpiresAt:new Date(time+600000).toISOString(),events:[{doctorKey:'A',sourceType:'ddh'},{doctorKey:'B',sourceType:'ddh'}],missing,incomplete:true})});
+const narrowed=await filterCache.request({owner:'filters',feature:'when',kind:'selected',query:{...broadSelected,sourceTypes:['ddh']},leaseQuery:{...broad,sourceTypes:['ddh']},send:async()=>{throw Error('Narrowing should use cached facts');}});
+assert.equal(narrowed.events.length,2);assert.deepEqual(narrowed.missing,[]);assert.equal(narrowed.incomplete,false,'unselected hospital gaps do not warn on a complete narrowed result');
 // Exercise the actual UI adapter and loader with the real cache implementation.
 let uiCalls=0,uiRenders=0;
 const uiState={requestId:0,tab:'together',togetherContent:'',togetherStaffKeys:['A','B'],togetherFacilityKey:'ALL'};

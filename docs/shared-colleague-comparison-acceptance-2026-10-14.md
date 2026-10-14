@@ -29,9 +29,27 @@ Live publication parity was verified using read-only downloads from the existing
 
 Get counts describe calls to the R2 wrapper, excluding native version-tag heads. Most importantly, full searches use only the selected event bodies; conditional searches decode neither selected event bodies nor full-facility rosters. These limited samples and fixture scale checks do not establish capacity for hundreds of concurrent users.
 
-## Remaining live checks
+## Signed-in production checks
 
-The Mac was locked, preventing signed-in Safari interaction and end-to-end production timings. No claim is made that every authenticated invocation is below the Free plan's 10 ms CPU allowance. Actual native CPU/D1 samples and signed-in Safari cold/warm behavior should be checked once the Mac is unlocked.
+After the Mac was unlocked, Safari reloaded production commit `c871948e` at `rtc.curiousmind.app`. Both interfaces returned four matching roster dates for Richard and Nasreen over 14 October 2026–21 January 2027, with Working together displaying the actual overlapping times. Missing future MMC/MCH coverage remained explicit. An empty Abi comparison also completed normally. No 503 or failed comparison invocation was observed.
+
+Reopening My calendar insights and returning to the Working together tab reused cached results without new comparison requests. Narrowing the latter from all hospitals to DDH also used cached results. That check exposed retained warnings for the excluded hospitals; the cache now filters coverage notices alongside roster facts, including persisted entries, with a regression assertion.
+
+Native Cloudflare tail samples (server durations, not browser stopwatch measurements):
+
+| Request | Duration | CPU | D1 rows read | D1 writes |
+| --- | ---: | ---: | ---: | ---: |
+| My calendar discovery, first open | 1,903 ms | 30 ms | 3 | 0 |
+| My calendar selected Abi | 416 ms | 20 ms | 3 | 0 |
+| My calendar selected Nasreen | 375 ms | 14 ms | 3 | 0 |
+| Working together context, first open | 651 ms | 28 ms | 6 | 0 |
+| Working together selected, first open | 351 ms | 16 ms | 6 | 0 |
+| Working together context, matched extended period | 802 ms | 39 ms | 6 | 0 |
+| Working together selected, matched extended period | 248 ms | 14 ms | 6 | 0 |
+
+The earlier cold samples were 187 ms combined CPU for My calendar and 54 ms for Working together. The new first-open samples used 50 ms and 44 ms respectively, but date windows/cache state differ and this small sample is not a controlled benchmark. D1 counts remain the existing authentication/access reads: six rows per My calendar discovery-plus-selection, twelve per Working together context-plus-selection. Fresh cached reopening used neither CPU nor D1 for comparisons. Publication polling and other app activity remain separate.
+
+All observed comparison calls returned HTTP 200 and an `ok` Worker outcome. Native CPU still exceeds the Free plan's nominal 10 ms allowance on these samples; this change reduces work and repeated requests but does **not** establish strict Free-plan CPU compliance or capacity for hundreds of concurrent users. Broader authorization/context work remains a possible separate optimization.
 
 Automatic approval review rejected an optional expiring, key-protected comparison Worker because it would add an internet-facing path to private roster data without explicit authorization. That Worker and its secret were never created. Verification instead used existing read-only API downloads. Private artifacts remain restricted locally; only aggregate evidence is recorded here.
 
