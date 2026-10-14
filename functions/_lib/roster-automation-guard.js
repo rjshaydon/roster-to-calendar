@@ -67,11 +67,11 @@ export function facilityBootstrapFileAllowed(env = {}, fileId = "") {
   return allowed.has(normalized);
 }
 
-export function rosterWritePausedResponse() {
+export function rosterWritePausedResponse(message = "This roster update is not enabled for this operation or source. Existing calendars remain available.") {
   return Response.json({
     ok: false,
     status: "paused",
-    error: "Roster updates are temporarily paused to protect the D1 free-tier quota. Existing calendars remain available.",
+    error: message,
   }, {
     status: 503,
     headers: { "Retry-After": "3600" },

@@ -17,7 +17,7 @@ const actions = [
   "setFacilityStaffSeniorityOverride",
   "setFacilityStaffSeniorityOverrides",
 ];
-const message = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
+const message = "At a glance is currently unavailable.";
 
 assert.equal(facilityOverviewMaintenanceMode({}), true);
 assert.equal(facilityOverviewMaintenanceMode({ FACILITY_OVERVIEW_MAINTENANCE_MODE: "" }), true);

@@ -153,9 +153,9 @@ const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
   "setFacilityStaffSeniorityOverride",
   "setFacilityStaffSeniorityOverrides",
 ]);
-const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
-const IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE = "Doctor identity linking is temporarily unavailable while we complete a reliability upgrade. Your account and existing roster links have not been removed.";
-const CREATOR_DIRECTORY_MAINTENANCE_MESSAGE = "The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.";
+const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is currently unavailable.";
+const IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE = "Roster name matching is currently unavailable. Existing roster links are unchanged.";
+const CREATOR_DIRECTORY_MAINTENANCE_MESSAGE = "The user list is currently unavailable. Existing accounts are unchanged.";
 
 function identityDiscoveryEnabled(env = {}) {
   return String(env.IDENTITY_DISCOVERY_ENABLED || "").trim().toLowerCase() === "true";
@@ -451,6 +451,7 @@ async function handleAccountStateRequest(context) {
         directorViewEnabled: prepared.directorViewEnabled,
         identityDiscoveryUnavailable: prepared.identityDiscoveryUnavailable ?? !discoveryEnabled,
         identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true',
+        advancedRosterMaintenanceEnabled: advancedRosterMaintenanceEnabled(context.env),
         creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
@@ -1019,6 +1020,7 @@ async function handleAccountStateRequest(context) {
         availableDoctors: prepared.availableDoctors,
         issueConfig: prepared.issueConfig,
         identityDiscoveryUnavailable: prepared.identityDiscoveryUnavailable ?? !discoveryEnabled,
+        advancedRosterMaintenanceEnabled: advancedRosterMaintenanceEnabled(context.env),
         creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
       });
     }
@@ -1151,8 +1153,7 @@ async function handleAccountStateRequest(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
-      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
-      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse("Advanced roster repair is not enabled.");
       try {
         const syncResult = await syncRosterRepositoryToKeepFileIds(
           context,
@@ -1363,8 +1364,7 @@ async function handleAccountStateRequest(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
-      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
-      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse("Advanced roster repair is not enabled.");
       const fileId = String(body?.fileId || "").trim();
       if (!fileId) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
@@ -1387,8 +1387,7 @@ async function handleAccountStateRequest(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
-      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse("Advanced roster repair is not enabled.");
       if (String(body?.confirmation || "") !== "REBUILD") {
         return Response.json({ error: "Advanced rebuild confirmation is required." }, { status: 400 });
       }
@@ -2052,8 +2051,7 @@ async function handleAccountStateRequest(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
-      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse("Advanced roster repair is not enabled.");
       const startedAt = Date.now();
       const limit = Math.max(1, Math.min(Number.parseInt(body?.limit ?? 10, 10) || 10, 25));
       const offset = Math.max(0, Number.parseInt(body?.offset ?? 0, 10) || 0);

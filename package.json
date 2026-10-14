@@ -43,6 +43,7 @@
     "test:contact-workbook": "node scripts/test-contact-list-workbook.mjs",
     "test:fixtures": "node scripts/test-fixtures.mjs",
     "test:clinician-switching": "node scripts/test-clinician-switching.mjs",
+    "test:roster-status-messages": "node scripts/test-roster-status-messages.mjs",
     "test:calendar-refresh": "node scripts/test-calendar-refresh.mjs",
     "test:clinician-access": "node --no-warnings scripts/test-clinician-access.mjs",
     "test:facility-access": "node --no-warnings scripts/test-facility-overview-access.mjs",

@@ -1,3 +1,5 @@
+import {rosterTermAvailableFrom} from './roster-term-policy.js';
+import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
 import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-policy.js';
 const rosterComparisonCache = createRosterComparisonCache();
@@ -5,6 +7,7 @@ import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261012-external-audit';
 let currentIdentityReviewEnabled = false;
+let currentAdvancedRosterRecoveryEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
@@ -277,7 +280,7 @@ const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
 const FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 60_000;
-const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
+const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is currently unavailable.";
 const STATUS_SUPERSEDED_MESSAGES = new Map([
   ["Calendar loaded.", ["Loading calendar...", "Refreshing calendar..."]],
   ["Calendar refreshed.", ["Refreshing calendar..."]],
@@ -3430,7 +3433,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
         <h3 id="admin-auto-sync-heading">Auto-sync</h3>
         <div class="admin-file-list admin-auto-sync-list">
           ${statusUnavailable
-            ? `<article class="issue-card"><p>Automated roster source status is temporarily unavailable while maintenance is in progress. Existing sources have not been removed.</p></article>`
+            ? `<article class="issue-card"><p>Automated roster status is currently unavailable.</p></article>`
             : sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
         </div>
       </section>
@@ -3440,7 +3443,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
           ${currentAndNextManualFiles.length
             ? currentAndNextManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
             : statusUnavailable
-              ? `<article class="issue-card"><p>Manual roster file status is temporarily unavailable while maintenance is in progress. Existing files have not been removed.</p></article>`
+              ? `<article class="issue-card"><p>Roster file status is currently unavailable.</p></article>`
               : `<article class="issue-card"><p>No manual roster files for the current or next term.</p></article>`}
         </div>
       </section>
@@ -3450,7 +3453,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
           ${previousManualFiles.length
             ? previousManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
             : statusUnavailable
-              ? `<article class="issue-card"><p>Earlier roster file status is temporarily unavailable while maintenance is in progress.</p></article>`
+              ? `<article class="issue-card"><p>Earlier roster file status is currently unavailable.</p></article>`
               : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
         </div>
       </section>
@@ -3974,7 +3977,7 @@ async function claimSelectedRosterName(candidateOverride = null) {
       renderFilesList();
       renderClaimSection();
       syncActionState();
-      setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}), but no D1 calendar events were found for this roster name.`, true);
+      setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}), but their calendar could not be loaded.`, true);
       return;
     } else {
       await bootstrapImports();
@@ -4111,6 +4114,7 @@ function buildClientPreviewData(baseData) {
   return {
     ...baseData,
     events,
+    coverageEvents: baseData.events || [],
     count: events.length,
     date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
@@ -4573,7 +4577,7 @@ function renderPreviewGrid(doctor, data) {
   if (!days.length) {
     preview.innerHTML = `
       ${renderPreviewHeader(doctor, data)}
-      ${renderFacilityOverviewCoverageNotice({ missing: data.publicationMissing || [] })}
+      ${renderCalendarCoverageNotice(data)}
       <div class="preview-empty">No events match the current settings.</div>
     `;
     preview.classList.remove("hidden");
@@ -4586,7 +4590,7 @@ function renderPreviewGrid(doctor, data) {
 
   preview.innerHTML = `
     ${renderPreviewHeader(doctor, data)}
-      ${renderFacilityOverviewCoverageNotice({ missing: data.publicationMissing || [] })}
+      ${renderCalendarCoverageNotice(data)}
     ${termSections}
   `;
   preview.classList.remove("hidden");
@@ -9468,7 +9472,7 @@ function renderFacilityOverviewMaintenance({ loading = false } = {}) {
   const description = facilityOverviewSection?.querySelector(".facility-overview-head .section-head p");
   const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
   if (heading) heading.textContent = facilityOverviewLabel();
-  if (description) description.textContent = loading ? "Loading At a glance…" : "This feature will return after the reliability upgrade is complete.";
+  if (description) description.textContent = loading ? "Loading At a glance…" : "At a glance is currently unavailable.";
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   tabs?.classList.add("hidden");
   if (facilityOverviewCsToggle) facilityOverviewCsToggle.classList.add("hidden");
@@ -11858,15 +11862,44 @@ function facilityOverviewTermsFromCoverage(coverage) {
   return [...terms.values()].sort((left, right) => right.value.localeCompare(left.value));
 }
 
+function renderCalendarCoverageNotice(data) {
+  const startDate = String(settings.dateFrom || data.previewStart || '').slice(0,10);
+  const endDate = String(settings.dateTo || data.previewEnd || '').slice(0,10);
+  const today = australianDateKey();
+  const currentTerm = australianTermForDate(parseDateOnly(today));
+  const nextTerm = nextAustralianTerm(currentTerm);
+  const nextStart = formatDateKey(nextTerm.start);
+  const availableFrom = rosterTermAvailableFrom(nextStart);
+  const upcoming = startDate >= formatDateKey(currentTerm.start) && startDate < nextStart
+    && endDate >= today && availableFrom <= today
+    ? {startDate:nextStart,endDate:formatDateKey(addDays(nextTerm.end,-1))} : null;
+  const notices = coverageNoticeRanges(data.publicationMissing || [], {
+    startDate, endDate, upcoming,
+    sourceType:settings.hospitalFilter && settings.hospitalFilter !== 'all' ? settings.hospitalFilter : '',
+  });
+  const availableNextSources = new Set();
+  if (upcoming && notices.nextSources.length) for (const event of data.coverageEvents || data.events || []) {
+    const date = String(event.start || '').slice(0,10);
+    if (date >= upcoming.startDate && date <= upcoming.endDate) for (const code of eventSourceCodes(event)) availableNextSources.add(code.toLowerCase());
+  }
+  const absent = notices.nextSources.filter(source => !availableNextSources.has(source));
+  const partial = notices.nextSources.filter(source => availableNextSources.has(source));
+  const nextText = [
+    absent.length ? `${absent.map(displaySourceCode).join(', ')} shifts are not available yet.` : '',
+    partial.length ? `${partial.map(displaySourceCode).join(', ')} roster coverage is incomplete.` : '',
+  ].filter(Boolean).join(' ');
+  const next = nextText ? `<p class="facility-overview-filter-hint calendar-next-term-notice">Next term: ${escapeHtml(nextText)}</p>` : '';
+  return renderFacilityOverviewCoverageNotice({missing:notices.current}) + next;
+}
+
 function renderFacilityOverviewCoverageNotice(data) {
-  if (!data?.missing?.length) return "";
-  const gaps = [...new Set(data.missing.map(item => {
+  if (!data?.missing?.length) return '';
+  const gaps = coverageNoticeRanges(data.missing).current.map(item => {
     const hospital = displaySourceCode(item.sourceType);
-    const from = item.startDate || item.month && `${item.month}-01`;
-    const dates = from ? ` (${formatDate(from)}${item.endDate && item.endDate !== from ? `–${formatDate(item.endDate)}` : ""})` : "";
-    return hospital ? `${hospital}${dates}` : "";
-  }).filter(Boolean))].join(", ");
-  return `<article class="issue-card"><p>Roster data is not yet available${gaps ? ` for ${escapeHtml(gaps)}` : ""}. Available shifts are shown below.</p></article>`;
+    const dates = item.startDate ? ` (${formatDate(item.startDate)}${item.endDate && item.endDate !== item.startDate ? `–${formatDate(item.endDate)}` : ''})` : '';
+    return hospital ? `${hospital}${dates}` : '';
+  }).filter(Boolean).join(', ');
+  return `<article class="issue-card"><p>Roster coverage is incomplete${gaps ? ` for ${escapeHtml(gaps)}` : ''}. Available shifts are shown.</p></article>`;
 }
 
 function renderFacilityOverviewStaffResults(data, term) {
@@ -12776,6 +12809,7 @@ function renderSystemAdminCard() {
 }
 
 function renderAdvancedRosterRecovery() {
+  if (!currentAdvancedRosterRecoveryEnabled) return "";
   return `<details class="advanced-roster-recovery">
     <summary>Advanced recovery</summary>
     <p>Only rebuild when retained source files are known to be correct but the derived roster database is corrupted. Normal roster updates are automatic.</p>
@@ -15112,7 +15146,7 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     });
   } catch (error) {
     if (!doctorProfileLoadIsTransient(error)) throw error;
-    setStatus(`${doctor.displayName} calendar is preparing...`);
+    setStatus(`${doctor.displayName} calendar is currently unavailable.`);
   }
   if (!result && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
     result = await waitForDoctorProfileCalendarBuild(doctor, previousState, {
@@ -15379,7 +15413,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   if (options.allowInlineBuild === false && calendarSnapshotMatchesActiveContext(currentSnapshot)) return null;
   if (options.allowInlineBuild === false) {
     const building = profileData.snapshotSource === "server-cache-building" || profileData.snapshotStatus === "building";
-    setStatus(`${doctor.displayName} calendar is ${building ? "building" : "preparing"}...`);
+    setStatus(building ? `Preparing ${doctor.displayName} calendar…` : `${doctor.displayName} calendar is currently unavailable.`);
     return null;
   }
 
@@ -17896,6 +17930,7 @@ function saveLocalAccountIdentity(realName = "") {
 }
 
 function applyCloudStateIdentity(data) {
+  currentAdvancedRosterRecoveryEnabled = data.advancedRosterMaintenanceEnabled === true;
   if('identityReviewEnabled' in data) currentIdentityReviewEnabled=data.identityReviewEnabled===true;
   cloudAvailable = data.cloudAvailable === true;
   if (data.state?.session) rememberSessionBaseline(data.state.session);
@@ -18280,6 +18315,7 @@ function serverStorageRequiredMessage() {
 }
 
 function reportCloudSaveFailure(error, payload = null, options = {}) {
+  if (payload && !savePayloadMatchesActiveCalendar(payload)) return;
   if (options.reportErrors === false) {
     if (typeof options.onError === "function") options.onError(error);
     return;
@@ -20667,7 +20703,7 @@ function queueAccountImportsSave(options = {}) {
   queueBackgroundCloudStateSave(payload, {
     delayMs: options.delayMs ?? 0,
     reportErrors: false,
-    onError: () => setStatus("Account sync will retry in the background."),
+    onError: () => setStatus("Changes couldn’t be saved. Please try again.", true),
   });
 }
 
@@ -20924,7 +20960,7 @@ async function bootstrapImports(options = {}) {
       }
       renderClaimSection();
       syncActionState();
-      setStatus("No D1 calendar events were found for this roster name. Check that the roster files have been indexed for the linked account.", true);
+      setStatus("We couldn’t load this person’s calendar.", true);
       return;
     }
     if (selectedFiles.length) {
@@ -20935,7 +20971,7 @@ async function bootstrapImports(options = {}) {
       setStatus(currentNonClinical
         ? "This non-clinical account is ready. No roster name or clinical shifts are linked."
         : currentIdentityDiscoveryUnavailable && !currentRosterClaims.length
-          ? "Your account is ready. Linking a roster name is temporarily unavailable while we complete a reliability upgrade."
+          ? "Your account is ready, but roster name matching is currently unavailable."
         : availableRosterDoctors.length && !currentRosterClaims.length
           ? "Choose your roster name, or upload a roster if your name is not listed."
           : "Add a roster file to begin.");
@@ -21136,6 +21172,10 @@ async function bootstrapApp() {
 function setStatus(message, isError = false) {
   const text = String(message || "").trim();
   if (!status || !text) return;
+  if (!isError && routineCalendarStatus(text)) {
+    removeSupersededStatusMessages(text);
+    return;
+  }
 
   removeSupersededStatusMessages(text);
 
