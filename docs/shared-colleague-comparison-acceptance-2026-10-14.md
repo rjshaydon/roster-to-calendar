@@ -35,6 +35,8 @@ After the Mac was unlocked, Safari reloaded production commit `c871948e` at `rtc
 
 Reopening My calendar insights and returning to the Working together tab reused cached results without new comparison requests. Narrowing the latter from all hospitals to DDH also used cached results. That check exposed retained warnings for the excluded hospitals; the cache now filters coverage notices alongside roster facts, including persisted entries, with a regression assertion.
 
+Final production smoke check passed after reloading the deployed `52d5b906` script on the custom domain (deployment `56ea35df`). For Richard/Nasreen in Term 4, All EDs showed the expected MMC/MCH coverage notices and three DDH matches. Selecting DDH removed both unrelated notices while retaining all three matches. This completes the previously blocked signed-in visual check.
+
 Native Cloudflare tail samples (server durations, not browser stopwatch measurements):
 
 | Request | Duration | CPU | D1 rows read | D1 writes |
