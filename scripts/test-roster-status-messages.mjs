@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {coverageNoticeRanges,routineCalendarStatus} from '../public/static/roster-coverage-notice.js';
-import {rosterTermAvailableFrom} from '../public/static/roster-term-policy.js';
 import {rosterWritePausedResponse} from '../functions/_lib/roster-automation-guard.js';
 const missing=[{sourceType:'ddh',startDate:'2026-01-01',endDate:'2026-02-01'},{sourceType:'mmc',startDate:'2026-01-01',endDate:'2026-02-01'},{sourceType:'mmc',startDate:'2026-11-02',endDate:'2027-01-31'}];
 const term3={startDate:'2026-08-03',endDate:'2026-11-01',upcoming:{startDate:'2026-11-02',endDate:'2027-01-31'}};
@@ -14,7 +13,19 @@ assert.deepEqual(coverageNoticeRanges([{sourceType:'mch',month:'2026-10',startDa
 assert.equal(coverageNoticeRanges([{sourceType:'mch',reason:'staff-unavailable'}],term3).current.length,1,'undated failures are not silently discarded');
 const source=await readFile(new URL('../public/static/app.js',import.meta.url),'utf8');
 const extract=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
-const g={coverageNoticeRanges,rosterTermAvailableFrom,settings:{dateFrom:'2026-08-03',dateTo:'2026-11-01',hospitalFilter:'all'},australianDateKey:()=> '2026-10-14',parseDateOnly:d=>new Date(d+'T12:00:00'),australianTermForDate:()=>({start:new Date('2026-08-03T12:00:00')}),nextAustralianTerm:()=>({start:new Date('2026-11-02T12:00:00'),end:new Date('2027-02-01T12:00:00')}),formatDateKey:d=>d.toISOString().slice(0,10),addDays:(d,n)=>new Date(d.getTime()+n*86400000),eventSourceCodes:e=>[e.source.toUpperCase()],displaySourceCode:s=>s.toUpperCase(),escapeHtml:s=>String(s).replaceAll('<','&lt;'),formatDate:s=>s};
+// Link the browser's actual imports. Inventing a clock stub here previously
+// hid a missing browser binding and let a startup-breaking change pass.
+const browserImports={};
+for(const match of source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"](\.\/[^'"]+)['"]/g)) {
+  const module=await import(new URL('../public/static/'+match[2].slice(2),import.meta.url));
+  for(const specifier of match[1].split(',')) {
+    const [exported,local]=specifier.trim().split(/\s+as\s+/);
+    if(exported)browserImports[local||exported]=module[exported];
+  }
+}
+
+const g={...browserImports,settings:{dateFrom:'2026-08-03',dateTo:'2026-11-01',hospitalFilter:'all'},parseDateOnly:d=>new Date(d+'T12:00:00'),australianTermForDate:()=>({start:new Date('2026-08-03T12:00:00')}),nextAustralianTerm:()=>({start:new Date('2026-11-02T12:00:00'),end:new Date('2027-02-01T12:00:00')}),formatDateKey:d=>d.toISOString().slice(0,10),addDays:(d,n)=>new Date(d.getTime()+n*86400000),eventSourceCodes:e=>[e.source.toUpperCase()],displaySourceCode:s=>s.toUpperCase(),escapeHtml:s=>String(s).replaceAll('<','&lt;'),formatDate:s=>s};
+if(typeof g.australianDateKey==='function'){const clock=g.australianDateKey;g.australianDateKey=()=>clock(new Date('2026-10-14T12:00:00Z'));}
 runInNewContext(extract('function renderCalendarCoverageNotice(', 'function renderFacilityOverviewStaffResults(')+';this.render=renderCalendarCoverageNotice;',g);
 let html=g.render({previewStart:'2026-08-03',previewEnd:'2027-01-31',publicationMissing:missing});assert.match(html,/Next term: MMC/);assert.doesNotMatch(html,/2026-01|2026-02|incomplete/);
 assert.match(g.render({publicationMissing:missing,coverageEvents:[{source:'mmc',start:'2026-11-03T08:00:00'}]}),/Next term: MMC roster coverage is incomplete/,'retained future shifts must not be described as wholly unavailable');
