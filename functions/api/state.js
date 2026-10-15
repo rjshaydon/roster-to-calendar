@@ -2957,21 +2957,10 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
     throw new Error("An account already exists for that email. Use log in.");
   }
   if (!existing.passwordHash || !existing.passwordSalt) {
-    const passwordRecord = await hashPassword(password);
-    const updated = {
-      ...existing,
-      realName: existing.realName || realName || "",
-      ...passwordRecord,
-      updatedAt: new Date().toISOString(),
-    };
-    await upsertAccountMirror(db, updated, { preserveExistingState: false });
-    return {
-      created: false,
-      role: updated.role || roleForEmail(email),
-      realName: updated.realName || "",
-      state: sanitizeState(updated.state),
-      record: updated,
-    };
+    // A blank legacy hash may mean authentication has migrated. It must never
+    // permit an arbitrary submitted password to become the account password.
+    // Uninitialized legacy accounts need a reviewed invite/recovery instead.
+    throw new Error("Incorrect password.");
   }
   const ok = await verifyPassword(password, existing.passwordSalt, existing.passwordHash);
   if (!ok) {

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:authentication-foundation": "node --no-warnings scripts/test-authentication-foundation.mjs",
     "dev": "npm run dev:local",
     "dev:local": "node scripts/local-dev.mjs dev",
     "local:check": "node scripts/local-dev.mjs check",
