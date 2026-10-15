@@ -28,6 +28,16 @@ The adapter and migration primitives are intentionally not exposed as API routes
 5. Supabase's passkey API is currently **experimental** and requires explicit SDK opt-in. Registration requires a confirmed account. Test it as an optional journey with reliable password fallback; verify browser credentials/tokens stay out of persistent JavaScript storage and preserve the approved idle/outer expiry and recent-authentication rules. Test iPhone, Android and the real Citrix environment.
 6. Run the planned security review, native full-route CPU/D1 tests, browser cold startup/account switching, and isolated canary rollout. Only then activate migration for real accounts. Batch 6 request/reply/dispute UI remains part of the approved larger plan and is not implemented by these foundations.
 
+## Credential configuration attempt and replacement required
+
+The user explicitly approved copying the existing Sydney project's secret API key, publishable key and project URL into encrypted Cloudflare app/test configuration. `ROSTER_AUTH_CONFIG` was saved in the production Pages project's **Secret** configuration with `enabled:false`; the UI subsequently concealed its value. No deployment or staff migration was triggered. Configuration is not accepted for activation or reuse yet.
+
+During native UI extraction, the Supabase accessibility value wrapped the secret across lines. Redaction removed the prefixed line but failed to remove the continuation in one tool result. Combined output could reconstruct the credential. The user was informed immediately after this was identified; treat the existing default secret key as exposed and require replacement/revocation before further authentication testing. Do not reproduce any part of the credential in notes, logs or chat.
+
+The credential/configuration strings held in the computer-use session were cleared. The unconfigured `roster-auth-validation` Worker created during this attempt was successfully deleted. It never received the Supabase secret and had no D1/R2 bindings. No provider account was created, no staff password was sent and no private provider API test was run. The production app remains on its existing authentication implementation; the disabled encrypted configuration still contains the old key and must be replaced after rotation.
+
+Safari is open to the Sydney project's API Keys page. The user must create a replacement secret key and revoke the old **secret** key (not the publishable key). Credential-changing final actions require user handoff under the computer-use policy. Then copy the replacement directly into Cloudflare using private session memory, emitting only whitelisted status booleans; never output an entire accessibility tree after revealing or entering a credential, even with a redaction regex. Existing destination/storage approval remains applicable to the replacement configuration, but no key creation or revocation should be silently performed for the user.
+
 ## References checked
 
 - [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys)
