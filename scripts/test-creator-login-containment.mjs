@@ -78,7 +78,7 @@ const hydration = section(/async function hydrateAuthenticatedWorkspace[\s\S]*?(
 assert.match(hydration, /const adminTargetEmail[\s\S]*if \(!adminTargetEmail && creatorStartupContainmentActive\(\)\) \{[\s\S]*finishContainedCreatorStartup[\s\S]*return;[\s\S]*loadCloudCalendarEvents/,
   "defence-in-depth must stop Creator hydration before calendar and Admin work");
 
-const loginHandler = section(/if \(action === "login"\)[\s\S]*?(?=\n    const account = await verifyD1Account)/);
+const loginHandler = section(/if \(action === "login"\)[\s\S]*?(?=\n    const account = (?:cookieAccount \|\| )?await verifyD1Account)/);
 assert.doesNotMatch(loginHandler, /queryRosterFiles|queryRosterFileDoctors|queryDoctorEvents|listAccountMirrors|calendarStoreStatus/,
   "fast login handler must not contain roster-wide or directory work");
 assert.match(loginHandler, /loginResponseMode = \(loginRole === "creator" \|\| loginRole === "owner"\)[\s\S]*creatorStartupHydrationEnabled[\s\S]*\? "fast"[\s\S]*: responseMode/,

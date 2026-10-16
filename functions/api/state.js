@@ -3,6 +3,8 @@ import { comparisonWorkingEvent } from '../../public/static/comparison-policy.js
 import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
 import {legacyCoverageKey,legacyHistoryIsCovered} from '../_lib/legacy-calendar-coverage.js';
 import {normalizeEmail} from "../_lib/email.js";
+import { AuthenticationError } from '../_lib/supabase-auth.js';
+import { accountSessionsEnabled, hasSessionCookie, readAccountSession, requireSameOrigin, requireRecentAuthentication } from '../_lib/account-sessions.js';
 export {normalizeEmail} from "../_lib/email.js";
 import {identityTermHistory} from '../_lib/identity-term-history.js';
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
@@ -230,8 +232,37 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPost(context) {
-  if(context.data?.stateAction==='loadCalendarEvents')return handleCalendarEventsRequest(context);
-  return handleAccountStateRequest(context);
+  try {
+    const response = context.data?.stateAction === 'loadCalendarEvents'
+      ? await handleCalendarEventsRequest(context) : await handleAccountStateRequest(context);
+    if (!context.data?.cookieAccount) return response;
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', 'no-store'); headers.set('Vary', 'Cookie');
+    return new Response(response.body, { status: response.status, headers });
+  } catch (error) {
+    if (!(error instanceof AuthenticationError)) throw error;
+    return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { 'Cache-Control': 'no-store' } });
+  }
+}
+
+async function cookieAccountForRequest(context, body) {
+  if (!accountSessionsEnabled(context.env) || !hasSessionCookie(context.request)) return null;
+  requireSameOrigin(context.request);
+  const session = await readAccountSession(context.env.ROSTER_DB, context.request);
+  if (body.email && normalizeEmail(body.email) !== session.email) {
+    throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
+  }
+  const record = await loadAccountMirror(context.env.ROSTER_DB, session.email);
+  if (!record) throw new AuthenticationError('auth-session-expired', 'Please sign in again.', 401);
+  // Keep the session's actor even when Creator supplies targetEmail for review.
+  const account = { record, role: record.role || roleForEmail(record.email), created: false };
+  const sensitive = ['updateAccount', 'deleteAccount', 'adminCreateUser', 'adminSendInvite',
+    'setAccountRosterClaims', 'removeRosterClaim', 'setUserInsightsEnabled', 'setUserFacilityOverviewEnabled', 'setUserDirectorViewEnabled'];
+  if (sensitive.includes(body.action) || body.action === 'identity' && ['commit', 'reverse'].includes(body.operation)) {
+    requireRecentAuthentication(session);
+  }
+  context.data ||= {}; context.data.cookieAccount = account;
+  return account;
 }
 
 async function handleCalendarEventsRequest(context){
@@ -239,16 +270,18 @@ async function handleCalendarEventsRequest(context){
   try{
     const body=await context.request.json().catch(()=>null);
     if(body?.action!=='loadCalendarEvents')return Response.json({error:'Invalid calendar action.'},{status:400});
-    const email=normalizeEmail(body.email),password=String(body.password||'');
+    const cookieAccount=await cookieAccountForRequest(context,body);
+    const email=cookieAccount?.record.email||normalizeEmail(body.email),password=String(body.password||'');
     if(!email)return Response.json({error:'Email address is required.'},{status:400});
     if(!hasCalendarDb(context.env))return Response.json({error:'D1 database is not configured.'},{status:503});
-    const account=await verifyD1Account(context.env.ROSTER_DB,email,password),targetEmail=normalizeEmail(body.targetEmail);
+    const account=cookieAccount||await verifyD1Account(context.env.ROSTER_DB,email,password),targetEmail=normalizeEmail(body.targetEmail);
     const targetRecord=targetEmail&&['creator','owner'].includes(account.role)?await loadAccountMirror(context.env.ROSTER_DB,targetEmail):account.record;
     const prepared=await prepareLightweightAccountResponse(targetRecord,{db:context.env.ROSTER_DB,includeImportRefs:false,recordStateCurrent:true,calendarOnly:true});
     const range=boundedCalendarEventRange(body),params={targetRecord,prepared,startDate:range.startDate,endDate:range.endDate,doctorKey:normalizeRosterName(body.doctorKey||''),cachedRevision:body.cachedRevision||'',allowInlineBuild:body.allowInlineBuild!==false,skipRebuild:body.skipRebuild===true,diagnosticsRequested:body.diagnostics===true,reason:'loadCalendarEvents'};
     const payload=body.responseMode==='fast'&&body.allowInlineBuild===false?await loadFastAccountSnapshotPayload(context,params):await loadAccountSnapshotPayload(context,params);
     return Response.json(payload);
   }catch(error){
+    if(error instanceof AuthenticationError)throw error;
     if(['d1-statement-budget-exceeded','d1-request-deadline-exceeded'].includes(error?.code))throw error;
     const message=error.message||'Calendar request failed.',failure=classifyD1Failure(message);
     return Response.json(failure?{error:failure.message,errorType:failure.errorType,phase:String(context.data?.d1OperationPhase||'')}:{error:message},{status:failure?503:message==='Incorrect password.'||message.startsWith('Account not found')?401:400});
@@ -260,7 +293,7 @@ async function handleAccountStateRequest(context) {
   const requestStartedAt = Date.now();
   try {
     const body = await context.request.json().catch(() => null);
-    const email = normalizeEmail(body?.email);
+    let email = normalizeEmail(body?.email);
     const password = String(body?.password || "");
     const action = String(body?.action || "login");
     if (["queryFacilityOverviewTogetherContext", "queryFacilityOverviewWorkingTogether"].includes(action)) {
@@ -296,6 +329,8 @@ async function handleAccountStateRequest(context) {
       return refreshPublishedFacilityContactsWithToken(context, body);
     }
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
+    const cookieAccount = await cookieAccountForRequest(context, body || {});
+    email = cookieAccount?.record.email || email;
     const realName = String(body?.realName || "").trim();
     const targetEmail = normalizeEmail(body?.targetEmail);
     if (!email && action !== "acceptInvite") {
@@ -337,12 +372,12 @@ async function handleAccountStateRequest(context) {
         .bind(now, now, await sha256(inviteToken)).run();
       return Response.json({ ok: true, email: invitedEmail });
     }
-    if (!password) {
+    if (!password && !cookieAccount) {
       return Response.json({ error: "Password is required." }, { status: 400 });
     }
     if (action === "login") {
       const authStartedAt = Date.now();
-      const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
+      const account = cookieAccount || await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
       const discoveryEnabled = identityDiscoveryEnabled(context.env);
       let loginRecord = account.record;
       let loginDirectory;
@@ -479,7 +514,7 @@ async function handleAccountStateRequest(context) {
     }
 
     if(action==='identity' && context.env.IDENTITY_REVIEW_ENABLED!=='true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
-    const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    const account = cookieAccount || await verifyD1Account(context.env.ROSTER_DB, email, password);
     if (action === 'identity') {
       if (!['creator','owner'].includes(account.role)) return Response.json({error:'Creator access is required.'},{status:403});
       if (context.env.IDENTITY_REVIEW_ENABLED !== 'true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
@@ -2678,6 +2713,7 @@ async function handleAccountStateRequest(context) {
 
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
   } catch (error) {
+    if (error instanceof AuthenticationError) throw error;
     if (error?.code === "d1-statement-budget-exceeded") throw error;
     if (error?.code === "IDENTITY_CLAIM_CONFLICT") return Response.json({ error: error.message, conflict: true }, { status: 409 });
     const message = error.message || "Account request failed.";

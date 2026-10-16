@@ -75,7 +75,7 @@ async function boundedJson(response) {
   } finally { reader.releaseLock(); }
 }
 
-async function providerRequest(env, path, { admin = false, method = 'POST', body } = {}) {
+async function providerRequest(env, path, { admin = false, method = 'POST', body, allowMissing = false } = {}) {
   const config = supabaseAuthenticationConfig(env);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -92,6 +92,10 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
       throw new AuthenticationError('auth-provider-response', 'Authentication returned an invalid response.');
+    }
+    if (allowMissing && admin && method === 'GET' && response.status === 404) {
+      await response.body?.cancel();
+      return null;
     }
     if (response.status === 429) throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);
     if (response.status >= 500) throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');
@@ -140,8 +144,9 @@ export async function createSupabaseMigrationUser(env, input) {
   return userIdentity(data, { email: body.email, subject: input.subject });
 }
 
-export async function getSupabaseMigrationUser(env, { subject, email }) {
+export async function getSupabaseMigrationUser(env, { subject, email, allowMissing = false }) {
   if (!UUID.test(subject || '')) throw new AuthenticationError('auth-migration-input', 'Invalid migration reference.', 400);
-  const data = await providerRequest(env, 'admin/users/' + subject, { admin: true, method: 'GET' });
+  const data = await providerRequest(env, 'admin/users/' + subject, { admin: true, method: 'GET', allowMissing });
+  if (data === null && allowMissing) return null;
   return userIdentity(data, { email, subject });
 }

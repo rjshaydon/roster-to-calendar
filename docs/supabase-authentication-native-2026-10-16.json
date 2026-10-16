@@ -1,0 +1,38 @@
+{
+  "scope": "Isolated synthetic provider lifecycle only; not complete app login or session/D1 acceptance",
+  "nativeProviderChecks": {
+    "status": 200,
+    "ok": true,
+    "reservedSubjectPreserved": true,
+    "initiallyUnconfirmed": true,
+    "exactUserReadable": true,
+    "unconfirmedLoginDenied": true,
+    "wrongPasswordDenied": true,
+    "correctPasswordAccepted": true,
+    "wrongSubjectDenied": true,
+    "migrationDisabled": true,
+    "noEmailSent": true,
+    "syntheticAccountRemoved": true
+  },
+  "capturedTrace": {
+    "metrics": [
+      {
+        "metric": "wallTime",
+        "value": 1138
+      },
+      {
+        "metric": "cpuTime",
+        "value": 7
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      }
+    ]
+  },
+  "syntheticRuns": 2,
+  "syntheticAccountsRemoved": true,
+  "testWorkerRemoved": true,
+  "productionMigrationDisabled": true,
+  "emailsSent": false
+}
