@@ -22,7 +22,7 @@ globalThis.fetch=async(url,init)=>{
  calls.push({url,method:init.method});const body=init.body?JSON.parse(init.body):{};
  if(url==='https://api.postmarkapp.com/email'){emails.push(body);return Response.json({ErrorCode:0});}
  if(url.includes('/admin/users/')&&init.method==='GET')return user&&url.endsWith('/'+user.id)?Response.json(user):Response.json({message:'missing'},{status:404});
- if(url.endsWith('/admin/users')&&init.method==='POST'){user={id:body.id,email:body.email,email_confirmed_at:null};providerPassword=body.password;return Response.json(user);}
+ if(url.endsWith('/admin/users')&&init.method==='POST'){user={id:body.id,email:body.email,email_confirmed_at:body.email_confirm?new Date().toISOString():null};providerPassword=body.password;return Response.json(user);}
  if(url.endsWith('/admin/generate_link')){const token=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');tokens.set(token,{subject:user.id,type:body.type});return Response.json({...user,hashed_token:token,verification_type:body.type});}
  if(url.endsWith('/verify')){const token=tokens.get(body.token_hash);if(!token||token.type!==body.type)return Response.json({error:'used'},{status:400});tokens.delete(body.token_hash);user.email_confirmed_at=new Date().toISOString();return Response.json({user,access_token:'private-proof-token'});}
  if(url.endsWith('/user')&&init.method==='PUT'){assert.equal(init.headers.Authorization,'Bearer private-proof-token');if(failChange)throw Error('uncertain provider mutation');providerPassword=body.password;return Response.json(user);}
@@ -52,16 +52,13 @@ try{
  sql.prepare('INSERT INTO account_sessions VALUES(?,?,?,?,?,?,0)').run('a'.repeat(64),email,Date.now(),Date.now()+1000000,Date.now()+2000000,Date.now()+100000);
  failChange=true;await assert.rejects(()=>completeAccountEmailProof(env,{id:second.id,token:second.token,newPassword:'Another replacement fixture'}),e=>e.code==='auth-provider-unavailable');assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM account_sessions').get().n,0);failChange=false;
  // New registrations use provider hashing from the beginning, never legacy SHA.
- const signupEnv={...env,ROSTER_AUTH_CONFIG:JSON.stringify({...config,signupEnabled:true})};
+ const signupEnv={...env,POSTMARK_API_TOKEN:undefined,ROSTER_AUTH_CONFIG:JSON.stringify({...config,signupEnabled:true,emailDeliveryReady:false})};
+ const emailsBeforeSignup=emails.length;
  const signupEmail='new-person@example.test',signupPassword='New strong fixture password';
  await registerAccount(signupEnv,{email:signupEmail,password:signupPassword,realName:'New Fixture',origin:'https://rtc.curiousmind.app'});
  assert.equal(sql.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(signupEmail).password_hash,'');
  assert.equal(sql.prepare('SELECT role FROM account_profiles WHERE email=?').get(signupEmail).role,'user');
- await assert.rejects(()=>authenticateExistingAccount(signupEnv,{email:signupEmail,password:signupPassword}),e=>e.code==='email-verification-required');
- const signupURL=new URL(emails.at(-1).TextBody.match(/https:\/\/rtc\.curiousmind\.app\/#[^\s]+/)[0]);
- const signupAction=takeAccountEmailAction(signupURL,{replaceState(){}});
- await completeAccountEmailProof(signupEnv,{id:signupAction.id,token:signupAction.token});
- assert.equal(sql.prepare('SELECT phase FROM account_authentication_links WHERE email=?').get(signupEmail).phase,'pending','email alone is not password proof');
+ assert.equal(emails.length,emailsBeforeSignup,'signup requires no email or Postmark credential');
  await authenticateExistingAccount(signupEnv,{email:signupEmail,password:signupPassword});
  assert.equal(sql.prepare('SELECT phase FROM account_authentication_links WHERE email=?').get(signupEmail).phase,'ready');
  await assert.rejects(()=>registerAccount(signupEnv,{email:signupEmail,password:'Different attempted password',realName:'Changed',origin:'https://rtc.curiousmind.app'}),e=>e.code==='auth-registration-conflict');

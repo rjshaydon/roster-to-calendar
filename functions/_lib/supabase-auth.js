@@ -137,10 +137,11 @@ export async function signInWithSupabasePassword(env, input) {
 export async function createSupabaseMigrationUser(env, input) {
   const body = credentials(input.email, input.password);
   if (!UUID.test(input.subject || '')) throw new AuthenticationError('auth-migration-input', 'Invalid migration reference.', 400);
-  // Do not silently mark legacy emails verified: password possession proves the
-  // old app account, not ownership of its email address. Verification is a gate.
+  // Approved password signup/migration may preconfirm for seamless sign-in.
+  // This is provider eligibility, not evidence of mailbox ownership. Recovery
+  // provisioning leaves this false and requires its separate emailed proof.
   const data = await providerRequest(env, 'admin/users', { admin: true,
-    body: { id: input.subject, ...body, email_confirm: false },
+    body: { id: input.subject, ...body, email_confirm: input.preconfirm === true },
   });
   return userIdentity(data, { email: body.email, subject: input.subject });
 }
@@ -195,4 +196,16 @@ export async function deleteSupabaseAccount(env,{email,subject}) {
   const current=await getSupabaseMigrationUser(env,{email,subject,allowMissing:true});
   if(!current)return;
   await providerRequest(env,'admin/users/'+subject,{admin:true,method:'DELETE'});
+}
+
+// Internal only: exact locally reserved subject, after trusted account creation
+// or legacy password verification. Never accepts a browser-selected subject.
+export async function preconfirmProvisionedAccount(env, {email,subject}) {
+  const current=await getSupabaseMigrationUser(env,{email,subject});
+  if(current.disabled)throw new AuthenticationError('auth-account-unavailable','This account is unavailable.',403);
+  if(current.emailVerified)return current;
+  const data=await providerRequest(env,'admin/users/'+subject,{admin:true,method:'PUT',body:{email_confirm:true}});
+  const identity=userIdentity(data,{email,subject});
+  if(!identity.emailVerified||identity.disabled)throw new AuthenticationError('auth-provider-response','The account could not be prepared.');
+  return identity;
 }

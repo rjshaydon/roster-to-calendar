@@ -38,4 +38,21 @@ assert.equal(cold.expected(),true);assert.equal(cold.validated(),false);
 await cold.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'user@example.test'})});assert.equal(cold.validated(),true);
 const beforeExpiry=calls.length;await cold.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'expire',password:'legacy-must-not-be-retried'})});assert.equal(calls.length,beforeExpiry+1);assert.equal(cold.expected(),false);assert.equal(expired,1);
 const tabOnly=store();tabOnly.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'user@example.test',persistent:false}));const peer=createAccountTransport({fetchImpl,persistentStorage:store(),tabStorage:tabOnly,onExpired(){expired++;}});peer.notice(JSON.stringify({email:'different@example.test'}));assert.equal(peer.expected(),false);
+// Both a cold old client and a client that already knows cookie mode must
+// create once, accept its cookie and fetch the normal calendar envelope.
+for(const informed of [false,true]){
+ const sequence=[];let signed=false;
+ const transport=createAccountTransport({persistentStorage:store(),tabStorage:store(),fetchImpl:async(url,init)=>{
+   if(url.includes('?options'))return Response.json({enabled:true});
+   const b=JSON.parse(init.body);sequence.push({url,body:b});
+   if(url==='/api/auth/session'){assert.equal(b.action,'signup');signed=true;return Response.json({ok:true,email:b.email});}
+   if(!signed)return Response.json({code:'auth-upgrade-required'},{status:409});
+   assert.equal(b.mode,'login');assert.equal(b.password,undefined);assert.equal(b.email,undefined);
+   return Response.json({ok:true,state:{calendar:'fixture'}},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ if(informed)await transport.options();
+ const response=await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',mode:'create',email:'new@example.test',password:'Strong fixture only',realName:'New Person',remember:true})});
+ assert.equal((await response.json()).state.calendar,'fixture');assert.equal(transport.validated(),true);
+ assert.equal(sequence.filter(x=>x.url==='/api/auth/session').length,1,'no extra login after signup');
+}
 console.log('Browser account transport passed: one-time upgrade, no routine passwords/preflights/storage rewrites, cookie hints require validation, Creator target separation, coalesced foreground activity, recent-auth preservation, logout/expiry and stale-response/other-tab isolation.');

@@ -66,8 +66,10 @@ export async function onRequestPost(context) {
     if (action === 'signup') {
       const email=normalizeEmail(body.email);if(!email||email.length>254)throw new AuthenticationError('auth-request','Check your email address.',400);
       await admit(context.env,email);
-      await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin});
-      return reply({error:'Check your email for a confirmation link, then sign in.',code:'email-verification-required'},403);
+      const proof=await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin});
+      const issued=await issueAccountSession(db,{email:proof.email,subject:proof.subject,persistent:body.remember===true});
+      if(hasSessionCookie(context.request)){try{await revokeAccountSession(db,await readAccountSession(db,context.request));}catch(error){if(error?.code!=='auth-session-expired')throw error;}}
+      return reply({ok:true,email:issued.email},200,issued.setCookie);
     }
     if (action === 'requestRecovery') {
       const email=normalizeEmail(body.email);
@@ -95,13 +97,7 @@ export async function onRequestPost(context) {
         oldSession = await readAccountSession(db, context.request);
         if (email !== oldSession.email) throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
       }
-      let proof;
-      try { proof = await authenticateExistingAccount(context.env, { email, password: body.password }); }
-      catch(error) {
-        if(error?.code!=='email-verification-required')throw error;
-        await sendAccountEmailProof(context.env,{email,purpose:'confirm',origin:new URL(context.request.url).origin});
-        return reply({error:'Check your email for a confirmation link, then sign in again.',code:'email-verification-required'},403);
-      }
+      const proof = await authenticateExistingAccount(context.env, { email, password: body.password });
       const issued = await issueAccountSession(db, { email: proof.email, subject: proof.subject, persistent: body.remember === true });
       if (!oldSession && hasSessionCookie(context.request)) {
         try { oldSession = await readAccountSession(db, context.request); }

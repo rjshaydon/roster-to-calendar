@@ -23,12 +23,17 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     if(response.ok){const data=await response.clone().json();accept(data.email,remember,true);}
     return response;
   }
+  async function signup(body){
+    const response=await auth({action:'signup',email:body.email,password:body.password,realName:body.realName,remember:body.remember===true});
+    if(response.ok){const data=await response.clone().json();accept(data.email,body.remember===true,true);}
+    return response;
+  }
   async function accountFetch(input,init={}){
     if(input!=='/api/state')return fetchImpl(input,init);
     let body;try{body=JSON.parse(init.body);}catch{return fetchImpl(input,init);}
     let lease=generation;
     if(upgradeAvailable&&body.action==='acceptInvite')return auth({action:'acceptInvite',inviteToken:body.inviteToken,newPassword:body.newPassword});
-    if((hint||upgradeAvailable)&&body.action==='login'&&body.password&&body.mode==='create')return auth({action:'signup',email:body.email,password:body.password,realName:body.realName});
+    if((hint||upgradeAvailable)&&body.action==='login'&&body.password&&body.mode==='create'){const r=await signup(body);if(!r.ok)return r;body={...body,mode:'login'};delete body.password;lease=generation;}
     if((hint||upgradeAvailable)&&body.action==='login'&&body.password&&body.mode!=='create'){
       const response=await login(body.email,body.password,body.remember===true);
       if(!response.ok)return response;lease=generation;
@@ -38,7 +43,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     if(body.action==='acceptInvite'&&response.status===409){const data=await response.clone().json().catch(()=>null);if(data?.code==='auth-upgrade-required'){upgradeAvailable=true;return auth({action:'acceptInvite',inviteToken:body.inviteToken,newPassword:body.newPassword});}}
     if(!hint&&body.action==='login'&&response.status===409){
       const data=await response.clone().json().catch(()=>null);
-      if(data?.code==='auth-upgrade-required'&&body.mode==='create'&&body.password){upgradeAvailable=true;return auth({action:'signup',email:body.email,password:body.password,realName:body.realName});}
+      if(data?.code==='auth-upgrade-required'&&body.mode==='create'&&body.password){upgradeAvailable=true;const r=await signup(body);if(!r.ok)return r;body={...body,mode:'login'};delete body.password;lease=generation;response=await send();}
       if(data?.code==='auth-upgrade-required'&&body.mode!=='create'&&body.password){
         upgradeAvailable=true;
         response=await login(body.email,body.password,body.remember===true);
