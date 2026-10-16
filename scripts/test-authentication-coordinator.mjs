@@ -9,7 +9,7 @@ for(const name of (await readdir(new URL('../migrations/',import.meta.url))).fil
 const db={prepare(q){return{args:[],bind(...a){this.args=a;return this;},async first(){return sql.prepare(q).get(...this.args)||null;},async run(){const r=sql.prepare(q).run(...this.args);return{meta:{changes:Number(r.changes)}};}};},async batch(ss){sql.exec('BEGIN');try{const r=[];for(const s of ss)r.push(await s.run());sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 const email='migration@example.test',password='Synthetic fixture only',salt='a'.repeat(32),hash=createHash('sha256').update(salt+':'+password).digest('hex');
 sql.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,'Fixture','user',?,?,'unchanged-feed')").run(email,hash,salt);
-const cfg={enabled:true,url:AUTH_PROJECT_ORIGIN,publishableKey:'sb_publishable_fixture',secretKey:'sb_secret_fixture',emailDeliveryReady:false,legacyMigrationUntil:new Date(Date.now()+86400000).toISOString()};
+const cfg={enabled:true,migrationEnabled:true,url:AUTH_PROJECT_ORIGIN,publishableKey:'sb_publishable_fixture',secretKey:'sb_secret_fixture',emailDeliveryReady:false,legacyMigrationUntil:new Date(Date.now()+86400000).toISOString()};
 const env={ROSTER_DB:db,ROSTER_AUTH_CONFIG:JSON.stringify(cfg)};
 const oldFetch=globalThis.fetch;let user=null,posts=0,fetches=0,loseCreateResponse=true,providerPassword=password;
 globalThis.fetch=async(url,init)=>{
@@ -27,8 +27,11 @@ globalThis.fetch=async(url,init)=>{
  throw Error('Unexpected test request');
 };
 try{
+ for(const extra of [{migrationEnabled:false},{migrationPaused:true},{migrationEmails:[]},{migrationEmails:['someone-else@example.test']}]){
+  await assert.rejects(()=>authenticateExistingAccount({...env,ROSTER_AUTH_CONFIG:JSON.stringify({...cfg,...extra})},{email,password}),e=>e.code==='auth-migration-paused');assert.equal(fetches,0);
+ }
  await assert.rejects(()=>authenticateExistingAccount(env,{email,password:'wrong'}),e=>e.status===401);assert.equal(fetches,0);
- await assert.rejects(()=>authenticateExistingAccount({...env,ROSTER_AUTH_CONFIG:JSON.stringify({...cfg,legacyMigrationUntil:'2020-01-01'})},{email,password}),e=>e.status===401);assert.equal(fetches,0);
+ await assert.rejects(()=>authenticateExistingAccount({...env,ROSTER_AUTH_CONFIG:JSON.stringify({...cfg,legacyMigrationUntil:'2020-01-01'})},{email,password}),e=>e.code==='auth-migration-paused');assert.equal(fetches,0);
  await assert.rejects(()=>authenticateExistingAccount(env,{email,password}),e=>e.code==='auth-provider-unavailable');
  const firstSubject=user.id;
  assert.equal(user.id,firstSubject);assert.equal(posts,1,'retry uses exact reserved UUID without resetting provider credentials');
@@ -41,6 +44,7 @@ try{
  const account=sql.prepare('SELECT * FROM account_profiles WHERE email=?').get(email);assert.equal(account.password_hash,'');assert.equal(account.password_salt,'');assert.equal(account.subscription_token,'unchanged-feed');assert.equal(account.role,'user');
  assert.throws(()=>sql.prepare('UPDATE account_profiles SET password_hash=?,password_salt=? WHERE email=?').run(hash,salt,email),/Retired password/,'old clients cannot reintroduce weak hashes');
  assert.equal((await authenticateExistingAccount(env,{email,password})).subject,firstSubject);
+ assert.equal((await authenticateExistingAccount({...env,ROSTER_AUTH_CONFIG:JSON.stringify({...cfg,migrationEnabled:false,migrationPaused:true,migrationEmails:[]})},{email,password})).subject,firstSubject,'pausing further migration cannot lock out migrated accounts');
  assert.equal(posts,1);await assert.rejects(()=>authenticateExistingAccount(env,{email,password:'wrong'}),e=>e.code==='invalid-credentials');
  user={...user,email:'other@example.test'};await assert.rejects(()=>authenticateExistingAccount(env,{email,password}),e=>e.code==='auth-identity-mismatch');
 }finally{globalThis.fetch=oldFetch;}

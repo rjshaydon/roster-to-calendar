@@ -5,7 +5,7 @@
   "scripts": {
     "test:authentication-foundation": "node --no-warnings scripts/test-authentication-foundation.mjs",
     "test:account-sessions": "node --no-warnings scripts/test-account-sessions.mjs && node --no-warnings scripts/test-authentication-coordinator.mjs",
-    "test:account-browser": "node scripts/test-account-transport.mjs && node --no-warnings scripts/test-account-email.mjs && node --no-warnings scripts/test-account-lifecycle.mjs && node scripts/test-melbourne-clock.mjs",
+    "test:account-browser": "node scripts/test-account-transport.mjs && node --no-warnings scripts/test-account-email.mjs && node --no-warnings scripts/test-account-lifecycle.mjs && node scripts/test-melbourne-clock.mjs && node --no-warnings scripts/test-authentication-journey.mjs",
     "dev": "npm run dev:local",
     "dev:local": "node scripts/local-dev.mjs dev",
     "local:check": "node scripts/local-dev.mjs check",
@@ -76,7 +76,8 @@
     "test:identity-audit-plan": "node --no-warnings scripts/test-identity-audit-plan.mjs",
     "test:external-identity-audit": "node --no-warnings scripts/test-external-identity-audit.mjs",
     "test:identity-audit-checkpoints": "node --no-warnings scripts/test-identity-audit-checkpoints.mjs",
-    "test:doctor-calendar-artifacts": "node --no-warnings scripts/test-doctor-calendar-artifacts.mjs"
+    "test:doctor-calendar-artifacts": "node --no-warnings scripts/test-doctor-calendar-artifacts.mjs",
+    "test:authentication-journey": "node --no-warnings scripts/test-authentication-journey.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

@@ -1,3 +1,4 @@
+import {allowLegacyStateDuringRollout} from '../_lib/authentication-rollout.js';
 import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
 import { registerAccount } from '../_lib/account-registration.js';
 import { reserveAccountEmailCapacity } from '../_lib/account-email.js';
@@ -254,6 +255,7 @@ export async function onRequestPost(context) {
 
 async function cookieAccountForRequest(context, body) {
   if (!accountSessionsEnabled(context.env)) return null;
+  if (!hasSessionCookie(context.request) && allowLegacyStateDuringRollout(context.env,context.request,body)) return null;
   if (!hasSessionCookie(context.request)) throw new AuthenticationError('auth-session-expired','Please sign in again using the updated app.',401);
   requireSameOrigin(context.request);
   if(!hasCalendarDb(context.env))throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
@@ -359,8 +361,10 @@ async function handleAccountContextRequest(context) {
   const body = await context.request.json().catch(() => null);
   if (body?.action !== 'loadAccountContext') return Response.json({ error: 'Invalid account action.' }, { status: 400 });
   const account = await cookieAccountForRequest(context, body);
-  // This fast route is selected only when cookie authentication is enabled.
-  return accountContextResponse(context, account, normalizeEmail(body.targetEmail));
+  const email=normalizeEmail(body.email);
+  if(!account&&!email)return Response.json({error:'Email address is required.'},{status:400});
+  const verified=account||await verifyD1Account(context.env.ROSTER_DB,email,String(body.password||''));
+  return accountContextResponse(context, verified, normalizeEmail(body.targetEmail));
 }
 
 async function handleAccountStateRequest(context) {
@@ -407,10 +411,10 @@ async function handleAccountStateRequest(context) {
     // Old clients get a closed upgrade path; the new transport exchanges once
     // then repeats this request using the HttpOnly cookie.
     if (action === 'acceptInvite' && accountSessionsEnabled(context.env))return Response.json({error:'Please use the updated invitation flow.',code:'auth-upgrade-required'},{status:409,headers:{'Cache-Control':'no-store'}});
-    if (action === 'login' && accountSessionsEnabled(context.env) && (!hasSessionCookie(context.request) || Boolean(body?.password))) {
+    if (action === 'login' && accountSessionsEnabled(context.env) && !allowLegacyStateDuringRollout(context.env,context.request,body) && (!hasSessionCookie(context.request) || Boolean(body?.password))) {
       return Response.json({ error: 'Please use the updated sign-in.', code: 'auth-upgrade-required' }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
     }
-    if(accountSessionsEnabled(context.env)&&!hasSessionCookie(context.request))throw new AuthenticationError('auth-session-expired','Please sign in again using the updated app.',401);
+    if(accountSessionsEnabled(context.env)&&!hasSessionCookie(context.request)&&!allowLegacyStateDuringRollout(context.env,context.request,body))throw new AuthenticationError('auth-session-expired','Please sign in again using the updated app.',401);
 
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const cookieAccount = await cookieAccountForRequest(context, body || {});
@@ -461,7 +465,7 @@ async function handleAccountStateRequest(context) {
     }
     if (action === "login") {
       const authStartedAt = Date.now();
-      const account = cookieAccount || await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
+      const account = cookieAccount || await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName, secureAuthentication: accountSessionsEnabled(context.env) });
       const discoveryEnabled = identityDiscoveryEnabled(context.env);
       let loginRecord = account.record;
       let loginDirectory;
@@ -1495,6 +1499,7 @@ async function handleAccountStateRequest(context) {
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const nextRealName = String(body?.realName ?? targetRecord.realName ?? "").trim();
       const nextPassword = String(body?.newPassword || "");
+      if(nextPassword&&accountSessionsEnabled(context.env))return Response.json({error:"Change your password through the secure account password action.",code:"auth-password-route"},{status:409});
       const passwordRecord = nextPassword ? await hashPassword(nextPassword) : {};
       const updated = {
         ...targetRecord,
@@ -3002,6 +3007,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
   const realName = String(options.realName || "").trim();
   const existing = await loadAccountMirror(db, email);
   if (!existing) {
+    if(options.secureAuthentication)throw new AuthenticationError("auth-upgrade-required","Please use the updated sign-in.",409);
     const canBootstrapCreator = email === CREATOR_EMAIL && mode === "login";
     if (!canBootstrapCreator && (mode !== "create" || !realName)) {
       throw new Error("Account not found. Create an account first.");
@@ -3040,6 +3046,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
     // A blank legacy hash may mean authentication has migrated. It must never
     // permit an arbitrary submitted password to become the account password.
     // Uninitialized legacy accounts need a reviewed invite/recovery instead.
+    if(options.secureAuthentication)throw new AuthenticationError("auth-upgrade-required","Please use the updated sign-in.",409);
     throw new Error("Incorrect password.");
   }
   const ok = await verifyPassword(password, existing.passwordSalt, existing.passwordHash);

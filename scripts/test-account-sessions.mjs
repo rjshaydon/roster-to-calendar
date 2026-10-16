@@ -41,6 +41,24 @@ for(const [status,expected] of [[429,429],[503,503]]){
 const beforeMissingAdmission=queries.length;
 assert.equal((await sessionRoute(context(request(null,admissionBody),{...env,AUTH_LOGIN_LIMITER:undefined}))).status,503);
 assert.equal(queries.length,beforeMissingAdmission);
+// A named rollout keeps non-cohort existing users on their current path.
+// No malformed cookie or new-account creation can select that compatibility path.
+const legacyEmail='legacy@example.test',legacySalt='b'.repeat(32),legacyPassword='Legacy fixture password';
+const legacyHash=createHash('sha256').update(legacySalt+':'+legacyPassword).digest('hex');
+sqlite.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,'Legacy Person','user',?,?,'unchanged-legacy-feed')").run(legacyEmail,legacyHash,legacySalt);
+const rolloutEnv={...env,ROSTER_AUTH_CONFIG:JSON.stringify({...JSON.parse(env.ROSTER_AUTH_CONFIG),migrationEnabled:true,migrationEmails:[email]})};
+for(const action of ['loadAccountContext','login']){
+ const requestBody={action,email:legacyEmail,password:legacyPassword,responseMode:'fast'};
+ const req=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json'},body:JSON.stringify(requestBody)});
+ const c=context(req,rolloutEnv);c.data.stateAction=action;
+ assert.equal((await stateRoute(c)).status,200,'non-cohort legacy '+action+' remains usable');
+}
+assert.equal(sqlite.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(legacyEmail).password_hash,legacyHash);
+const createReq=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json'},body:JSON.stringify({action:'login',mode:'create',email:legacyEmail,password:legacyPassword})});
+assert.equal((await stateRoute(context(createReq,rolloutEnv))).status,409,'new-account requests cannot create weak hashes during rollout');
+const badCookieRequest=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:SESSION_COOKIE+'=bad'},body:JSON.stringify({action:'loadAccountContext',email:legacyEmail,password:legacyPassword})});
+const badCookieContext=context(badCookieRequest,rolloutEnv);badCookieContext.data.stateAction='loadAccountContext';
+assert.equal((await stateRoute(badCookieContext)).status,401,'non-cohort users cannot downgrade an invalid cookie');
 const first=await issueAccountSession(db,{email,subject,persistent:true},{now});
 assert.match(first.setCookie,/^__Host-roster_session=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
 const token=first.setCookie.split(';')[0].split('=')[1];

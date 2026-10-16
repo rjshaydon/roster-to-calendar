@@ -12639,11 +12639,16 @@ function renderAccountsModal(options = {}) {
           <span>Email address</span>
           <input type="email" value="${escapeHtml(me.email)}" data-account-email ${ownerView ? "readonly" : "readonly"}>
         </label>
-        <label class="field">
-          <span>Password</span>
-          ${accountTransport.expected() ? '<input type="password" autocomplete="current-password" data-account-current-password placeholder="Current password (to change password)">' : ''}
-          <input type="password" autocomplete="new-password" value="" data-account-password placeholder="New password">
-        </label>
+        ${!accountTransport.expected() || normalizeEmail(me.email) === authenticatedAccountEmail() ? `
+          ${accountTransport.expected() ? `<label class="field">
+            <span>Current password</span>
+            <input type="password" autocomplete="current-password" data-account-current-password placeholder="To change your password">
+          </label>` : ''}
+          <label class="field">
+            <span>New password</span>
+            <input type="password" autocomplete="new-password" value="" data-account-password ${accountTransport.expected() ? 'minlength="12"' : ''} placeholder="Leave blank to keep your password">
+          </label>
+        ` : ''}
         <div class="modal-actions">
           <button type="submit" class="button button-primary">Save changes</button>
           ${accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? '<button type="button" class="button button-secondary" data-signout-other-devices>Sign out other devices</button>' : ''}

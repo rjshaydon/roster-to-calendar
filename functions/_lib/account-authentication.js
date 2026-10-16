@@ -1,3 +1,4 @@
+import {requirePasswordMigrationAdmission} from './authentication-rollout.js';
 import { normalizeEmail } from './email.js';
 import { AuthenticationError, supabaseAuthenticationConfig, signInWithSupabasePassword, createSupabaseMigrationUser, getSupabaseMigrationUser, preconfirmProvisionedAccount } from './supabase-auth.js';
 import { loadAuthenticationLink, reserveAuthenticationMigration, finishAuthenticationMigration, finishNewAccountAuthentication } from './authentication-migration.js';
@@ -19,10 +20,9 @@ export async function authenticateExistingAccount(env, input) {
     const proof=await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject});
     await finishNewAccountAuthentication(db,{link,proof});return proof;
   }
-  // Migration has no dependency on email delivery.
-  // The window cannot silently reopen after expiration or a configuration typo.
-  const deadline = Date.parse(config.legacyMigrationUntil || '');
-  if (!Number.isFinite(deadline) || deadline <= Date.now()) throw denied();
+  // Admission does not apply to ready provider accounts or new signup. Pausing
+  // migration must never disable the already-migrated login path.
+  requirePasswordMigrationAdmission(config,email);
   const stored = await db.prepare('SELECT email,password_hash,password_salt FROM account_profiles WHERE email=?').bind(email).first();
   if (!stored || !/^[a-f0-9]{64}$/i.test(stored.password_hash || '') || !/^[a-f0-9]{32}$/i.test(stored.password_salt || '')) throw denied();
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stored.password_salt + ':' + password))), x => x.toString(16).padStart(2, '0')).join('');
