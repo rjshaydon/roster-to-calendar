@@ -33,10 +33,15 @@ export function supabaseAuthenticationConfig(env = {}) {
 function credentials(email, password) {
   const normalized = normalizeEmail(email);
   if (!normalized || normalized.length > 254 || !normalized.includes('@') || /[\s\x00-\x1f\x7f]/.test(normalized)
-      || typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 1024) {
+      || typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 72) {
     throw new AuthenticationError('invalid-credentials', 'Check your email and password.', 400);
   }
   return { email: normalized, password };
+}
+
+export function validateNewPassword(password) {
+  if(typeof password!=='string'||password.length<12)throw new AuthenticationError('auth-password','Use a password of at least 12 characters.',400);
+  if(new TextEncoder().encode(password).length>72)throw new AuthenticationError('auth-password','That password is too long. Please use a shorter password.',400);
 }
 
 function userIdentity(value, expected = {}) {
@@ -98,10 +103,15 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
       return null;
     }
     if(response.status===204&&method==='DELETE'){await response.body?.cancel();return null;}
-    if (response.status === 429) throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);
-    if (response.status >= 500) throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');
+    if (response.status === 429) {await response.body?.cancel();throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);}
+    if (response.status >= 500) {await response.body?.cancel();throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');}
     const data = await boundedJson(response);
     if (!response.ok) {
+      if((data?.code==='weak_password'||data?.error_code==='weak_password'||Array.isArray(data?.weak_password?.reasons))
+        &&(path==='user'||path.startsWith('admin/users'))){
+        const error=new AuthenticationError('auth-password-policy','Choose a stronger password of at least 12 characters.',400);
+        error.credentialChangeNotApplied=true;throw error;
+      }
       if (data?.error_code === 'email_not_confirmed' || data?.code === 'email_not_confirmed') {
         throw new AuthenticationError('email-verification-required', 'Confirm your email address before continuing.', 403);
       }
@@ -179,9 +189,10 @@ export async function changeSupabasePassword(env, { email, subject, password, ac
   return identity;
 }
 
-// Only for a caller that has atomically consumed the app's emailed invitation
-// token. That token proves email ownership; legacy password possession does not.
-export async function acceptSupabaseInvitation(env, { email, subject, password }) {
+// Internal privileged mutation: only after atomically consuming an invitation,
+// or verifying the old app password and reserving an explicit stronger
+// replacement for its pending migration. Never use email/name matching as authorization.
+export async function setSupabasePasswordAfterApprovedProof(env, { email, subject, password }) {
   credentials(email, password);
   if (!UUID.test(subject || '')) throw new AuthenticationError('auth-request','Invalid invitation.',400);
   const current=await getSupabaseMigrationUser(env,{email,subject});

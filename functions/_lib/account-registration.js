@@ -1,9 +1,11 @@
+import {credentialProof} from './account-credential-change.js';
 import { normalizeEmail } from './email.js';
-import { AuthenticationError, supabaseAuthenticationConfig, getSupabaseMigrationUser, createSupabaseMigrationUser, preconfirmProvisionedAccount, signInWithSupabasePassword } from './supabase-auth.js';
+import { AuthenticationError, supabaseAuthenticationConfig, getSupabaseMigrationUser, createSupabaseMigrationUser, preconfirmProvisionedAccount, signInWithSupabasePassword,validateNewPassword } from './supabase-auth.js';
 import { loadAuthenticationLink, finishNewAccountAuthentication } from './authentication-migration.js';
 
 export async function registerAccount(env,{email,password,realName,origin}) {
   const config=supabaseAuthenticationConfig(env),db=env.ROSTER_DB;email=normalizeEmail(email);realName=String(realName||'').trim();
+  validateNewPassword(password);
   if(config.signupEnabled!==true)throw new AuthenticationError('auth-registration-unavailable','Account registration is currently unavailable. Please contact the administrator.');
   if(!email||email.length>254||!email.includes('@')||/[\s\x00-\x1f\x7f]/.test(email)||!realName||realName.length>120||typeof password!=='string'||password.length<12||new TextEncoder().encode(password).length>1024)throw new AuthenticationError('auth-request','Enter your name, email and a password of at least 12 characters.',400);
   if(await db.prepare("SELECT 1 FROM account_auth_deletions WHERE email=? AND phase='queued' LIMIT 1").bind(email).first())throw new AuthenticationError('auth-registration-unavailable','Account registration is currently unavailable. Please contact the administrator.');
@@ -28,12 +30,13 @@ export async function registerAccount(env,{email,password,realName,origin}) {
     link=await loadAuthenticationLink(db,email);
     if(!link||link.phase!=='pending'||link.credential_revision!=='new-account')throw new AuthenticationError('auth-registration-conflict','If you already have an account, sign in or reset your password.',409);
   }
+  if(link.credential_operation_id)throw new AuthenticationError('auth-password-pending','Sign in with your new password to finish the password update.',409);
   const user=await getSupabaseMigrationUser(env,{subject:link.provider_subject,email,allowMissing:true});
   // A retry cannot reset an existing provider password, even if email is still
   // unconfirmed. Email recovery is the explicit way to choose another password.
   if(!user)await createSupabaseMigrationUser(env,{email,subject:link.provider_subject,password,preconfirm:true});
   await preconfirmProvisionedAccount(env,{email,subject:link.provider_subject});
-  const proof=await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject});
+  const proof=credentialProof(await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject}),link);
   await finishNewAccountAuthentication(db,{link,proof});
   return proof;
 }

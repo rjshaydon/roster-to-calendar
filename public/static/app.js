@@ -1821,13 +1821,18 @@ accountsBody.addEventListener("click", (event) => {
     removeLocalAccount(removeButton.dataset.removeAccount);
   }
 });
+function clearLoginPasswordUpgrade() {
+  document.querySelector('#loginPasswordUpgradeField')?.classList.add('hidden');
+  const field=document.querySelector('#loginUpgradePassword');if(field){field.value='';field.required=false;}
+}
+loginEmail.addEventListener('input',clearLoginPasswordUpgrade);
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setEntranceTab("login");
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
-  await loginWithEmail(email, password, { mode: "login", stayLoggedIn: Boolean(stayLoggedIn?.checked) });
+  await loginWithEmail(email, password, { mode: "login", stayLoggedIn: Boolean(stayLoggedIn?.checked), newPassword: document.querySelector('#loginPasswordUpgradeField')?.classList.contains('hidden') ? '' : document.querySelector('#loginUpgradePassword')?.value || '' });
 });
 createAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -17135,6 +17140,7 @@ function openLoginModal(prefillEmail = currentUserEmail || "") {
   forceConsoleSkin();
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
+  clearLoginPasswordUpgrade();
   const stayLoggedInPreference = localStorage.getItem(STAY_LOGGED_IN_PREFERENCE_KEY);
   if (stayLoggedIn) stayLoggedIn.checked = stayLoggedInPreference === null ? false : stayLoggedInPreference === "true";
   document.querySelector('#recoveryRequestForm')?.classList.add('hidden');
@@ -17362,6 +17368,7 @@ function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   const loginStartedAt = performance.now();
+  let requestTransition;
   try {
     beginFacilityOverviewAccountSession();
     currentFacilityOverviewMaintenance = true;
@@ -17386,6 +17393,7 @@ async function loginWithEmail(email, password, options = {}) {
     setActiveCalendarContext(currentUserRole === "creator" ? "creator-account" : "claimed-account", { email: currentUserEmail });
     primeInsightsAccessForCurrentView();
     const transition = beginCalendarTransition();
+    requestTransition = transition;
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     // Do not persist a submitted password before the server chooses the auth mode.
     if (!options.adminTargetEmail) localStorage.setItem(STAY_LOGGED_IN_PREFERENCE_KEY, options.stayLoggedIn ? "true" : "false");
@@ -17395,6 +17403,7 @@ async function loginWithEmail(email, password, options = {}) {
     if (previousEmail !== currentUserEmail) {
       await clearLocalWorkspace();
     }
+    if(!calendarTransitionStillCurrent(transition))return;
     const loginCacheContext = accountCalendarContextForEmail(currentUserEmail);
     const cachedBeforeAuthentication = loadCachedCalendarSnapshotForContext(loginCacheContext);
     const loginData = await restoreCloudState({
@@ -17415,7 +17424,8 @@ async function loginWithEmail(email, password, options = {}) {
       if (options.stayLoggedIn) localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
       else localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
     }
-    loginPassword.value = ''; password = '';
+    loginPassword.value = ''; password = ''; options.newPassword = '';
+    clearLoginPasswordUpgrade();
     renderLoginState();
     closeLoginModal();
     setEntranceStatus("");
@@ -17474,8 +17484,13 @@ async function loginWithEmail(email, password, options = {}) {
       transition,
     }, loginStartedAt);
   } catch (error) {
+    if(requestTransition&&!calendarTransitionStillCurrent(requestTransition))return;
     accountTransport.forget();
-    currentUserPassword = ''; authUserPassword = ''; loginPassword.value = ''; createPassword.value = ''; password = '';
+    const upgradeField=document.querySelector('#loginPasswordUpgradeField');
+    const upgrading=error.code==='auth-password-upgrade-required'||error.code==='auth-password-policy'&&!upgradeField?.classList.contains('hidden');
+    if(upgrading){upgradeField?.classList.remove('hidden');const field=document.querySelector('#loginUpgradePassword');if(field){field.required=true;field.focus();}}
+    currentUserPassword = ''; authUserPassword = ''; if(!upgrading)loginPassword.value = ''; createPassword.value = ''; password = ''; options.newPassword='';
+    const upgradePassword=document.querySelector('#loginUpgradePassword');if(upgradePassword)upgradePassword.value='';
     const message = normalizeAuthMessage(error.message || "Login failed.");
     setEntranceStatus(message, true);
     setStatus(message, true);
@@ -17509,7 +17524,7 @@ async function restoreCloudState(options = {}) {
     const response = await requestAccountLogin({
       action: adminTargetEmail ? "adminLoadUser" : "login",
       email: requestEmail, password: requestPassword, targetEmail: adminTargetEmail,
-      mode: options.mode || "login", responseMode: options.responseMode || "full", remember: options.stayLoggedIn === true,
+      mode: options.mode || "login", responseMode: options.responseMode || "full", remember: options.stayLoggedIn === true, newPassword: options.newPassword || "",
       realName: options.realName || "", cachedRevision: options.cachedRevision || "",
       allowInlineBuild: options.allowInlineBuild !== false,
     });

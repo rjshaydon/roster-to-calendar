@@ -16,7 +16,7 @@ async function credentialRevision(record) {
 }
 
 export async function loadAuthenticationLink(db, email) {
-  return db.prepare('SELECT email, provider, provider_subject, phase, credential_revision FROM account_authentication_links WHERE email = ?')
+  return db.prepare('SELECT email, provider, provider_subject, phase, credential_revision, credential_version, credential_operation_id, credential_target_digest FROM account_authentication_links WHERE email = ?')
     .bind(normalizeEmail(email)).first();
 }
 
@@ -33,7 +33,7 @@ export async function reserveAuthenticationMigration(db, record, options = {}) {
     WHERE email = ? AND password_hash = ? AND password_salt = ?
     ON CONFLICT(email) DO NOTHING`)
     .bind(subject, revision, now, now, email, record.passwordHash, record.passwordSalt).run();
-  const link = await db.prepare(`SELECT l.email, l.provider, l.provider_subject, l.phase, l.credential_revision
+  const link = await db.prepare(`SELECT l.email, l.provider, l.provider_subject, l.phase, l.credential_revision, l.credential_version, l.credential_operation_id, l.credential_target_digest
     FROM account_authentication_links l JOIN account_profiles a ON a.email = l.email
     WHERE l.email = ? AND a.password_hash = ? AND a.password_salt = ?`)
     .bind(email, record.passwordHash, record.passwordSalt).first();
@@ -59,18 +59,20 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
   await db.batch([
     db.prepare(`UPDATE account_authentication_links SET phase = 'ready', updated_at = ?
       WHERE email = ? AND provider_subject = ? AND credential_revision = ? AND phase = 'pending'
+      AND credential_version=? AND credential_operation_id=?
       AND EXISTS (SELECT 1 FROM account_profiles WHERE email = ? AND password_hash = ? AND password_salt = ?)`)
-      .bind(now, email, reservation.provider_subject, reservation.credential_revision, email, record.passwordHash, record.passwordSalt),
+      .bind(now, email, reservation.provider_subject, reservation.credential_revision, proof.credentialVersion ?? 0, proof.credentialOperationId || '', email, record.passwordHash, record.passwordSalt),
     db.prepare(`UPDATE account_profiles SET password_hash = '', password_salt = '', updated_at = ?
       WHERE email = ? AND password_hash = ? AND password_salt = ?
       AND EXISTS (SELECT 1 FROM account_authentication_links WHERE email = ? AND provider_subject = ?
-        AND credential_revision = ? AND phase = 'ready')`)
-      .bind(now, email, record.passwordHash, record.passwordSalt, email, reservation.provider_subject, reservation.credential_revision),
+        AND credential_revision = ? AND phase = 'ready' AND credential_version=? AND credential_operation_id=?)`)
+      .bind(now, email, record.passwordHash, record.passwordSalt, email, reservation.provider_subject, reservation.credential_revision, proof.credentialVersion ?? 0, proof.credentialOperationId || ''),
   ]);
   const finalized = await db.prepare(`SELECT l.provider_subject FROM account_authentication_links l
     JOIN account_profiles a ON a.email = l.email WHERE l.email = ? AND l.provider_subject = ?
-    AND l.credential_revision = ? AND l.phase = 'ready' AND a.password_hash = '' AND a.password_salt = ''`)
-    .bind(email, reservation.provider_subject, reservation.credential_revision).first();
+    AND l.credential_revision = ? AND l.phase = 'ready' AND a.password_hash = '' AND a.password_salt = ''
+    AND l.credential_version=? AND l.credential_operation_id=?`)
+    .bind(email, reservation.provider_subject, reservation.credential_revision, proof.credentialVersion ?? 0, proof.credentialOperationId || '').first();
   if (!finalized) throw new AuthenticationError('auth-migration-conflict', 'The account changed during its upgrade. Please sign in again.', 409);
   return { email, subject: finalized.provider_subject, ready: true };
 }
@@ -78,9 +80,9 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
 export async function finishNewAccountAuthentication(db,{link,proof}) {
   if(link?.credential_revision!=='new-account'||link.provider_subject!==proof?.subject||link.email!==normalizeEmail(proof?.email)||proof.emailVerified!==true||proof.disabled===true)throw new AuthenticationError('auth-identity-mismatch','The account could not be verified.');
   await db.prepare(`UPDATE account_authentication_links SET phase='ready',updated_at=? WHERE email=? AND provider_subject=?
-    AND credential_revision='new-account' AND phase='pending' AND EXISTS
+    AND credential_revision='new-account' AND phase='pending' AND credential_version=? AND credential_operation_id=? AND EXISTS
     (SELECT 1 FROM account_profiles WHERE email=? AND password_hash='' AND password_salt='')`)
-    .bind(new Date().toISOString(),link.email,link.provider_subject,link.email).run();
+    .bind(new Date().toISOString(),link.email,link.provider_subject,proof.credentialVersion ?? 0,proof.credentialOperationId || '',link.email).run();
   const ready=await loadAuthenticationLink(db,link.email);
-  if(ready?.phase!=='ready'||ready.provider_subject!==link.provider_subject)throw new AuthenticationError('auth-migration-conflict','The account changed. Please sign in again.',409);
+  if(ready?.phase!=='ready'||ready.provider_subject!==link.provider_subject||ready.credential_version!==(proof.credentialVersion ?? 0)||ready.credential_operation_id!==(proof.credentialOperationId || ''))throw new AuthenticationError('auth-migration-conflict','The account changed. Please sign in again.',409);
 }

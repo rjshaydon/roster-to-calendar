@@ -58,6 +58,10 @@
                 <button type="button" class="password-reveal" data-password-visibility-toggle="loginPassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
+            <label id="loginPasswordUpgradeField" class="field hidden">
+              <span>New password</span>
+              <input id="loginUpgradePassword" type="password" autocomplete="new-password" minlength="12" placeholder="Choose a password of at least 12 characters">
+            </label>
             <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox"> Keep me signed in on this device</label>
             <button type="submit" class="button button-primary">Log in</button>
             <button id="requestPasswordRecovery" type="button" class="button button-secondary hidden">Forgot password?</button>
@@ -711,6 +715,6 @@
         }
       }
     </script>
-    <script type="module" src="/static/app.js?v=20261016-account-session1"></script>
+    <script type="module" src="/static/app.js?v=20261017-account-review1"></script>
   </body>
 </html>

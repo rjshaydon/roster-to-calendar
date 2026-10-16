@@ -21,6 +21,7 @@ globalThis.fetch=async(url,init)=>{
  const path=new URL(url).pathname,body=init.body?JSON.parse(init.body):{};providerCalls.push({path,method:init.method});
  if(path==='/auth/v1/admin/users'&&init.method==='POST'){
   assert.equal(body.email_confirm,true,'signup/migration preconfirm without sending mail');
+  if(body.password.length<6)return Response.json({code:'weak_password'},{status:422});
   if([...users.values()].some(u=>u.email===body.email))return Response.json({code:'email_exists'},{status:422});
   const user={id:body.id,email:body.email,email_confirmed_at:new Date().toISOString()};users.set(user.id,{...user,password:body.password});return Response.json(user);
  }
@@ -80,6 +81,20 @@ try{
  const stolenCookie=signup.cookie;await signup.transport.logout();
  const replay=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:stolenCookie},body:JSON.stringify({action:'loadAccountContext'})});
  assert.equal((await stateRoute({request:replay,env,data:{stateAction:'loadAccountContext'}})).status,401);
+ // Only incompatible legacy passwords need an inline upgrade. The old proof
+ // must be valid, and only the replacement reaches provider credential storage.
+ for(const [i,legacyPassword] of ['four','🔐'.repeat(19)].entries()){
+  const upgradeEmail='upgrade-'+i+'@example.test',upgradeSalt='e'.repeat(32);
+  const oldHash=createHash('sha256').update(upgradeSalt+':'+legacyPassword).digest('hex');
+  sql.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,'Upgrade Person','user',?,?,'upgrade-feed')").run(upgradeEmail,oldHash,upgradeSalt);
+  const upgrade=browser();const needed=await upgrade.send({action:'login',email:upgradeEmail,password:legacyPassword,responseMode:'fast'});
+  assert.equal(needed.status,409);assert.equal((await needed.json()).code,'auth-password-upgrade-required');
+  assert.equal(sql.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(upgradeEmail).password_hash,oldHash);
+  const upgraded=await upgrade.send({action:'login',email:upgradeEmail,password:legacyPassword,newPassword:'Stronger replacement password',responseMode:'fast'});
+  assert.equal(upgraded.status,200);assert.equal(upgrade.transport.validated(),true);
+  assert.equal(sql.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(upgradeEmail).password_hash,'');
+  assert.equal(upgrade.calls.at(-1).body.newPassword,undefined,'replacement is not repeated in state/calendar bodies');
+ }
  assert.equal(providerCalls.some(c=>c.path.includes('generate_link')||c.path.includes('verify')),false,'no confirmation or recovery operations on signup/migration');
  console.log('Connected auth journeys passed: password login -> migration -> cookie -> account/calendar envelope; no-mail signup -> cookie -> envelope; unchanged reads without provider work/writes; migration pause preserves ready users; logout replay denied. No external services.');
 }finally{globalThis.fetch=oldFetch;sql.close();}

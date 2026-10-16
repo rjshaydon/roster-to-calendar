@@ -1,4 +1,4 @@
-import {allowLegacyStateDuringRollout} from '../_lib/authentication-rollout.js';
+import {allowLegacyStateDuringRollout,requireLegacyCredentialNotPending} from '../_lib/authentication-rollout.js';
 import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
 import { registerAccount } from '../_lib/account-registration.js';
 import { reserveAccountEmailCapacity } from '../_lib/account-email.js';
@@ -9,7 +9,7 @@ import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
 import {legacyCoverageKey,legacyHistoryIsCovered} from '../_lib/legacy-calendar-coverage.js';
 import {normalizeEmail} from "../_lib/email.js";
 import { AuthenticationError } from '../_lib/supabase-auth.js';
-import { accountSessionsEnabled, hasSessionCookie, readAccountSession, requireSameOrigin, requireRecentAuthentication } from '../_lib/account-sessions.js';
+import { accountSessionsEnabled, hasSessionCookie, readAccountSession, requireExpectedAccount, requireSameOrigin, requireRecentAuthentication } from '../_lib/account-sessions.js';
 export {normalizeEmail} from "../_lib/email.js";
 import {identityTermHistory} from '../_lib/identity-term-history.js';
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
@@ -260,6 +260,7 @@ async function cookieAccountForRequest(context, body) {
   requireSameOrigin(context.request);
   if(!hasCalendarDb(context.env))throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
   const session = await readAccountSession(context.env.ROSTER_DB, context.request);
+  requireExpectedAccount(session,body.expectedAccount);
   if (body.email && normalizeEmail(body.email) !== session.email) {
     throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
   }
@@ -285,7 +286,7 @@ async function handleCalendarEventsRequest(context){
     const email=cookieAccount?.record.email||normalizeEmail(body.email),password=String(body.password||'');
     if(!email)return Response.json({error:'Email address is required.'},{status:400});
     if(!hasCalendarDb(context.env))return Response.json({error:'D1 database is not configured.'},{status:503});
-    const account=cookieAccount||await verifyD1Account(context.env.ROSTER_DB,email,password),targetEmail=normalizeEmail(body.targetEmail);
+    const account=cookieAccount||await verifyD1Account(context.env.ROSTER_DB,email,password,{secureAuthentication:accountSessionsEnabled(context.env)}),targetEmail=normalizeEmail(body.targetEmail);
     const targetRecord=targetEmail&&['creator','owner'].includes(account.role)?await loadAccountMirror(context.env.ROSTER_DB,targetEmail):account.record;
     const prepared=await prepareLightweightAccountResponse(targetRecord,{db:context.env.ROSTER_DB,includeImportRefs:false,recordStateCurrent:true,calendarOnly:true});
     const range=boundedCalendarEventRange(body),params={targetRecord,prepared,startDate:range.startDate,endDate:range.endDate,doctorKey:normalizeRosterName(body.doctorKey||''),cachedRevision:body.cachedRevision||'',allowInlineBuild:body.allowInlineBuild!==false,skipRebuild:body.skipRebuild===true,diagnosticsRequested:body.diagnostics===true,reason:'loadCalendarEvents'};
@@ -363,7 +364,7 @@ async function handleAccountContextRequest(context) {
   const account = await cookieAccountForRequest(context, body);
   const email=normalizeEmail(body.email);
   if(!account&&!email)return Response.json({error:'Email address is required.'},{status:400});
-  const verified=account||await verifyD1Account(context.env.ROSTER_DB,email,String(body.password||''));
+  const verified=account||await verifyD1Account(context.env.ROSTER_DB,email,String(body.password||''),{secureAuthentication:accountSessionsEnabled(context.env)});
   return accountContextResponse(context, verified, normalizeEmail(body.targetEmail));
 }
 
@@ -602,7 +603,7 @@ async function handleAccountStateRequest(context) {
     }
 
     if(action==='identity' && context.env.IDENTITY_REVIEW_ENABLED!=='true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
-    const account = cookieAccount || await verifyD1Account(context.env.ROSTER_DB, email, password);
+    const account = cookieAccount || await verifyD1Account(context.env.ROSTER_DB, email, password,{secureAuthentication:accountSessionsEnabled(context.env)});
     if (action === 'identity') {
       if (!['creator','owner'].includes(account.role)) return Response.json({error:'Creator access is required.'},{status:403});
       if (context.env.IDENTITY_REVIEW_ENABLED !== 'true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
@@ -3049,6 +3050,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
     if(options.secureAuthentication)throw new AuthenticationError("auth-upgrade-required","Please use the updated sign-in.",409);
     throw new Error("Incorrect password.");
   }
+  if(options.secureAuthentication)await requireLegacyCredentialNotPending(db,email);
   const ok = await verifyPassword(password, existing.passwordSalt, existing.passwordHash);
   if (!ok) {
     throw new Error("Incorrect password.");
@@ -3071,11 +3073,12 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
   };
 }
 
-async function verifyD1Account(db, email, password) {
+async function verifyD1Account(db, email, password, options = {}) {
   const record = await loadAccountMirror(db, email);
   if (!record?.passwordHash || !record?.passwordSalt) {
     throw new Error("Account not found.");
   }
+  if(options.secureAuthentication)await requireLegacyCredentialNotPending(db,email);
   const ok = await verifyPassword(password, record.passwordSalt, record.passwordHash);
   if (!ok) {
     throw new Error("Incorrect password.");

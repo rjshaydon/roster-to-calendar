@@ -31,3 +31,8 @@ export function allowLegacyStateDuringRollout(env,request,body) {
   const emails=cohort(config),email=normalizeEmail(body?.email);
   return Boolean(emails&&email&&!emails.has(email));
 }
+
+export async function requireLegacyCredentialNotPending(db,email) {
+  const link=await db.prepare('SELECT credential_operation_id FROM account_authentication_links WHERE email=?').bind(normalizeEmail(email)).first();
+  if(link?.credential_operation_id)throw new AuthenticationError('auth-upgrade-required','Sign in with your new password to finish the account upgrade.',409);
+}

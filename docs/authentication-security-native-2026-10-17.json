@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-17",
+  "compatibilityDate": "2026-04-22",
+  "scope": "Synthetic disposable D1 only; no staff, real provider credentials or email",
+  "beforeD1TriggerCountCorrection": {
+    "status": 503,
+    "ok": false,
+    "code": "auth-password-pending"
+  },
+  "afterCorrection": {
+    "status": 200,
+    "ok": true,
+    "nativeD1": true,
+    "sessionRevocationAtomic": true,
+    "oldProofDenied": true,
+    "pendingIssuanceDenied": true,
+    "oldCookieDenied": true,
+    "resetRetired": true,
+    "invitationRetired": true,
+    "newVersionAccepted": true,
+    "noProviderCalls": true
+  },
+  "cleanup": {
+    "workerDeleted": true,
+    "databaseDeleted": true
+  },
+  "limitations": [
+    "No actual Supabase calls in this native probe.",
+    "No full-route CPU distribution or phone/Citrix acceptance is claimed.",
+    "Provider-proof lifecycle and races were tested with actual local schema/handlers and closed mocked provider responses."
+  ]
+}

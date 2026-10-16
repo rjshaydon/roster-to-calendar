@@ -22,6 +22,15 @@ export function requireSameOrigin(request) {
   }
 }
 
+// An assertion from the client, never account authority. Shared browser cookies
+// may change before another tab receives its storage notification.
+export function requireExpectedAccount(session,expected) {
+  if(expected===undefined)return;
+  if(typeof expected!=='string'||!expected||normalizeEmail(expected)!==session.email) {
+    throw new AuthenticationError('auth-identity-mismatch','The signed-in account changed. Please sign in again.',403);
+  }
+}
+
 export function hasSessionCookie(request) {
   return (request.headers.get('Cookie') || '').split(';').some(part => part.trim().split('=')[0] === SESSION_COOKIE);
 }
@@ -52,7 +61,7 @@ export function clearSessionCookie() { return `${SESSION_COOKIE}=; Path=/; Secur
 
 // Called only after server-side authentication. The caller never accepts a
 // browser-supplied provider subject or authentication timestamp as proof.
-export async function issueAccountSession(db, { email, subject, persistent = false }, options = {}) {
+export async function issueAccountSession(db, { email, subject, persistent = false, credentialVersion = 0 }, options = {}) {
   email = normalizeEmail(email);
   if (!email || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(subject || '')) throw expired();
   const now = time(options), token = Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join('');
@@ -60,8 +69,8 @@ export async function issueAccountSession(db, { email, subject, persistent = fal
   const results = await db.batch([
     db.prepare(`INSERT INTO account_sessions(token_hash,email,authenticated_at,idle_expires_at,absolute_expires_at,renew_after,persistent)
       SELECT ?,a.email,?,?,?,?,? FROM account_profiles a JOIN account_authentication_links l ON l.email=a.email
-      WHERE a.email=? AND l.provider_subject=? AND l.phase='ready' AND a.password_hash='' AND a.password_salt=''`)
-      .bind(hash, now, now + SESSION_IDLE_MS, now + SESSION_OUTER_MS, now + SESSION_RENEW_MS, persistent ? 1 : 0, email, subject),
+      WHERE a.email=? AND l.provider_subject=? AND l.phase='ready' AND a.password_hash='' AND a.password_salt='' AND l.credential_version=? AND l.credential_operation_id=''`)
+      .bind(hash, now, now + SESSION_IDLE_MS, now + SESSION_OUTER_MS, now + SESSION_RENEW_MS, persistent ? 1 : 0, email, subject, credentialVersion),
     db.prepare(`DELETE FROM account_sessions WHERE email=? AND token_hash IN
       (SELECT token_hash FROM account_sessions WHERE email=? AND token_hash<>? ORDER BY authenticated_at DESC,token_hash DESC LIMIT -1 OFFSET ?)`)
       .bind(email, email, hash, MAX_SESSIONS - 1),

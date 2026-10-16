@@ -1,12 +1,14 @@
+import {applyCredentialChange,beginCredentialChange} from '../../_lib/account-credential-change.js';
+import {loadAuthenticationLink} from '../../_lib/authentication-migration.js';
 import { acceptAccountInvitation } from '../../_lib/account-invitations.js';
 import { finishAccountAuthenticationDeletion } from '../../_lib/account-auth-deletions.js';
 import { registerAccount } from '../../_lib/account-registration.js';
 import { sendAccountEmailProof, completeAccountEmailProof } from '../../_lib/account-email.js';
-import { AuthenticationError, changeSupabasePassword } from '../../_lib/supabase-auth.js';
+import { AuthenticationError, changeSupabasePassword, validateNewPassword } from '../../_lib/supabase-auth.js';
 import { authenticateExistingAccount } from '../../_lib/account-authentication.js';
 import { normalizeEmail } from '../../_lib/email.js';
 import {
-  accountSessionsEnabled, requireSameOrigin, issueAccountSession, readAccountSession,
+  accountSessionsEnabled, requireSameOrigin, requireExpectedAccount, issueAccountSession, readAccountSession,
   renewAccountSession, revokeAccountSession, revokeOtherAccountSessions, clearSessionCookie, hasSessionCookie, requireRecentAuthentication,
 } from '../../_lib/account-sessions.js';
 
@@ -67,7 +69,7 @@ export async function onRequestPost(context) {
       const email=normalizeEmail(body.email);if(!email||email.length>254)throw new AuthenticationError('auth-request','Check your email address.',400);
       await admit(context.env,email);
       const proof=await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin});
-      const issued=await issueAccountSession(db,{email:proof.email,subject:proof.subject,persistent:body.remember===true});
+      const issued=await issueAccountSession(db,{email:proof.email,subject:proof.subject,credentialVersion:proof.credentialVersion,persistent:body.remember===true});
       if(hasSessionCookie(context.request)){try{await revokeAccountSession(db,await readAccountSession(db,context.request));}catch(error){if(error?.code!=='auth-session-expired')throw error;}}
       return reply({ok:true,email:issued.email},200,issued.setCookie);
     }
@@ -95,10 +97,11 @@ export async function onRequestPost(context) {
       let oldSession;
       if (action === 'reauthenticate') {
         oldSession = await readAccountSession(db, context.request);
+        requireExpectedAccount(oldSession,body.expectedAccount);
         if (email !== oldSession.email) throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
       }
-      const proof = await authenticateExistingAccount(context.env, { email, password: body.password });
-      const issued = await issueAccountSession(db, { email: proof.email, subject: proof.subject, persistent: body.remember === true });
+      const proof = await authenticateExistingAccount(context.env, { email, password: body.password, newPassword: body.newPassword });
+      const issued = await issueAccountSession(db, { email: proof.email, subject: proof.subject, credentialVersion: proof.credentialVersion, persistent: body.remember === true });
       if (!oldSession && hasSessionCookie(context.request)) {
         try { oldSession = await readAccountSession(db, context.request); }
         catch(error) { if(error?.code!=='auth-session-expired')throw error; }
@@ -110,12 +113,13 @@ export async function onRequestPost(context) {
       // An expired/invalid cookie may always be cleared locally, but cannot
       // select an account or revoke anybody else's sessions.
       if (hasSessionCookie(context.request)) {
-        try { await revokeAccountSession(db, await readAccountSession(db, context.request)); }
+        try { const current=await readAccountSession(db, context.request); requireExpectedAccount(current,body.expectedAccount); await revokeAccountSession(db,current); }
         catch (error) { if (error.code !== 'auth-session-expired') throw error; }
       }
       return reply({ ok: true }, 200, clearSessionCookie());
     }
     const session = await readAccountSession(db, context.request);
+    requireExpectedAccount(session,body.expectedAccount);
     if (action === 'retryAuthenticationDeletion') {
       if(!['creator','owner'].includes(session.role))throw new AuthenticationError('auth-forbidden','Creator access is required.',403);
       requireRecentAuthentication(session);
@@ -124,12 +128,24 @@ export async function onRequestPost(context) {
     }
     if (action === 'changePassword') {
       await admit(context.env,session.email);
-      if(typeof body.newPassword!=='string'||body.newPassword.length<12||new TextEncoder().encode(body.newPassword).length>1024)throw new AuthenticationError('auth-password','Use a password of at least 12 characters.',400);
+      validateNewPassword(body.newPassword);
       const proof=await authenticateExistingAccount(context.env,{email:session.email,password:body.currentPassword});
-      // A provider timeout must not leave pre-change app sessions authorized.
-      await db.prepare('DELETE FROM account_sessions WHERE email=?').bind(session.email).run();
-      await changeSupabasePassword(context.env,{email:session.email,subject:proof.subject,password:body.newPassword,accessToken:proof.accessToken});
-      const issued=await issueAccountSession(db,{email:session.email,subject:proof.subject,persistent:session.persistent===1});
+      const link=await loadAuthenticationLink(db,session.email);
+      if(link?.credential_version!==proof.credentialVersion)throw new AuthenticationError('auth-session-expired','Please sign in again.',401);
+      const operation=await beginCredentialChange(context.env,link,body.newPassword);
+      let changed;
+      try{changed=await applyCredentialChange(context.env,operation,body.newPassword,
+        ()=>changeSupabasePassword(context.env,{email:session.email,subject:proof.subject,password:body.newPassword,accessToken:proof.accessToken}));}
+      catch(error){
+        if(error.credentialChangeNotApplied===true){
+          // The original password proof remains valid only at this operation's
+          // exact cancelled version, never at a later competing change.
+          const retained=await issueAccountSession(db,{email:session.email,subject:proof.subject,credentialVersion:operation.credential_version+1,persistent:session.persistent===1});
+          return reply({error:error.message,code:error.code},error.status||503,retained.setCookie);
+        }
+        throw error;
+      }
+      const issued=await issueAccountSession(db,{email:session.email,subject:changed.subject,credentialVersion:changed.credentialVersion,persistent:session.persistent===1});
       return reply({ok:true,email:session.email},200,issued.setCookie);
     }
     if (action === 'status') return reply({ ok: true, email: session.email, role: session.role });

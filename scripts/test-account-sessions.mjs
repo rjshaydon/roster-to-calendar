@@ -15,7 +15,7 @@ const email='person@example.test',other='other@example.test',subject='11111111-2
 const now=Date.now();
 for(const [e,id] of [[email,subject],[other,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee']]){
  sqlite.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,?,'user','','',?)").run(e,'Fixture Person','feed-'+e);
- sqlite.prepare("INSERT INTO account_authentication_links VALUES(?,'supabase',?,'ready','revision','now','now')").run(e,id);
+ sqlite.prepare("INSERT INTO account_authentication_links(email,provider,provider_subject,phase,credential_revision,created_at,updated_at) VALUES(?,'supabase',?,'ready','revision','now','now')").run(e,id);
 }
 const env={ROSTER_DB:db,AUTH_LOGIN_LIMITER:{async limit(){return{success:true};}},ROSTER_AUTH_CONFIG:JSON.stringify({enabled:true,sessionsEnabled:true,url:AUTH_PROJECT_ORIGIN,publishableKey:'sb_publishable_fixture',secretKey:'sb_secret_fixture'})};
 function request(cookie,body={action:'status'},origin='https://app.example.test') {return new Request('https://app.example.test/api/auth/session',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,'Sec-Fetch-Site':'same-origin',...(cookie?{Cookie:cookie.split(';')[0]}:{})},body:JSON.stringify(body)});}
@@ -59,6 +59,15 @@ assert.equal((await stateRoute(context(createReq,rolloutEnv))).status,409,'new-a
 const badCookieRequest=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:SESSION_COOKIE+'=bad'},body:JSON.stringify({action:'loadAccountContext',email:legacyEmail,password:legacyPassword})});
 const badCookieContext=context(badCookieRequest,rolloutEnv);badCookieContext.data.stateAction='loadAccountContext';
 assert.equal((await stateRoute(badCookieContext)).status,401,'non-cohort users cannot downgrade an invalid cookie');
+// Cohort compatibility must not resurrect an old password while its account
+// has an authorized reset/upgrade pending at the provider.
+sqlite.prepare("INSERT INTO account_authentication_links(email,provider,provider_subject,phase,credential_revision,created_at,updated_at,credential_version,credential_operation_id) VALUES(?,'supabase','99999999-1111-4222-8333-444444444444','pending','revision','now','now',1,'pending-fixture')").run(legacyEmail);
+for(const action of ['login','loadAccountContext','loadCalendarEvents']){
+ const req=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json'},body:JSON.stringify({action,email:legacyEmail,password:legacyPassword,responseMode:'fast'})});
+ const c=context(req,rolloutEnv);c.data.stateAction=action;
+ const response=await stateRoute(c);assert.equal(response.status,409,'pending reset closes old-password compatibility: '+action);
+ assert.equal((await response.json()).code,'auth-upgrade-required');
+}
 const first=await issueAccountSession(db,{email,subject,persistent:true},{now});
 assert.match(first.setCookie,/^__Host-roster_session=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
 const token=first.setCookie.split(';')[0].split('=')[1];
@@ -98,6 +107,17 @@ const badState=new Request('https://app.example.test/api/state',{method:'POST',h
 assert.equal((await stateRoute(context(badState))).status,401,'bad cookie must not fall back to a supplied password');
 const forgedActor=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:first.setCookie.split(';')[0]},body:JSON.stringify({action:'loadAccountContext',email:other})});
 assert.equal((await stateRoute(context(forgedActor))).status,403,'body email cannot replace cookie actor');
+// A shared cookie may belong to a different account before a storage event.
+const mismatchBody={action:'loadAccountContext',expectedAccount:other};
+const mismatchRequest=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:first.setCookie.split(';')[0]},body:JSON.stringify(mismatchBody)});
+const mismatchContext=context(mismatchRequest);mismatchContext.data.stateAction='loadAccountContext';
+const mismatchResponse=await stateRoute(mismatchContext);assert.equal(mismatchResponse.status,403);assert.equal((await mismatchResponse.json()).code,'auth-identity-mismatch');
+for(const action of ['status','activity','logout','signOutOtherDevices']){
+ const denied=await sessionRoute(context(request(first.setCookie,{action,expectedAccount:other})));
+ assert.equal(denied.status,403,'wrong tab expectation cannot act on a different account: '+action);
+ assert.equal(denied.headers.has('Set-Cookie'),false,'mismatch must not clear another account cookie');
+ assert.equal((await readAccountSession(db,request(first.setCookie))).email,email);
+}
 const currentRole=await readAccountSession(db,request(first.setCookie));
 
 const second=await issueAccountSession(db,{email,subject,persistent:false},{now:now+1});

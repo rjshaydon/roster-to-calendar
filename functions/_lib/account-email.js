@@ -1,7 +1,8 @@
+import {applyCredentialChange,beginCredentialChange} from './account-credential-change.js';
 import { normalizeEmail } from './email.js';
 import { guardedFetch } from './outbound-network.js';
-import { AuthenticationError, supabaseAuthenticationConfig, generateSupabaseEmailProof, verifySupabaseEmailProof, changeSupabasePassword, signInWithSupabasePassword, getSupabaseMigrationUser, createSupabaseMigrationUser } from './supabase-auth.js';
-import { loadAuthenticationLink, reserveAuthenticationMigration, finishAuthenticationMigration, finishNewAccountAuthentication } from './authentication-migration.js';
+import { AuthenticationError, supabaseAuthenticationConfig, generateSupabaseEmailProof, verifySupabaseEmailProof, changeSupabasePassword, getSupabaseMigrationUser, createSupabaseMigrationUser,validateNewPassword } from './supabase-auth.js';
+import { loadAuthenticationLink, reserveAuthenticationMigration } from './authentication-migration.js';
 
 async function digest(value) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), x=>x.toString(16).padStart(2,'0')).join(''); }
 function deliveryConfig(env) {
@@ -72,21 +73,16 @@ export async function completeAccountEmailProof(env,{id,token,newPassword}) {
     .bind(id,await digest(token),now).first();
   if(!challenge)throw new AuthenticationError('auth-email-invalid','This link is invalid or has expired. Request a new one.',400);
   if(challenge.purpose==='recovery'&&(typeof newPassword!=='string'||newPassword.length<12||new TextEncoder().encode(newPassword).length>1024))throw new AuthenticationError('auth-password','Use a password of at least 12 characters.',400);
+  if(challenge.purpose==='recovery')validateNewPassword(newPassword);
   const link=await loadAuthenticationLink(db,challenge.email);
   if(!link||link.provider_subject!==challenge.provider_subject)throw new AuthenticationError('auth-email-invalid','This link is no longer valid. Request a new one.',409);
   const claim=await db.prepare(`UPDATE account_email_challenges SET phase='using' WHERE id=? AND phase='issued' AND expires_at>?`).bind(id,now).run();
   if(Number(claim.meta?.changes)!==1)throw new AuthenticationError('auth-email-invalid','This link has already been used. Request a new one.',409);
   const proof=await verifySupabaseEmailProof(env,{email:challenge.email,subject:link.provider_subject,tokenHash:token,type:challenge.verification_type});
   if(challenge.purpose==='recovery'){
-    // Revoke first, including when provider mutation has an uncertain outcome.
-    await db.prepare('DELETE FROM account_sessions WHERE email=?').bind(challenge.email).run();
-    await changeSupabasePassword(env,{email:challenge.email,subject:link.provider_subject,password:newPassword,accessToken:proof.accessToken});
-    const verified=await signInWithSupabasePassword(env,{email:challenge.email,password:newPassword,expectedSubject:link.provider_subject});
-    if(link.phase==='pending'&&link.credential_revision==='new-account')await finishNewAccountAuthentication(db,{link,proof:verified});
-    else if(link.phase==='pending'){
-      const record=await db.prepare('SELECT email,password_hash,password_salt FROM account_profiles WHERE email=?').bind(challenge.email).first();
-      await finishAuthenticationMigration(db,{reservation:link,record:{email:record?.email,passwordHash:record?.password_hash,passwordSalt:record?.password_salt},proof:verified});
-    }
+    const operation=await beginCredentialChange(env,link,newPassword);
+    await applyCredentialChange(env,operation,newPassword,
+      ()=>changeSupabasePassword(env,{email:challenge.email,subject:link.provider_subject,password:newPassword,accessToken:proof.accessToken}));
   }
   await db.prepare(`UPDATE account_email_challenges SET phase='complete' WHERE id=? AND phase='using'`).bind(id).run();
   // Email proofs never become an application session. Explicit password sign-in

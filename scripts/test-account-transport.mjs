@@ -55,4 +55,31 @@ for(const informed of [false,true]){
  assert.equal((await response.json()).state.calendar,'fixture');assert.equal(transport.validated(),true);
  assert.equal(sequence.filter(x=>x.url==='/api/auth/session').length,1,'no extra login after signup');
 }
+// Explicit auth completions must not overwrite a newer selected account.
+{
+ const pending=new Map(),signals=new Map(),stateRequests=[],cleanup=[];
+ const arrived=email=>new Promise(r=>signals.set(email,r));
+ const transport=createAccountTransport({persistentStorage:store(),tabStorage:store(),fetchImpl:async(url,init={})=>{
+  if(url.includes('?options'))return Response.json({enabled:true});
+  const b=JSON.parse(init.body);
+  if(url==='/api/auth/session'&&b.action==='login'){signals.get(b.email)?.();return new Promise(r=>pending.set(b.email,r));}
+  if(url==='/api/auth/session'){cleanup.push(b);return Response.json({ok:true});}
+  stateRequests.push(b);return Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.options();
+ const firstArrival=arrived('first@example.test');
+ const first=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'first@example.test',password:'fixture'})});await firstArrival;
+ const secondArrival=arrived('second@example.test');
+ const second=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'second@example.test',password:'fixture'})});await secondArrival;
+ pending.get('second@example.test')(Response.json({ok:true,email:'second@example.test'}));assert.equal((await second).status,200);
+ pending.get('first@example.test')(Response.json({ok:true,email:'first@example.test'}));assert.equal((await first).status,401);
+ assert.equal(transport.email(),'second@example.test');assert.equal(stateRequests.length,1);
+ assert.equal(stateRequests[0].expectedAccount,'second@example.test');assert.deepEqual(cleanup,[{action:'logout',expectedAccount:'first@example.test'}],'stale Set-Cookie is cleaned up only under its exact account expectation');
+ // Logout during another in-flight authentication cannot restore a local hint.
+ const thirdArrival=arrived('third@example.test');
+ const third=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'third@example.test',password:'fixture'})});await thirdArrival;
+ await transport.logout();pending.get('third@example.test')(Response.json({ok:true,email:'third@example.test'}));
+ assert.equal((await third).status,401);assert.equal(transport.expected(),false);
+ assert.equal(cleanup.at(-1).expectedAccount,'third@example.test');
+}
 console.log('Browser account transport passed: one-time upgrade, no routine passwords/preflights/storage rewrites, cookie hints require validation, Creator target separation, coalesced foreground activity, recent-auth preservation, logout/expiry and stale-response/other-tab isolation.');
