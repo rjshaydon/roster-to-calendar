@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <meta name="referrer" content="no-referrer">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Roster Converter</title>
     <meta name="theme-color" content="#6f61f6">
@@ -57,10 +58,23 @@
                 <button type="button" class="password-reveal" data-password-visibility-toggle="loginPassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
-            <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox" checked> Stay logged in?</label>
+            <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox"> Keep me signed in on this device</label>
             <button type="submit" class="button button-primary">Log in</button>
+            <button id="requestPasswordRecovery" type="button" class="button button-secondary hidden">Forgot password?</button>
           </form>
 
+          <form id="recoveryRequestForm" class="entrance-form hidden">
+            <div class="section-head"><h2>Reset password</h2><p>We will email you a one-time link.</p></div>
+            <label class="field"><span>Email address</span><input id="recoveryEmail" type="email" autocomplete="email" required></label>
+            <button type="submit" class="button button-primary">Email reset link</button>
+            <button type="button" class="button button-secondary" data-return-to-login>Back to log in</button>
+          </form>
+          <form id="accountEmailActionForm" class="entrance-form hidden">
+            <div class="section-head"><h2 id="accountEmailActionTitle">Confirm email</h2><p id="accountEmailActionHelp">Confirm your address, then sign in.</p></div>
+            <label id="recoveryNewPasswordField" class="field hidden"><span>New password</span><input id="recoveryNewPassword" type="password" autocomplete="new-password" minlength="12"></label>
+            <button id="completeAccountEmailAction" type="submit" class="button button-primary">Confirm email</button>
+            <button type="button" class="button button-secondary" data-return-to-login>Back to log in</button>
+          </form>
           <form id="createAccountForm" class="entrance-form hidden" data-entrance-panel="create" role="tabpanel" aria-labelledby="createTabButton">
             <div class="section-head">
               <h2>Create account</h2>
@@ -77,7 +91,7 @@
             <label class="field">
               <span>Password</span>
               <span class="password-input-wrap">
-                <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+                <input id="createPassword" type="password" autocomplete="new-password" minlength="12" required placeholder="At least 12 characters">
                 <button type="button" class="password-reveal" data-password-visibility-toggle="createPassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
@@ -91,7 +105,7 @@
             <label class="field">
               <span>New password</span>
               <span class="password-input-wrap">
-                <input id="invitePassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+                <input id="invitePassword" type="password" autocomplete="new-password" minlength="12" required placeholder="At least 12 characters">
                 <button type="button" class="password-reveal" data-password-visibility-toggle="invitePassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
@@ -697,6 +711,6 @@
         }
       }
     </script>
-    <script type="module" src="/static/app.js?v=20261015-startup-clock1"></script>
+    <script type="module" src="/static/app.js?v=20261016-account-session1"></script>
   </body>
 </html>

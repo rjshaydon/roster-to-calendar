@@ -20,8 +20,10 @@ export async function loadAuthenticationLink(db, email) {
     .bind(normalizeEmail(email)).first();
 }
 
-// Caller must already have verified the submitted password. This is an internal
-// coordination primitive, not a public API that accepts client-supplied records.
+// Internal coordination primitive; never accept browser-supplied records.
+// Password migration verifies the submitted password first. Bounded recovery
+// may instead reserve before email proof, but can only create an undisclosed
+// random provider password and cannot retire credentials without verified proof.
 export async function reserveAuthenticationMigration(db, record, options = {}) {
   const email = normalizeEmail(record?.email); oldCredential(email, record);
   const revision = await credentialRevision(record), subject = crypto.randomUUID(), now = options.now || new Date().toISOString();
@@ -71,4 +73,14 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
     .bind(email, reservation.provider_subject, reservation.credential_revision).first();
   if (!finalized) throw new AuthenticationError('auth-migration-conflict', 'The account changed during its upgrade. Please sign in again.', 409);
   return { email, subject: finalized.provider_subject, ready: true };
+}
+
+export async function finishNewAccountAuthentication(db,{link,proof}) {
+  if(link?.credential_revision!=='new-account'||link.provider_subject!==proof?.subject||link.email!==normalizeEmail(proof?.email)||proof.emailVerified!==true||proof.disabled===true)throw new AuthenticationError('auth-identity-mismatch','The account could not be verified.');
+  await db.prepare(`UPDATE account_authentication_links SET phase='ready',updated_at=? WHERE email=? AND provider_subject=?
+    AND credential_revision='new-account' AND phase='pending' AND EXISTS
+    (SELECT 1 FROM account_profiles WHERE email=? AND password_hash='' AND password_salt='')`)
+    .bind(new Date().toISOString(),link.email,link.provider_subject,link.email).run();
+  const ready=await loadAuthenticationLink(db,link.email);
+  if(ready?.phase!=='ready'||ready.provider_subject!==link.provider_subject)throw new AuthenticationError('auth-migration-conflict','The account changed. Please sign in again.',409);
 }

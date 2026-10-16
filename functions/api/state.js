@@ -1,3 +1,7 @@
+import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
+import { registerAccount } from '../_lib/account-registration.js';
+import { reserveAccountEmailCapacity } from '../_lib/account-email.js';
+import { finishAccountAuthenticationDeletion } from '../_lib/account-auth-deletions.js';
 import { loadRosterComparison, loadRosterComparisonDoctors } from '../_lib/roster-comparison.js';
 import { comparisonWorkingEvent } from '../../public/static/comparison-policy.js';
 import {loadCalendarPresentationInputs} from '../_lib/d1-calendar.js';
@@ -234,10 +238,13 @@ export async function onRequestGet(context) {
 export async function onRequestPost(context) {
   try {
     const response = context.data?.stateAction === 'loadCalendarEvents'
-      ? await handleCalendarEventsRequest(context) : await handleAccountStateRequest(context);
+      ? await handleCalendarEventsRequest(context)
+      : context.data?.stateAction === 'loadAccountContext' && accountSessionsEnabled(context.env)
+        ? await handleAccountContextRequest(context) : await handleAccountStateRequest(context);
     if (!context.data?.cookieAccount) return response;
     const headers = new Headers(response.headers);
     headers.set('Cache-Control', 'no-store'); headers.set('Vary', 'Cookie');
+    headers.set('X-Roster-Authentication', 'cookie');
     return new Response(response.body, { status: response.status, headers });
   } catch (error) {
     if (!(error instanceof AuthenticationError)) throw error;
@@ -246,8 +253,10 @@ export async function onRequestPost(context) {
 }
 
 async function cookieAccountForRequest(context, body) {
-  if (!accountSessionsEnabled(context.env) || !hasSessionCookie(context.request)) return null;
+  if (!accountSessionsEnabled(context.env)) return null;
+  if (!hasSessionCookie(context.request)) throw new AuthenticationError('auth-session-expired','Please sign in again using the updated app.',401);
   requireSameOrigin(context.request);
+  if(!hasCalendarDb(context.env))throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
   const session = await readAccountSession(context.env.ROSTER_DB, context.request);
   if (body.email && normalizeEmail(body.email) !== session.email) {
     throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
@@ -286,6 +295,72 @@ async function handleCalendarEventsRequest(context){
     const message=error.message||'Calendar request failed.',failure=classifyD1Failure(message);
     return Response.json(failure?{error:failure.message,errorType:failure.errorType,phase:String(context.data?.d1OperationPhase||'')}:{error:message},{status:failure?503:message==='Incorrect password.'||message.startsWith('Account not found')?401:400});
   }
+}
+
+// Keep this common startup path out of the large mutation dispatcher. The
+// cookie verifier and the response builder remain shared with the legacy path.
+function contextMaterializedAccessFor(env, actor, subject) {
+  return facilityLegacyReadsPaused(env)
+    || (String(env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || '').toLowerCase() === 'true'
+      && facilityAccessMaterializedForRecords(env, actor, subject));
+}
+
+async function accountContextResponse(context, account, targetEmail) {
+  const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
+    ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
+    : account.record;
+  if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
+  const targetClaims = sanitizeClaims(targetRecord.claims);
+  const discoveryEnabled = identityDiscoveryEnabled(context.env);
+  const targetRole = targetRecord.role || roleForEmail(targetRecord.email);
+  const creatorStartupContained = (targetRole === "creator" || targetRole === "owner")
+    && !creatorStartupHydrationEnabled(context.env);
+  const prepared = creatorStartupContained
+    ? await prepareFastLoginEnvelope(targetRecord, {
+        db: context.env.ROSTER_DB,
+        identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
+        facilityAccessMaterialized: contextMaterializedAccessFor(context.env, account.record, targetRecord),
+      })
+    : await prepareAccountContextResponse(targetRecord, {
+        db: context.env.ROSTER_DB,
+        identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
+        r2: context.env.ROSTER_FILES,
+        facilityAccessMaterialized: contextMaterializedAccessFor(context.env, account.record, targetRecord),
+        includeAvailableDoctors: targetRole === "creator"
+          || targetRole === "owner"
+          || !targetClaims.length,
+      });
+  return Response.json({
+    ok: true,
+    responseMode: "context",
+    claims: prepared.claims,
+    role: prepared.role,
+    realName: prepared.realName,
+    subscription: prepared.subscription,
+    insightsEnabled: prepared.insightsEnabled,
+    facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+    facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
+    facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+    onShiftForAllEnabled: onShiftForAllEnabled(context.env),
+    facilityOverviewAccess: prepared.facilityOverviewAccess,
+    nonClinical: prepared.nonClinical,
+    directorViewEnabled: prepared.directorViewEnabled,
+    nameMatches: prepared.nameMatches,
+    suggestedClaims: prepared.nameMatches,
+    availableDoctors: prepared.availableDoctors,
+    issueConfig: prepared.issueConfig,
+    identityDiscoveryUnavailable: prepared.identityDiscoveryUnavailable ?? !discoveryEnabled,
+    advancedRosterMaintenanceEnabled: advancedRosterMaintenanceEnabled(context.env),
+    creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
+  });
+}
+
+async function handleAccountContextRequest(context) {
+  const body = await context.request.json().catch(() => null);
+  if (body?.action !== 'loadAccountContext') return Response.json({ error: 'Invalid account action.' }, { status: 400 });
+  const account = await cookieAccountForRequest(context, body);
+  // This fast route is selected only when cookie authentication is enabled.
+  return accountContextResponse(context, account, normalizeEmail(body.targetEmail));
 }
 
 async function handleAccountStateRequest(context) {
@@ -328,6 +403,15 @@ async function handleAccountStateRequest(context) {
     if (action === "queryFacilityOverviewContactList" && body?.contactAccessToken) {
       return refreshPublishedFacilityContactsWithToken(context, body);
     }
+    // Keep provider password verification out of the calendar/envelope request.
+    // Old clients get a closed upgrade path; the new transport exchanges once
+    // then repeats this request using the HttpOnly cookie.
+    if (action === 'acceptInvite' && accountSessionsEnabled(context.env))return Response.json({error:'Please use the updated invitation flow.',code:'auth-upgrade-required'},{status:409,headers:{'Cache-Control':'no-store'}});
+    if (action === 'login' && accountSessionsEnabled(context.env) && (!hasSessionCookie(context.request) || Boolean(body?.password))) {
+      return Response.json({ error: 'Please use the updated sign-in.', code: 'auth-upgrade-required' }, { status: 409, headers: { 'Cache-Control': 'no-store' } });
+    }
+    if(accountSessionsEnabled(context.env)&&!hasSessionCookie(context.request))throw new AuthenticationError('auth-session-expired','Please sign in again using the updated app.',401);
+
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const cookieAccount = await cookieAccountForRequest(context, body || {});
     email = cookieAccount?.record.email || email;
@@ -791,11 +875,14 @@ async function handleAccountStateRequest(context) {
       if (!targetPassword) {
         return Response.json({ error: "New account password is required." }, { status: 400 });
       }
-      const created = await loadOrCreateD1Account(context.env.ROSTER_DB, targetEmail, targetPassword, {
-        mode: "create",
-        realName: targetRealName,
-        nonClinical,
-        directorViewEnabled,
+      let created;
+      if(accountSessionsEnabled(context.env)){
+        await registerAccount(context.env,{email:targetEmail,password:targetPassword,realName:targetRealName,origin:new URL(context.request.url).origin});
+        const record=await loadAccountMirror(context.env.ROSTER_DB,targetEmail);
+        created={record:{...record,nonClinical,directorViewEnabled}};
+        await upsertAccountMirror(context.env.ROSTER_DB,created.record,{syncClaims:false,syncState:false,syncLocations:false,syncSubscription:false});
+      }else created = await loadOrCreateD1Account(context.env.ROSTER_DB, targetEmail, targetPassword, {
+        mode: "create", realName: targetRealName, nonClinical, directorViewEnabled,
       });
       const discoveryEnabled = identityDiscoveryEnabled(context.env);
       const createdRecord = directorViewEnabled ? { ...created.record, facilityOverviewEnabled: true } : created.record;
@@ -841,6 +928,7 @@ async function handleAccountStateRequest(context) {
       if (!targetEmail || !targetRealName) {
         return Response.json({ error: "An invited user's name and email are required." }, { status: 400 });
       }
+      if(accountSessionsEnabled(context.env))await reserveAccountEmailCapacity(context.env);
       let existing = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       const pendingProvisionedInvite = existing
         ? await context.env.ROSTER_DB.prepare(`
@@ -873,7 +961,7 @@ async function handleAccountStateRequest(context) {
       `).bind(tokenHash, targetEmail, account.record.email, createdAccount ? 1 : 0, expiresAt, now.toISOString(), now.toISOString()).run();
       const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
       if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
-      const inviteUrl = `${new URL(context.request.url).origin}/?invite=${encodeURIComponent(token)}`;
+      const inviteUrl = `${new URL(context.request.url).origin}/${accountSessionsEnabled(context.env) ? "#" : "?"}invite=${encodeURIComponent(token)}`;
       const send = await guardedFetch(context.env, "https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": postmarkToken },
@@ -1011,53 +1099,7 @@ async function handleAccountStateRequest(context) {
     }
 
     if (action === "loadAccountContext") {
-      const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
-        ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
-        : account.record;
-      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const targetClaims = sanitizeClaims(targetRecord.claims);
-      const discoveryEnabled = identityDiscoveryEnabled(context.env);
-      const targetRole = targetRecord.role || roleForEmail(targetRecord.email);
-      const creatorStartupContained = (targetRole === "creator" || targetRole === "owner")
-        && !creatorStartupHydrationEnabled(context.env);
-      const prepared = creatorStartupContained
-        ? await prepareFastLoginEnvelope(targetRecord, {
-            db: context.env.ROSTER_DB,
-            identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
-            facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
-          })
-        : await prepareAccountResponse(null, targetRecord, {
-            db: context.env.ROSTER_DB,
-            identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
-            r2: context.env.ROSTER_FILES,
-            facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
-            includeAvailableDoctors: targetRole === "creator"
-              || targetRole === "owner"
-              || !targetClaims.length,
-          });
-      return Response.json({
-        ok: true,
-        responseMode: "context",
-        claims: prepared.claims,
-        role: prepared.role,
-        realName: prepared.realName,
-        subscription: prepared.subscription,
-        insightsEnabled: prepared.insightsEnabled,
-        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
-        facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
-        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
-        facilityOverviewAccess: prepared.facilityOverviewAccess,
-        nonClinical: prepared.nonClinical,
-        directorViewEnabled: prepared.directorViewEnabled,
-        nameMatches: prepared.nameMatches,
-        suggestedClaims: prepared.nameMatches,
-        availableDoctors: prepared.availableDoctors,
-        issueConfig: prepared.issueConfig,
-        identityDiscoveryUnavailable: prepared.identityDiscoveryUnavailable ?? !discoveryEnabled,
-        advancedRosterMaintenanceEnabled: advancedRosterMaintenanceEnabled(context.env),
-        creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
-      });
+      return accountContextResponse(context, account, targetEmail);
     }
 
     if (action === "claimRosterName") {
@@ -1852,13 +1894,15 @@ async function handleAccountStateRequest(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const record = await loadAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
-      await deleteAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
+      if(accountSessionsEnabled(context.env))await deleteAccountMirror(context.env.ROSTER_DB, deleteEmail);
+      else await deleteAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
+      const authenticationCleanup=accountSessionsEnabled(context.env)?await finishAccountAuthenticationDeletion(context.env,deleteEmail):{pending:false};
       await deleteSnapshotRegistryEntriesForOwner(context.env.ROSTER_DB, "user-account", deleteEmail).catch(() => null);
       await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "user-account", deleteEmail).catch(() => null);
       await deleteSnapshotRegistryEntriesForOwner(context.env.ROSTER_DB, "claimed-account", deleteEmail).catch(() => null);
       await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "claimed-account", deleteEmail).catch(() => null);
       await clearDeletedAccountClaimMetadata(context.env.ROSTER_DB, deleteEmail, record);
-      return Response.json({ ok: true, deletedEmail: deleteEmail });
+      return Response.json({ ok: true, deletedEmail: deleteEmail, authenticationCleanupPending: authenticationCleanup.pending });
     }
 
     if (action === "saveSessionSettings") {
@@ -4044,6 +4088,35 @@ async function applySqlHospitalLocationSettings(db, email, state) {
   };
 }
 
+// loadAccountContext does not return a calendar/session/import payload. Preparing
+// those here repeats parsing and profile/repository work only to discard it.
+// Keep identity matching and permissions identical to the full account envelope.
+export async function prepareAccountContextResponse(rawRecord, options = {}) {
+  let record = await ensureAccountSubscriptionToken(null, rawRecord);
+  const role = record.role || roleForEmail(record.email);
+  let claims = sanitizeClaims(record.claims), nameMatches = [];
+  const published = options.identityDiscoveryEnabled === true && record.nonClinical !== true
+    && ((role !== 'creator' && role !== 'owner') || options.includeAvailableDoctors !== false)
+    ? options.publishedDirectory || await publishedIdentityDirectory(options.r2, australianDateKey()) : { preparing: true, doctors: [] };
+  if(role !== 'creator' && role !== 'owner') {
+    record = await automaticallyLinkClearRosterName(options.db, record, published, options.identityReviewEnabled === true);
+    claims = sanitizeClaims(record.claims);
+    const matches = await availableIdentitySuggestions(options.db, matchDoctorClaims(published.doctors, record.realName || '', record.email), record.email);
+    nameMatches = matches.filter(claim => !claims.some(existing => sameClaim(existing, claim)));
+  }
+  const accessClaims = options.identityReviewEnabled ? await accountIdentityAliases(options.db, record.email, claims) : claims;
+  return {
+    role, realName: record.realName || '', claims, nameMatches,
+    subscription: { token: String(record.subscriptionToken || ''), enabled: Boolean(record.subscriptionToken) },
+    insightsEnabled: insightsEnabledForRecord(record), facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    facilityOverviewAccess: await resolveFacilityOverviewAccess(options.db, { ...record, role, claims: accessClaims }, { materializedOnly: options.facilityAccessMaterialized === true }),
+    nonClinical: record.nonClinical === true, directorViewEnabled: directorViewEnabledForRecord(record),
+    issueConfig: await buildIssueConfig(null, record.email, options.db, record),
+    identityDiscoveryUnavailable: options.identityDiscoveryEnabled !== true || published.preparing,
+    availableDoctors: options.includeAvailableDoctors === false || options.identityDiscoveryEnabled !== true || record.nonClinical === true ? [] : published.doctors,
+  };
+}
+
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let record = await ensureAccountSubscriptionToken(store, rawRecord);
   if (options.allowAutomaticRepair === true && record?.subscriptionToken && record.subscriptionToken !== rawRecord?.subscriptionToken) {
@@ -5340,9 +5413,9 @@ function latestCustomEventsByIdentity(events) {
   return [...byIdentity.values()];
 }
 
-async function buildIssueConfig(store, email = "", db = null) {
+async function buildIssueConfig(store, email = "", db = null, knownRecord = null) {
   const globalParserExtensions = await loadD1ParserExtensionRules(db);
-  const record = email
+  const record = knownRecord && normalizeEmail(knownRecord.email) === normalizeEmail(email) ? knownRecord : email
     ? await loadAccountMirror(db, email).catch(() => null)
     : null;
   const role = record?.role || roleForEmail(email);
@@ -7574,18 +7647,6 @@ function findmyshiftDiagnosticTermRange(env) {
   };
 }
 
-let australianDateFormatter;
-function australianDateKey(now = new Date()) {
-  australianDateFormatter ||= new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Melbourne",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = australianDateFormatter.formatToParts(now);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
 
 function firstMondayDateKey(year, monthIndex) {
   const date = new Date(Date.UTC(year, monthIndex, 1));

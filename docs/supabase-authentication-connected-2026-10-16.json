@@ -1,0 +1,227 @@
+{
+  "date": "2026-10-16",
+  "scope": "Synthetic accounts only; no staff, real email or production D1",
+  "providerLifecycle": {
+    "results": [
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "create",
+        "exactUnconfirmed": true,
+        "noEmailSent": true
+      },
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "confirm",
+        "confirmed": true,
+        "noEmailSent": true
+      },
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "password",
+        "passwordAccepted": true,
+        "noEmailSent": true
+      },
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "recover",
+        "replacementAccepted": true,
+        "oldPasswordDenied": true,
+        "reusedProofDenied": true,
+        "noEmailSent": true
+      },
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "invite",
+        "invitePasswordAccepted": true,
+        "noEmailSent": true
+      },
+      {
+        "status": 200,
+        "ok": true,
+        "stage": "cleanup",
+        "fixtureRemoved": true,
+        "noEmailSent": true
+      }
+    ]
+  },
+  "providerMetrics": {
+    "metrics": [
+      {
+        "metric": "wallTime",
+        "value": 116
+      },
+      {
+        "metric": "cpuTime",
+        "value": 2
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      },
+      {
+        "metric": "wallTime",
+        "value": 528
+      },
+      {
+        "metric": "cpuTime",
+        "value": 2
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      },
+      {
+        "metric": "wallTime",
+        "value": 112
+      },
+      {
+        "metric": "cpuTime",
+        "value": 1
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      },
+      {
+        "metric": "wallTime",
+        "value": 502
+      },
+      {
+        "metric": "cpuTime",
+        "value": 5
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      },
+      {
+        "metric": "wallTime",
+        "value": 244
+      },
+      {
+        "metric": "cpuTime",
+        "value": 3
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      },
+      {
+        "metric": "wallTime",
+        "value": 60
+      },
+      {
+        "metric": "cpuTime",
+        "value": 2
+      },
+      {
+        "metric": "outcome",
+        "value": "ok"
+      }
+    ]
+  },
+  "initialScale": {
+    "groups": [
+      {
+        "users": 100,
+        "requests": 200,
+        "failures": 0,
+        "statements": 895,
+        "rowsRead": 1391,
+        "rowsWritten": 400,
+        "maxContextRowsRead": 7,
+        "contextWrites": 0,
+        "p50ContextWallMs": 254,
+        "p95ContextWallMs": 299
+      },
+      {
+        "users": 500,
+        "requests": 1000,
+        "failures": 0,
+        "statements": 4495,
+        "rowsRead": 7195,
+        "rowsWritten": 2000,
+        "maxContextRowsRead": 7,
+        "contextWrites": 0,
+        "p50ContextWallMs": 251,
+        "p95ContextWallMs": 427
+      }
+    ]
+  },
+  "clockOnlyScale": {
+    "groups": [
+      {
+        "users": 100,
+        "requests": 200,
+        "failures": 0,
+        "statements": 895,
+        "rowsRead": 1895,
+        "rowsWritten": 400,
+        "maxContextRowsRead": 7,
+        "contextWrites": 0,
+        "p50ContextWallMs": 225,
+        "p95ContextWallMs": 328
+      }
+    ]
+  },
+  "minimalContextScale": {
+    "groups": [
+      {
+        "users": 100,
+        "requests": 200,
+        "failures": 0,
+        "statements": 499,
+        "rowsRead": 1898,
+        "rowsWritten": 400,
+        "maxContextRowsRead": 4,
+        "contextWrites": 0,
+        "p50ContextWallMs": 113,
+        "p95ContextWallMs": 169
+      }
+    ]
+  },
+  "finalDedicatedContextScale": {
+    "groups": [
+      {
+        "users": 100,
+        "requests": 200,
+        "failures": 0,
+        "statements": 499,
+        "rowsRead": 2198,
+        "rowsWritten": 400,
+        "maxContextRowsRead": 4,
+        "contextWrites": 0,
+        "p50ContextWallMs": 124,
+        "p95ContextWallMs": 172
+      }
+    ]
+  },
+  "finalCapturedCpu": {
+    "captured": 28,
+    "p50CpuMs": 2,
+    "p95CpuMs": 7,
+    "maxCpuMs": 9,
+    "over10ms": 0,
+    "nonOkOutcomes": 0
+  },
+  "clockEquivalence": {
+    "ok": true,
+    "clockSamples": 10,
+    "meter": {
+      "statements": 0,
+      "rowsRead": 0,
+      "rowsWritten": 0
+    }
+  },
+  "limitations": [
+    "Native tails are sampled, not an exhaustive trace of every request.",
+    "Synthetic profiles do not measure real roster loading, dense identity matching, or phone browser behavior.",
+    "Final context run used 100 users; the earlier 500-user run predates the focused optimization.",
+    "Issue-session writes include indexed session-cap maintenance; ordinary context reads write nothing."
+  ]
+}

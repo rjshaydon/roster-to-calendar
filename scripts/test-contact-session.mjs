@@ -59,6 +59,7 @@ const context = vm.createContext({
    contactAccessToken:`token-${renewals}`,contactList:state.contactList}};
  }
 });
+context.accountFetch=(...args)=>context.fetch(...args);context.hasAccountAuthentication=value=>Boolean(value);
 vm.runInContext(extract('facilityOverviewContactRefreshIsActive'),context);
 vm.runInContext(extract('loadFacilityOverviewOnShift'),context);
 vm.runInContext(extract('refreshFacilityOverviewContactList'),context);

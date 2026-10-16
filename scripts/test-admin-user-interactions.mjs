@@ -16,6 +16,7 @@ const context=vm.createContext({
   setStatus(){},fetch(url,options){return new Promise(resolve=>pending.push({resolve,body:JSON.parse(options.body)}));},
   async readJsonResponse(response){if(response.error)throw new Error(response.error);return response;},
 });
+context.accountFetch=(...args)=>context.fetch(...args);
 vm.runInContext(section('function filterAdminUserCards()', 'function renderAccountsModal(')+section('function applyAdminPermissionChoice(', 'async function setUserInsightsEnabled('),context);
 context.filterAdminUserCards();
 assert.equal(cards[0].classList.hidden,false,'surname search matches locally');
@@ -69,6 +70,7 @@ const loading=vm.createContext({
   fetch(){return new Promise(resolve=>loads.push(resolve));},async readJsonResponse(r){if(r.error)throw Error(r.error);return r;},
   calendarLoadResponseIsRetryable:async()=>false,applyAuthoritativeAvailableDoctors(){},applyIssueConfig(){},syncAccountsButton(){},
 });
+loading.hasAccountAuthentication=value=>Boolean(value);loading.accountFetch=(...args)=>loading.fetch(...args);
 vm.runInContext(section('async function loadServerUsers()', 'function adminParserSurfaceReady'),loading);
 await loading.loadServerUsers();assert.equal(loads.length,0);assert.equal(loading.serverUsersLoaded,false);
 loading.cloudAvailable=true;
@@ -94,6 +96,7 @@ assert.match(source.slice(source.indexOf('function renderLoginState()'),source.i
 const recoveryCalls=[];
 let replies=[];
 const recovery=vm.createContext({fetch:async(url,options)=>{recoveryCalls.push(JSON.parse(options.body));return replies.shift();}});
+recovery.accountFetch=(...args)=>recovery.fetch(...args);
 vm.runInContext(section('async function requestAccountLogin(', 'async function restoreCloudState(')+section('async function calendarLoadResponseIsRetryable(', 'function cloudCalendarEventRange('),recovery);
 const reply=(status,payload={})=>({status,ok:status===200,clone:()=>({json:async()=>payload})});
 replies=[reply(503),reply(200)];

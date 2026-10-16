@@ -75,7 +75,7 @@ async function boundedJson(response) {
   } finally { reader.releaseLock(); }
 }
 
-async function providerRequest(env, path, { admin = false, method = 'POST', body, allowMissing = false } = {}) {
+async function providerRequest(env, path, { admin = false, method = 'POST', body, allowMissing = false, accessToken } = {}) {
   const config = supabaseAuthenticationConfig(env);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -86,7 +86,7 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
       // Workers supports manual redirect handling, not redirect: 'error'.
       // Never forward credentials to a Location supplied by the provider.
       method, redirect: 'manual', signal: controller.signal,
-      headers: { apikey: admin ? config.secretKey : config.publishableKey, 'Content-Type': 'application/json' },
+      headers: { apikey: admin ? config.secretKey : config.publishableKey, 'Content-Type': 'application/json', ...(accessToken ? { Authorization: 'Bearer ' + accessToken } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }, { label: 'Supabase authentication' });
     if (response.status >= 300 && response.status < 400) {
@@ -97,6 +97,7 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
       await response.body?.cancel();
       return null;
     }
+    if(response.status===204&&method==='DELETE'){await response.body?.cancel();return null;}
     if (response.status === 429) throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);
     if (response.status >= 500) throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');
     const data = await boundedJson(response);
@@ -149,4 +150,49 @@ export async function getSupabaseMigrationUser(env, { subject, email, allowMissi
   const data = await providerRequest(env, 'admin/users/' + subject, { admin: true, method: 'GET', allowMissing });
   if (data === null && allowMissing) return null;
   return userIdentity(data, { email, subject });
+}
+
+export async function generateSupabaseEmailProof(env, { email, subject, type }) {
+  if (!UUID.test(subject || '') || !['magiclink', 'recovery'].includes(type)) throw new AuthenticationError('auth-request', 'Invalid verification request.', 400);
+  const data = await providerRequest(env, 'admin/generate_link', { admin: true, body: { email: normalizeEmail(email), type } });
+  userIdentity(data, { email, subject });
+  if (data.verification_type !== type || !/^[A-Za-z0-9_-]{32,256}$/.test(data.hashed_token || '')) throw new AuthenticationError('auth-provider-response', 'Authentication returned an invalid response.');
+  return { tokenHash: data.hashed_token, type };
+}
+
+export async function verifySupabaseEmailProof(env, { email, subject, tokenHash, type }) {
+  if (!UUID.test(subject || '') || !['magiclink', 'recovery'].includes(type) || !/^[A-Za-z0-9_-]{32,256}$/.test(tokenHash || '')) throw new AuthenticationError('auth-request', 'Invalid verification link.', 400);
+  const data = await providerRequest(env, 'verify', { body: { token_hash: tokenHash, type } });
+  const identity = userIdentity(data, { email, subject });
+  if (!identity.emailVerified || identity.disabled || typeof data.access_token !== 'string' || !data.access_token) throw new AuthenticationError('auth-provider-response', 'Authentication returned an invalid response.');
+  // Server-only; the application never exposes the provider session to JS.
+  return { ...identity, accessToken: data.access_token };
+}
+
+export async function changeSupabasePassword(env, { email, subject, password, accessToken }) {
+  credentials(email, password);
+  if (!UUID.test(subject || '') || typeof accessToken !== 'string' || !accessToken || accessToken.length > 16384) throw new AuthenticationError('auth-request', 'Invalid password change.', 400);
+  const data = await providerRequest(env, 'user', { method: 'PUT', accessToken, body: { password } });
+  const identity = userIdentity(data, { email, subject });
+  if (!identity.emailVerified || identity.disabled) throw new AuthenticationError('auth-account-unavailable', 'This account is unavailable.', 403);
+  return identity;
+}
+
+// Only for a caller that has atomically consumed the app's emailed invitation
+// token. That token proves email ownership; legacy password possession does not.
+export async function acceptSupabaseInvitation(env, { email, subject, password }) {
+  credentials(email, password);
+  if (!UUID.test(subject || '')) throw new AuthenticationError('auth-request','Invalid invitation.',400);
+  const current=await getSupabaseMigrationUser(env,{email,subject});
+  if(current.disabled)throw new AuthenticationError('auth-account-unavailable','This account is unavailable.',403);
+  const data=await providerRequest(env,'admin/users/'+subject,{admin:true,method:'PUT',body:{password,email_confirm:true}});
+  const identity=userIdentity(data,{email,subject});
+  if(!identity.emailVerified||identity.disabled)throw new AuthenticationError('auth-provider-response','The invitation could not be verified.');
+  return identity;
+}
+
+export async function deleteSupabaseAccount(env,{email,subject}) {
+  const current=await getSupabaseMigrationUser(env,{email,subject,allowMissing:true});
+  if(!current)return;
+  await providerRequest(env,'admin/users/'+subject,{admin:true,method:'DELETE'});
 }

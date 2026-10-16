@@ -48,6 +48,7 @@ const cachedEntry={
  syncFacilityOverviewNavigationState:noop,form:null,facilityOverviewSection:null,previewSection:null,latestPreview:null,
  openFacilityOverview:async()=>{opened++;},markLoginPhase:noop,
 };
+cachedEntry.accountFetch=(...args)=>cachedEntry.fetch(...args);cachedEntry.hasAccountAuthentication=value=>Boolean(value);
 runInNewContext(`${validate};${section('function requestClinicalStartupShiftWindow(', 'async function loginWithEmail(')};this.validate=validateClaimedAccountCalendarInBackground`,cachedEntry);
 runInNewContext(`${section('function resetFacilityOverviewAccessForEnteredUser(', 'function facilityOverviewTargetEmail(')};${section('function closeFacilityOverview(', 'function cancelFacilityOverviewDataRequest(')};this.reset=resetFacilityOverviewAccessForEnteredUser;this.close=closeFacilityOverview`,cachedEntry);
 cachedEntry.reset();
@@ -81,6 +82,7 @@ const profileGlobals = {
   transition:2,currentFacilityOverviewEnabled:false,sanitizeFacilityOverviewAccess:v=>v,
   applyFacilityOverviewSiteScope:()=>{},markFacilityOverviewAccessReady:()=>{},syncFacilityOverviewAccess:()=>{},console,
 };
+profileGlobals.accountFetch=(...args)=>profileGlobals.fetch(...args);profileGlobals.hasAccountAuthentication=value=>Boolean(value);
 runInNewContext(`${access}; this.loadAccess = loadDoctorProfileFacilityOverviewAccess`,profileGlobals);
 const stale = profileGlobals.loadAccess(profile,{transition:1});
 resolveResponse({facilityOverviewEnabled:true,facilityOverviewAccess:{mode:'all'}});
@@ -106,6 +108,7 @@ const backGlobals = {
   forceCreatorDoctorSession:()=>{},restoreCreatorImportFilesIfNeeded:()=>{},accountCalendarContextForEmail:()=>({}),
   renderCachedCalendarSnapshotForContextAsync:()=>new Promise(()=>{}),
 };
+backGlobals.accountTransport={expected:()=>false};backGlobals.hasAccountAuthentication=value=>Boolean(value);
 runInNewContext(`${back}; this.returnToCreator = returnToCreatorAccount`,backGlobals);
 void backGlobals.returnToCreator({skipOutgoingSave:true});
 assert.equal(closed,true,'Back to creator must immediately close the old overview before waiting for the calendar');

@@ -21,6 +21,7 @@ const g={
  clearCloudLoadedSnapshotFilters:v=>v,clearCloudLoadedSessionFilters:v=>v,currentCalendarSnapshotCacheKey:()=> 'account:DOCTOR',
  saveCalendarSnapshotCacheForContext:()=>persisted++,saveWorkspaceSnapshotForEmail:()=>persisted++,activeWorkspaceOwnerKey:()=> 'user@test',selectedFiles:[],importRefForWorkspace:v=>v,
 };
+g.accountFetch=(...args)=>g.fetch(...args);g.hasAccountAuthentication=value=>Boolean(value);
 runInNewContext(refresh+load+';this.refresh=refreshVisibleRosterView;this.load=loadCloudCalendarEvents;',g);
 for(const target of ['', 'entered-user@test']){
  g.adminViewingEmail=target;

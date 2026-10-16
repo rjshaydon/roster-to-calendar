@@ -1,10 +1,11 @@
+import {loadAccountMirror} from '../functions/_lib/d1-calendar.js';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { SESSION_COOKIE, SESSION_IDLE_MS, SESSION_OUTER_MS, SESSION_RENEW_MS, accountSessionsEnabled, issueAccountSession, readAccountSession, renewAccountSession, revokeAccountSession, revokeOtherAccountSessions, requireRecentAuthentication, requireSameOrigin, cleanExpiredAccountSessions } from '../functions/_lib/account-sessions.js';
 import { onRequestPost as sessionRoute } from '../functions/api/auth/session.js';
-import { onRequestPost as stateRoute } from '../functions/api/state.js';
+import { onRequestPost as stateRoute, prepareAccountResponse, prepareAccountContextResponse } from '../functions/api/state.js';
 import { AUTH_PROJECT_ORIGIN } from '../functions/_lib/supabase-auth.js';
 
 const sqlite=new DatabaseSync(':memory:'); sqlite.exec('PRAGMA foreign_keys=ON');
@@ -22,6 +23,24 @@ function context(req,environment=env){return{request:req,env:environment,data:{}
 assert.equal(accountSessionsEnabled({}),false);
 assert.equal(accountSessionsEnabled({ROSTER_AUTH_CONFIG:'{'}),false);
 assert.equal((await sessionRoute(context(request(null),{ROSTER_DB:{prepare(){throw Error('disabled must not read');}}}))).status,503);
+// Pages reaches the native limiter through a private service binding. Refusal
+// and unavailable admission must precede account/provider work.
+const admissionBody={action:'login',email,password:'fixture-password'};
+for(const [status,expected] of [[429,429],[503,503]]){
+  const before=queries.length;
+  const binding={async fetch(url,options){
+    assert.equal(url,'https://admission.internal/check');
+    assert.match(options.body,/^login:[a-f0-9]{64}$/);
+    assert.equal(options.body.includes(email),false);
+    assert.equal(options.body.includes(admissionBody.password),false);
+    return new Response(null,{status});
+  }};
+  assert.equal((await sessionRoute(context(request(null,admissionBody),{...env,AUTH_LOGIN_LIMITER:binding}))).status,expected);
+  assert.equal(queries.length,before,'refused admission does not read D1');
+}
+const beforeMissingAdmission=queries.length;
+assert.equal((await sessionRoute(context(request(null,admissionBody),{...env,AUTH_LOGIN_LIMITER:undefined}))).status,503);
+assert.equal(queries.length,beforeMissingAdmission);
 const first=await issueAccountSession(db,{email,subject,persistent:true},{now});
 assert.match(first.setCookie,/^__Host-roster_session=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
 const token=first.setCookie.split(';')[0].split('=')[1];
@@ -42,11 +61,21 @@ for(const bad of [first.setCookie.split(';')[0]+'; '+first.setCookie.split(';')[
 assert.throws(()=>requireSameOrigin(request(first.setCookie,{},'https://attacker.test')),e=>e.status===403);
 assert.throws(()=>requireSameOrigin(new Request('http://app.example.test',{method:'POST',headers:{Origin:'http://app.example.test'}})),e=>e.status===403);
 assert.equal((await sessionRoute(context(request(first.setCookie)))).status,200);
+const rawContextAccount=await loadAccountMirror(db,email);
+const fullPrepared=await prepareAccountResponse(null,rawContextAccount,{db,identityDiscoveryEnabled:false});
+const beforeMinimal=queries.length;const minimalPrepared=await prepareAccountContextResponse(rawContextAccount,{db,identityDiscoveryEnabled:false});
+for(const key of ['role','realName','claims','nameMatches','subscription','insightsEnabled','facilityOverviewEnabled','nonClinical','directorViewEnabled','issueConfig','identityDiscoveryUnavailable','availableDoctors'])assert.deepEqual(minimalPrepared[key],fullPrepared[key],'context parity: '+key);
+for(const key of ['mode','isSms','workingToday','facilityKey','today'])assert.equal(minimalPrepared.facilityOverviewAccess[key],fullPrepared.facilityOverviewAccess[key]);
+assert.equal(queries.slice(beforeMinimal).some(q=>/custom_events|account_states|account_hospital_locations/.test(q.sql)),false,'context does not prepare discarded calendar state');
 const privateContextRequest=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:first.setCookie.split(';')[0]},body:JSON.stringify({action:'loadAccountContext',responseMode:'fast'})});
-const privateContextResponse=await stateRoute(context(privateContextRequest));
+const privateContext=context(privateContextRequest);privateContext.data.stateAction='loadAccountContext';
+const privateContextResponse=await stateRoute(privateContext);
 assert.equal(privateContextResponse.status,200,'existing state route accepts a verified cookie without password/email fields');
 assert.equal(privateContextResponse.headers.get('Cache-Control'),'no-store');
 assert.equal((await sessionRoute(context(request(first.setCookie,{},'https://attacker.test')))).status,403);
+const legacyCalendarRequest=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json'},body:JSON.stringify({action:'loadCalendarEvents',email,password:'legacy'})});
+const legacyCalendarContext=context(legacyCalendarRequest);legacyCalendarContext.data.stateAction='loadCalendarEvents';
+const beforeLegacyCalendar=queries.length;assert.equal((await stateRoute(legacyCalendarContext)).status,401);assert.equal(queries.length,beforeLegacyCalendar,'calendar fast path cannot retain legacy routine password authentication');
 const badState=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:SESSION_COOKIE+'=bad'},body:JSON.stringify({action:'loadAccountContext',email,password:'irrelevant'})});
 assert.equal((await stateRoute(context(badState))).status,401,'bad cookie must not fall back to a supplied password');
 const forgedActor=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:first.setCookie.split(';')[0]},body:JSON.stringify({action:'loadAccountContext',email:other})});

@@ -66,3 +66,40 @@ The existing-account authentication coordinator resumes a pending migration by r
 - [Migration patterns](https://supabase.com/docs/guides/platform/migrating-to-supabase/auth0)
 - [Experimental passkey support and confirmed-account requirement](https://supabase.com/docs/guides/auth/passkeys)
 - [Production SMTP requirements](https://supabase.com/docs/guides/auth/auth-smtp)
+
+## Connected implementation checkpoint — 16 October (supersedes earlier pending-code notes)
+
+This larger batch is prepared locally, with production migration still disabled. No production schema changes, app deployment, real staff migration or real email sending occurred. The earlier sections describe historical checkpoints rather than the current code's completeness.
+
+### Implemented together
+
+- Browser account transport exchanges once for an HttpOnly cookie and then removes stored/in-memory passwords. Ordinary state calls carry neither passwords nor a caller-selected actor. Hints require server validation before cached private calendars appear. Stale responses, other-tab changes, explicit logout, expiry and Creator target viewing retain isolation. Foreground activity is coalesced; ordinary requests do not renew or rewrite storage.
+- Confirmation/recovery links use fragments, cleared immediately on entry, digest-only local proof storage and explicit POST consumption. GET/email scanners do not authenticate or change a password. Email confirmation alone cannot retire the old hash or establish a session. Recovery uses verified email plus strong replacement/password proof; uncertainty revokes old app sessions and requires a fresh link.
+- Strong new registration, existing invitations, password change, signing out other devices and provider account deletion are integrated. Signup does not create new legacy hashes. Invitation email proof is consumed before provider mutation; an uncertain result requires a fresh invitation or recovery, rather than permitting replay to reset credentials again. Deletion revokes local access immediately and preserves an exact-subject provider cleanup job before foreign-key cascade. Cleanup is explicit and bounded to five attempts, including delayed expired-invite deletion jobs.
+- Email delivery remains gated and capped to at most 100 reservations/month, with a ten-minute per-recipient/purpose cooldown and a separate bounded signup admission. This cap applies to these new auth/invite paths; it does not establish the actual Postmark account allowance or cover mail sent by other applications. Failed/uncertain sends are not automatically refunded. The user was asked to sign into Postmark; account allowance and real delivery remain unverified.
+- Pages cannot configure the native rate-limit binding directly through the installed Wrangler Pages configuration. A private binding-only `roster-auth-admission` Worker is staged instead. It receives only a hashed identifier, has no public route, secrets or D1, and returned 204/429 in a disposable native probe. The limiter is approximate/location-specific, not a strict global quota; transactional monthly email admission is separate. Missing admission fails closed before D1/provider calls. Production/preview service bindings are prepared in source, not deployed into the app.
+
+### Performance findings and evidence
+
+The real synthetic Supabase lifecycle passed creation, confirmation, password verification, recovery, invitation mutation and cleanup without sending email. Captured CPU was 1–5 ms per stage. This proves API behavior with synthetic email proof, not actual inbox delivery.
+
+The isolated D1 test used 500 synthetic accounts. Initial 100- and 500-user envelopes had no HTTP failures, but sampled account-context traces reached 20 ms. Removing covered-range ICU initialization alone did not resolve every outlier. Account context was also preparing calendar/custom/import state that it did not return and rereading the same account. The context-specific builder preserves returned identity/access fields, omits that work and uses the already verified account record. Finally, the cookie context path was separated from the large mutation dispatcher to avoid cold execution of that dispatcher. Attribution to compilation is an inference from path isolation, not an instrumented V8 profile.
+
+The final 100-user run made 200 requests with no failures. Context reads used at most four rows and zero writes; median/p95 end-to-end context wall time was 124/172 ms. Its 28 sampled native traces had median 2 ms, p95 7 ms, maximum 9 ms and no failed outcomes. This does not prove all future requests or roster-heavy paths remain below the CPU target. The initial 500-user run predates the final optimization; no final 500-user/browser/device acceptance is claimed. Session issuance writes include bounded session-cap maintenance and are separate from ordinary read cost.
+
+The Melbourne clock table is generated from ICU/IANA outside Workers for 2000–2040, with a lazy Intl fallback outside that interval. It matched 92,080 local ICU cases and ten native Cloudflare boundary cases. Regenerate if Melbourne timezone rules change. Sanitized aggregate evidence: `supabase-authentication-connected-2026-10-16.json`. Reproducers prepare disposable artifacts only: `scripts/security/prepare-session-native-validation.mjs` and `prepare-supabase-email-lifecycle.mjs`.
+
+### Verification and cleanup
+
+Authentication foundation, session/coordinator, browser transport, email, lifecycle, clock, bounded identity, Creator containment, cold route imports, clinician/facility access, admin interactions, calendar refresh, clinician switching, unchanged contact session, client request budget, local isolation and syntax checks passed. A local Safari fixture login loaded the shell after applying migrations only to the isolated local database. Full new-cookie real-provider browser acceptance remains pending. The existing unrelated broad `test:fixtures` source-text failure remains as documented above; no all-tests-green claim.
+
+The provider email-lifecycle Worker and synthetic provider fixture were removed. The session test Worker and disposable D1 database `roster-session-native-validation` were successfully deleted. Local development and native trace processes were stopped. The private admission Worker is intentionally retained for the later service binding; it currently receives no production app traffic. Production encrypted configuration remains `enabled:false`.
+
+### Required before activation
+
+1. Check the existing Postmark account allowance and real email delivery with an explicitly approved recipient. Free's published 100/month may constrain hundreds of initial confirmations; do not add a provider or upgrade without a user decision.
+2. Focused High security review of the connected diff, including account ownership, provider/admin changes outside the app, migration races, cleanup/recovery and shared-browser isolation.
+3. Isolated browser acceptance with the new assets, phone/Citrix journeys, and final representative roster-backed workloads. No per-request provider verification or fake provider keepalive traffic.
+4. Prepare a genuinely scoped migration rollout and session-compatible rollback. Current gates are global; there is not yet a per-account canary cohort. Do not enable globally and call that a canary. Migrated blank hashes must never fall back to legacy password initialization.
+5. Resolve Supabase Free inactivity/pause behavior and recovery availability for long-lived app sessions. Active app cookies do not necessarily generate provider traffic; do not assume they prevent provider pause.
+6. Only after these gates: apply additive migrations 0045–0048, stage the compatible app/server release and binding, then explicitly enable the reviewed rollout. Messaging/identity-dispute UI and optional passkey evaluation remain unimplemented Batch 6 scope.

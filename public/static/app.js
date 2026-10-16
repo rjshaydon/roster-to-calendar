@@ -1,3 +1,5 @@
+import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261016-session1';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -45,6 +47,8 @@ function sessionSaveContext(payload = null) {
 }
 function rememberSessionBaseline(session) { persistedSessionBases.set(sessionSaveContext(), JSON.parse(JSON.stringify(session || {}))); }
 
+let pendingAccountEmailAction = takeAccountEmailAction(window.location, window.history);
+let pendingInvitationToken = takeInvitationToken(window.location, window.history);
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
 const entrancePage = document.querySelector("#entrancePage");
@@ -320,6 +324,29 @@ let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || localS
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
 let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
+const accountTransport = createAccountTransport({ persistentStorage: localStorage, tabStorage: sessionStorage,
+  onAuthenticated: clearBrowserPasswordsAfterCookieAuthentication,
+  onExpired: () => { void logoutCurrentUser({ expired: true }); },
+});
+function accountFetch(...args) { return accountTransport.fetch(...args); }
+function hasAccountAuthentication(password = currentUserPassword) { return Boolean(password || accountTransport.expected()); }
+function clearBrowserPasswordsAfterCookieAuthentication(email) {
+  const cleanup = Boolean(currentUserPassword || authUserPassword || accountState.users.some(user => user.password));
+  currentUserPassword = ''; authUserPassword = ''; authUserEmail = normalizeEmail(email);
+  sessionStorage.removeItem(CURRENT_PASSWORD_KEY); localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
+  if (cleanup) {
+    accountState.users = accountState.users.map(user => ({ ...user, password: '' }));
+    localStorage.setItem(ACCOUNT_STATE_KEY, JSON.stringify(accountState));
+  }
+}
+if (accountTransport.expected()) {
+  currentUserEmail = accountTransport.email(); authUserEmail = currentUserEmail; currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+  clearBrowserPasswordsAfterCookieAuthentication(currentUserEmail);
+}
+window.addEventListener('storage', event => { if (event.key === AUTH_NOTICE) accountTransport.notice(event.newValue); });
+for (const type of ['pointerdown','keydown']) document.addEventListener(type, event => {
+  if (event.isTrusted && !document.hidden) void accountTransport.noteActivity();
+}, { passive: true });
 let adminViewingEmail = "";
 let activeDoctorProfile = null;
 let viewedAccountId = normalizeEmail(currentUserEmail);
@@ -1519,8 +1546,12 @@ accountsBody.addEventListener("submit", (event) => {
   const email = formElement.querySelector("[data-account-email]")?.value.trim() || "";
   const realName = formElement.querySelector("[data-account-real-name]")?.value.trim() || "";
   const password = formElement.querySelector("[data-account-password]")?.value || "";
+  const currentPassword = formElement.querySelector("[data-account-current-password]")?.value || "";
   if (!email) return;
-  void updateAccountDetails(email, { password, realName });
+  void updateAccountDetails(email, { password, realName, currentPassword }).finally(() => {
+    const next=formElement.querySelector('[data-account-password]'), current=formElement.querySelector('[data-account-current-password]');
+    if(next)next.value='';if(current)current.value='';
+  });
 });
 accountsBody.addEventListener("change", (event) => {
   const directorHospitalSelect = event.target.closest("[data-director-hospital-preference]");
@@ -1812,16 +1843,17 @@ createAccountForm.addEventListener("submit", async (event) => {
 });
 inviteAccountForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const inviteToken = new URLSearchParams(window.location.search).get("invite") || "";
+  const inviteToken = pendingInvitationToken || "";
   const password = invitePassword?.value || "";
   if (!inviteToken || !password) return;
   setEntranceStatus("Activating your account...");
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "acceptInvite", inviteToken, newPassword: password }),
     });
     const data = await readJsonResponse(response, "Could not activate account.");
+    pendingInvitationToken = null; document.querySelector('#invitePassword').value = '';
     window.history.replaceState({}, "", window.location.pathname);
     await loginWithEmail(data.email, password, { mode: "login", stayLoggedIn: true });
   } catch (error) {
@@ -3230,7 +3262,7 @@ function syncMobileSettingsControls() {
 }
 
 function syncMobileChrome() {
-  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  const loggedIn = Boolean(currentUserEmail && hasAccountAuthentication());
   const mobile = isMobileLayout();
   syncMobileViewportInsets();
   const showBar = loggedIn && mobile && hasCalendarPreview();
@@ -3956,7 +3988,7 @@ async function claimSelectedRosterName(candidateOverride = null) {
   try {
     const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -5058,7 +5090,7 @@ async function hydrateInsightCacheFromServer() {
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -5132,7 +5164,7 @@ async function requestRosterComparison({ kind, feature, query, action, onCached,
   }
   return rosterComparisonCache.request({ owner, kind, feature, query, onCached, leaseQuery, force,
     send: async (payload, cachedRevision, cachedPersonRevisions) => {
-      const response = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' },
+      const response = await accountFetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...payload, action, email, password, targetEmail, comparison: true, cachedRevision, cachedPersonRevisions }) });
       let data;
       try { data = await readJsonResponse(response, 'Could not load this roster comparison.'); }
@@ -5161,7 +5193,7 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -5213,7 +5245,7 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -6489,7 +6521,7 @@ function syncActionState() {
 }
 
 function syncControlBarVisibility() {
-  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  const loggedIn = Boolean(currentUserEmail && hasAccountAuthentication());
   controlBar.classList.toggle("hidden", !loggedIn);
 }
 
@@ -7293,7 +7325,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
 }
 
 async function resolveDoctorAccountForSwitch(doctor) {
-  const response = await fetch("/api/state", {
+  const response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -9153,6 +9185,7 @@ function loadAccountState() {
           realName: "",
           claims: [],
           ...user,
+          password: "",
           email: normalizeEmail(user.email),
           role: user.role || (normalizeEmail(user.email) === OWNER_EMAIL ? "owner" : "user"),
           claims: sanitizeRosterClaims(user.claims),
@@ -9183,12 +9216,12 @@ function ensureLocalAccountLogin(email, password, options = {}) {
     accountState.users.push({
       email,
       realName,
-      password,
+      password: "",
       role: email === OWNER_EMAIL ? "owner" : "user",
       claims: [],
     });
   } else {
-    existing.password = password || existing.password || "";
+    existing.password = "";
     existing.role = existing.role || (email === OWNER_EMAIL ? "owner" : "user");
     if (realName) existing.realName = realName;
   }
@@ -9648,7 +9681,7 @@ async function loadFacilityOverviewMetadata(options = {}) {
     }
     const controller = beginFacilityOverviewDataRequest();
     try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
@@ -10006,7 +10039,7 @@ async function loadFacilityOverviewAvailableTerms() {
   const transition = { runId: calendarTransitionRunId, expectedKey: activeCalendarTransitionKey() };
   const subject = facilityOverviewTargetEmail() || currentUserEmail;
   try {
-    const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
+    const response = await accountFetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "queryFacilityOverviewTerms", email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
     const data = await readJsonResponse(response, "Could not load available roster terms.");
@@ -10578,7 +10611,7 @@ async function loadFacilityOverviewByStream() {
   let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
@@ -10992,7 +11025,7 @@ async function loadFacilityOverviewOnShift({ background = false } = {}) {
   let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: controller.signal,
@@ -11118,7 +11151,7 @@ async function refreshFacilityOverviewContactList() {
   const date = facilityOverviewState.date;
   const facilityKey = facilityOverviewState.facilityKey;
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -11597,13 +11630,13 @@ async function saveFacilityOverviewContactResolution(doctorKey, decision = docto
   facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
   renderFacilityOverview();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "setContactAllocationResolution", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
         facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, contactKey, doctorKey, decision, expectedRevision: Number(existing?.revision || 0) }),
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
     if (data.resolution) {
       const resolutions = (facilityOverviewState.contactList?.resolutions || []).filter((resolution) => resolution.contactKey !== contactKey);
       resolutions.push({ ...data.resolution, ...(data.publicationPending ? { pendingPublication: true } : {}) });
@@ -11681,7 +11714,7 @@ async function loadFacilityOverviewStaff() {
   let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
@@ -12231,7 +12264,7 @@ async function setFacilityOverviewStaffDesignation({ designation = "", sourceTyp
   const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   closeFacilityOverviewStaffDesignationMenu();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "setFacilityStaffDesignation", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
@@ -12253,7 +12286,7 @@ async function clearFacilityOverviewStaffDesignation(designationId) {
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffDesignationMenu();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "clearFacilityStaffDesignation", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
@@ -12275,7 +12308,7 @@ async function setFacilityOverviewStaffSeniorityOverride({ sourceType = "", doct
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffSeniorityMenu();
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "setFacilityStaffSeniorityOverride", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
@@ -12303,7 +12336,7 @@ async function setFacilityOverviewStaffSeniorityOverrides({ seniority = "", useR
   refreshFacilityOverviewStaffContent();
   renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "setFacilityStaffSeniorityOverrides", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
@@ -12497,7 +12530,7 @@ function canUploadRosters() {
 }
 
 function isCreatorAuthenticated() {
-  return normalizeEmail(authUserEmail || currentUserEmail) === OWNER_EMAIL && Boolean(authUserPassword || currentUserPassword);
+  return normalizeEmail(authUserEmail || currentUserEmail) === OWNER_EMAIL && hasAccountAuthentication(authUserPassword || currentUserPassword);
 }
 
 function syncAccountsButton() {
@@ -12608,10 +12641,12 @@ function renderAccountsModal(options = {}) {
         </label>
         <label class="field">
           <span>Password</span>
-          <input type="password" value="${escapeHtml(me.password || "")}" data-account-password placeholder="Update password">
+          ${accountTransport.expected() ? '<input type="password" autocomplete="current-password" data-account-current-password placeholder="Current password (to change password)">' : ''}
+          <input type="password" autocomplete="new-password" value="" data-account-password placeholder="New password">
         </label>
         <div class="modal-actions">
-          <button type="submit" class="button button-primary">Save password</button>
+          <button type="submit" class="button button-primary">Save changes</button>
+          ${accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? '<button type="button" class="button button-secondary" data-signout-other-devices>Sign out other devices</button>' : ''}
           ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
       </form>
@@ -12793,7 +12828,7 @@ function mountAdminIdentityReview() {
   if (!currentIdentityReviewEnabled || !root || root.dataset.mounted) return;
   root.dataset.mounted = 'true';
   mountIdentityReview(root, async(operation,input)=>{
-    const response=await fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input,email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword})});
+    const response=await accountFetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input,email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword})});
     const data=await readJsonResponse(response,'Identity review unavailable.'); if(!response.ok || !data.ok) throw new Error(data.error||'Identity operation failed.'); return data;
   });
 }
@@ -13635,7 +13670,7 @@ async function clearAdminErrors(email, errorId = "") {
   const issueBeforeClear = errorId ? findAdminIssue(email, errorId) : null;
   const issuesBeforeClear = (serverUsers.map(normalizeServerUser).find((item) => item.email === normalizeEmail(email))?.adminIssues || []).map((issue) => issue?.fingerprint).filter(Boolean);
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -13678,7 +13713,7 @@ async function ignoreAdminErrorForever(email, errorId = "") {
     return;
   }
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -13721,7 +13756,7 @@ async function decideParserRuleSuggestion(suggestionId, decision, rule) {
     return;
   }
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14339,7 +14374,7 @@ async function saveParserRuleFromModal() {
   const rule = rules[0];
   try {
     if (saveMode === "local") {
-      const response = await fetch("/api/state", {
+      const response = await accountFetch("/api/state", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -14378,7 +14413,7 @@ async function saveParserRuleFromModal() {
       setStatus("Suggestion overwritten for that user.");
       return;
     }
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14453,7 +14488,7 @@ async function deleteParserRule(source, seniority, code) {
   const confirmed = window.confirm(`Delete the ${rule.source} ${rule.seniority} shift-code rule for ${rule.code}? Roster entries will be rechecked and may return as Unknown.`);
   if (!confirmed) return;
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14487,9 +14522,9 @@ async function deleteParserRule(source, seniority, code) {
 }
 
 async function reportAccountError(issue, errorId = "") {
-  if (!issue?.message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
+  if (!issue?.message || !cloudAvailable || !currentUserEmail || !hasAccountAuthentication()) return;
   try {
-    await fetch("/api/state", {
+    await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14513,15 +14548,21 @@ async function reportAccountError(issue, errorId = "") {
 }
 
 async function updateAccountDetails(email, patch) {
+  if (accountTransport.expected() && patch.password) {
+    if (normalizeEmail(email) !== authenticatedAccountEmail()) { setStatus("A password can only be changed by its account holder. Send a reset link instead.", true); return; }
+    try { await readJsonResponse(await accountTransport.changePassword(patch.currentPassword || '', patch.password), 'Could not change password.'); }
+    catch (error) { setStatus(error.message, true); return; }
+    patch = { ...patch, password: '', currentPassword: '' };
+  }
   accountState.users = accountState.users.map((user) => user.email === email ? {
     ...user,
-    password: patch.password || user.password || "",
+    password: "",
     realName: patch.realName || user.realName || "",
   } : user);
   saveAccountState();
   if (cloudAvailable) {
     try {
-      const response = await fetch("/api/state", {
+      const response = await accountFetch("/api/state", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -14544,7 +14585,7 @@ async function updateAccountDetails(email, patch) {
       currentRosterClaims = sanitizeRosterClaims(data.claims || currentRosterClaims);
       currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || currentSuggestedClaims);
       currentSnapshot = null;
-      if (normalizeEmail(email) === currentUserEmail && patch.password) currentUserPassword = patch.password;
+      if (!accountTransport.expected() && normalizeEmail(email) === currentUserEmail && patch.password) currentUserPassword = patch.password;
       if (isCreatorAuthenticated()) await loadServerUsers();
     } catch (error) {
       setStatus(error.message || "Could not update account.", true);
@@ -14587,7 +14628,7 @@ async function createAccountFromOwner(formElement) {
 
   setStatus(`Creating ${email}...`);
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14642,7 +14683,7 @@ async function sendAccountInvite(formElement) {
   if (!confirmed) return;
   setStatus(`Sending invitation to ${email}...`);
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14709,7 +14750,7 @@ async function drainAdminPermissionQueue(targetEmail, queue) {
     const choice = queue.choices.shift();
     let saved = false;
     try {
-      const response = await fetch('/api/state', {
+      const response = await accountFetch('/api/state', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: choice.action, email: authUserEmail || currentUserEmail,
           password: authUserPassword || currentUserPassword, targetEmail, [choice.field]: choice.enabled }),
@@ -14772,7 +14813,7 @@ async function removeRosterClaim(marker, claimEmail = "") {
   const targetEmail = normalizeEmail(claimEmail || currentUserEmail);
   const creatorAction = isCreatorAuthenticated() && targetEmail && targetEmail !== currentUserEmail;
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14805,7 +14846,7 @@ async function reportRosterIdentityIssue(message = "Roster name match needs revi
   const targetEmail = normalizeEmail(email || currentUserEmail);
   const creatorAction = isCreatorAuthenticated() && targetEmail && targetEmail !== currentUserEmail;
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14865,7 +14906,7 @@ function toggleAdminRosterClaimControls(email) {
 async function saveAdminRosterClaims(email, claims) {
   const targetEmail = normalizeEmail(email);
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14900,7 +14941,7 @@ async function saveAdminUserName(email, realName) {
     return;
   }
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -14955,10 +14996,10 @@ async function deleteAccount(email) {
   const requestEmail = creatorCanDelete ? authUserEmail || currentUserEmail : currentUserEmail;
   const requestPassword = creatorCanDelete ? authUserPassword || currentUserPassword : currentUserPassword;
   cancelScheduledCloudStateSave();
-
+  let authenticationCleanupPending = false;
   try {
     if (cloudAvailable) {
-      const response = await fetch("/api/state", {
+      const response = await accountFetch("/api/state", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -14968,8 +15009,8 @@ async function deleteAccount(email) {
           targetEmail: creatorCanDelete ? targetEmail : "",
         }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Account deletion failed.");
+      const data = await readJsonResponse(response);
+      authenticationCleanupPending = data.authenticationCleanupPending === true;
     }
 
     deleteLocalAccountData(targetEmail);
@@ -14979,11 +15020,12 @@ async function deleteAccount(email) {
     if (creatorDeletingSwitchedUser) {
       closeAccountsModal();
       await returnToCreatorCalendar();
-      setStatus(`Deleted ${targetEmail}.`);
+      setStatus(authenticationCleanupPending ? `Deleted ${targetEmail}. Authentication cleanup needs another attempt.` : `Deleted ${targetEmail}.`, authenticationCleanupPending);
       return;
     }
 
     if (deletingViewedAccount) {
+      accountTransport.forget();
       closeAccountsModal();
       localStorage.removeItem(CURRENT_EMAIL_KEY);
       sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -15006,7 +15048,7 @@ async function deleteAccount(email) {
 
     renderAccountsModal();
     renderDoctorState();
-    setStatus(`Deleted ${targetEmail}.`);
+    setStatus(authenticationCleanupPending ? `Deleted ${targetEmail}. Authentication cleanup needs another attempt.` : `Deleted ${targetEmail}.`, authenticationCleanupPending);
   } catch (error) {
     setStatus(error.message || "Account deletion failed.", true);
   }
@@ -15203,7 +15245,7 @@ async function enterUserAccount(email) {
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
-  if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !creatorPassword) {
+  if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !hasAccountAuthentication(creatorPassword)) {
     setStatus("Creator authentication is required to enter another account.", true);
     return;
   }
@@ -15306,7 +15348,7 @@ async function enterDoctorProfileView(doctor) {
   const transition = beginCalendarTransition();
   void loadDoctorProfileFacilityOverviewAccess(profile, { transition });
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
-  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  if (!accountTransport.expected() && currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
   const renderedCachedSnapshot = targetContext
     ? await renderCachedCalendarSnapshotForContextAsync(targetContext, { accountSwitchStartedAt, transition })
@@ -15525,13 +15567,13 @@ async function fetchDoctorProfileState(profile, options = {}) {
     allowInlineBuild: options.allowInlineBuild !== false,
     skipRebuild: options.allowInlineBuild === false,
   };
-  let response = await fetch("/api/state", {
+  let response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(requestBody),
   });
   if (response.status === 503 && requestBody.allowInlineBuild && await calendarLoadResponseIsRetryable(response)) {
-    response = await fetch("/api/state", {
+    response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...requestBody, allowInlineBuild: false }),
@@ -15545,7 +15587,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
 async function loadDoctorProfileFacilityOverviewAccess(profile, options = {}) {
   if (!profile?.id || !isCreatorAuthenticated()) return;
   try {
-    const response = await fetch("/api/state", {
+    const response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -15774,7 +15816,7 @@ function restoreCalendarViewState(state) {
   currentUserPassword = state.currentUserPassword;
   currentUserRole = state.currentUserRole;
   if (currentUserEmail) localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
-  if (currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  if (!accountTransport.expected() && currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   selectedFiles = state.selectedFiles || [];
   creatorCalendarSourceFileRefs = state.creatorCalendarSourceFileRefs || creatorCalendarSourceFileRefs;
   currentSnapshot = state.currentSnapshot;
@@ -15856,7 +15898,7 @@ async function returnToCreatorAccount(options = {}) {
   primeInsightsAccessForCurrentView();
   const transition = beginCalendarTransition();
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
-  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  if (!accountTransport.expected() && currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   forceConsoleSkin();
   setStatus("Returning to creator account...");
   forceCreatorDoctorSession();
@@ -17022,6 +17064,54 @@ function normalizeServerUser(value) {
   };
 }
 
+
+function showAccountEmailForm(requestRecovery = false) {
+  entrancePage.classList.remove('hidden'); appShell.classList.add('hidden'); mobileActionBar.classList.add('hidden');
+  loginForm.classList.add('hidden'); createAccountForm.classList.add('hidden'); inviteAccountForm?.classList.add('hidden');
+  loginTabButton?.classList.add('hidden'); createTabButton?.classList.add('hidden');
+  document.querySelector('#recoveryRequestForm').classList.toggle('hidden', !requestRecovery);
+  document.querySelector('#accountEmailActionForm').classList.toggle('hidden', requestRecovery);
+  if(requestRecovery){document.querySelector('#recoveryEmail').value=loginEmail.value||authenticatedAccountEmail();return;}
+  const recovery=pendingAccountEmailAction?.purpose==='recovery';
+  document.querySelector('#accountEmailActionTitle').textContent=recovery?'Reset password':'Confirm email';
+  document.querySelector('#accountEmailActionHelp').textContent=recovery?'Choose a new password of at least 12 characters, then sign in.':'Confirm your email address, then sign in with your password.';
+  document.querySelector('#recoveryNewPasswordField').classList.toggle('hidden',!recovery);
+  document.querySelector('#recoveryNewPassword').required=recovery;
+  document.querySelector('#completeAccountEmailAction').textContent=recovery?'Set new password':'Confirm email';
+  document.querySelector('#completeAccountEmailAction').disabled=pendingAccountEmailAction?.invalid===true;
+  if(pendingAccountEmailAction?.invalid)setEntranceStatus('This link is invalid. Request a new one.',true);
+}
+document.querySelector('#requestPasswordRecovery')?.addEventListener('click',()=>showAccountEmailForm(true));
+document.querySelectorAll('[data-return-to-login]').forEach(button=>button.addEventListener('click',()=>{pendingAccountEmailAction=null;document.querySelector('#recoveryNewPassword').value='';openLoginModal();}));
+document.querySelector('#recoveryRequestForm')?.addEventListener('submit',async event=>{
+  event.preventDefault();const button=event.currentTarget.querySelector('[type=submit]');button.disabled=true;
+  try{const data=await readJsonResponse(await accountTransport.requestRecovery(document.querySelector('#recoveryEmail').value),'Could not request password recovery.');setEntranceStatus(data.message);}
+  catch(error){setEntranceStatus(error.message,true);}finally{button.disabled=false;}
+});
+document.querySelector('#accountEmailActionForm')?.addEventListener('submit',async event=>{
+  event.preventDefault();if(!pendingAccountEmailAction||pendingAccountEmailAction.invalid)return;
+  const button=document.querySelector('#completeAccountEmailAction');button.disabled=true;
+  try{
+    const data=await readJsonResponse(await accountTransport.completeEmail({id:pendingAccountEmailAction.id,token:pendingAccountEmailAction.token,newPassword:document.querySelector('#recoveryNewPassword').value}),'Could not complete verification.');
+    pendingAccountEmailAction=null;document.querySelector('#recoveryNewPassword').value='';openLoginModal(data.email);
+    setEntranceStatus(data.purpose==='recovery'?'Password updated. Sign in with your new password.':'Email confirmed. You can now sign in.');
+  }catch(error){setEntranceStatus(error.message+' If the link has already been used, request a new one.',true);}finally{button.disabled=false;}
+});
+
+accountsBody.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-signout-other-devices]');if(!button)return;
+  button.disabled=true;const field=button.closest('form')?.querySelector('[data-account-current-password]');
+  try{
+    let response=await accountTransport.signOutOtherDevices();
+    if(response.status===401&&(await response.clone().json().catch(()=>({}))).code==='auth-reauthentication-required'){
+      if(!field?.value){setStatus('Enter your current password, then choose Sign out other devices again.',true);field?.focus();return;}
+      await readJsonResponse(await accountTransport.reauthenticate(field.value),'Could not confirm your password.');
+      response=await accountTransport.signOutOtherDevices();
+    }
+    await readJsonResponse(response,'Could not sign out other devices.');setStatus('Other devices have been signed out.');
+  }catch(error){setStatus(error.message,true);}finally{if(field)field.value='';button.disabled=false;}
+});
+
 function normalizeAuthMessage(message) {
   const normalized = String(message || "").trim();
   if (!normalized) return "Incorrect username or password.";
@@ -17041,10 +17131,14 @@ function openLoginModal(prefillEmail = currentUserEmail || "") {
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
   const stayLoggedInPreference = localStorage.getItem(STAY_LOGGED_IN_PREFERENCE_KEY);
-  if (stayLoggedIn) stayLoggedIn.checked = stayLoggedInPreference === null ? true : stayLoggedInPreference === "true";
+  if (stayLoggedIn) stayLoggedIn.checked = stayLoggedInPreference === null ? false : stayLoggedInPreference === "true";
+  document.querySelector('#recoveryRequestForm')?.classList.add('hidden');
+  document.querySelector('#accountEmailActionForm')?.classList.add('hidden');
+  loginTabButton?.classList.remove('hidden'); createTabButton?.classList.remove('hidden');
   entrancePage.classList.remove("hidden");
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
+  void accountTransport.options().then(options => document.querySelector('#requestPasswordRecovery')?.classList.toggle('hidden', options.recovery !== true));
   setTimeout(() => loginEmail.focus(), 0);
 }
 
@@ -17053,15 +17147,14 @@ function closeLoginModal() {
   appShell.classList.remove("hidden");
 }
 
-async function logoutCurrentUser() {
+async function logoutCurrentUser(options = {}) {
   rosterComparisonCache.clear();
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewAutomaticLaunchEnabled = false;
-  try {
-    await flushCloudStateSave();
-  } catch {
-    // Keep logout moving even if cloud persistence fails.
+  if (!options.expired) {
+    try { await flushCloudStateSave(); } catch { /* Keep sign out moving. */ }
+    try { await accountTransport.logout(); } catch (error) { setStatus(error.message, true); return; }
   }
   cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
@@ -17107,7 +17200,7 @@ async function logoutCurrentUser() {
 
 function renderLoginState() {
   visibleCalendarRevisionPoller.update();
-  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  const loggedIn = Boolean(currentUserEmail && hasAccountAuthentication());
   if (loggedIn && cloudAvailable && isViewingCreatorAccount() && !serverUsersLoaded && !serverUsersUnavailable
       && !serverUsersLoading && !serverUsersRequest && !accountsModal.classList.contains('hidden')) void loadServerUsers();
   // Non-clinical Directors have no personal calendar. Their workspace has its
@@ -17208,7 +17301,7 @@ function requestClinicalStartupShiftWindow(options = {}, loginStartedAt = 0) {
   const transitionId = calendarTransitionRunId;
   clinicalOnShiftWindowPromise = (async () => {
     try {
-      const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
+      const response = await accountFetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "queryFacilityOverviewLaunchWindow", email: authUserEmail || currentUserEmail,
           password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
       const data = await readJsonResponse(response, "Could not check the shift opening window.");
@@ -17289,15 +17382,8 @@ async function loginWithEmail(email, password, options = {}) {
     primeInsightsAccessForCurrentView();
     const transition = beginCalendarTransition();
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
-    sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
-    if (!options.adminTargetEmail) {
-      localStorage.setItem(STAY_LOGGED_IN_PREFERENCE_KEY, options.stayLoggedIn ? "true" : "false");
-    }
-    if (options.stayLoggedIn) {
-      localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
-    } else if (!options.adminTargetEmail) {
-      localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
-    }
+    // Do not persist a submitted password before the server chooses the auth mode.
+    if (!options.adminTargetEmail) localStorage.setItem(STAY_LOGGED_IN_PREFERENCE_KEY, options.stayLoggedIn ? "true" : "false");
     forceConsoleSkin();
     setStatus("Loading account workspace...");
     setEntranceStatus("Loading account workspace...");
@@ -17319,6 +17405,12 @@ async function loginWithEmail(email, password, options = {}) {
       transition,
     });
     if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
+    if (!accountTransport.expected()) {
+      if (!accountTransport.expected() && currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+      if (options.stayLoggedIn) localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
+      else localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
+    }
+    loginPassword.value = ''; password = '';
     renderLoginState();
     closeLoginModal();
     setEntranceStatus("");
@@ -17377,6 +17469,8 @@ async function loginWithEmail(email, password, options = {}) {
       transition,
     }, loginStartedAt);
   } catch (error) {
+    accountTransport.forget();
+    currentUserPassword = ''; authUserPassword = ''; loginPassword.value = ''; createPassword.value = ''; password = '';
     const message = normalizeAuthMessage(error.message || "Login failed.");
     setEntranceStatus(message, true);
     setStatus(message, true);
@@ -17384,7 +17478,7 @@ async function loginWithEmail(email, password, options = {}) {
 }
 
 async function requestAccountLogin(payload) {
-  const send = body => fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const send = body => accountFetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const response = await send(payload);
   // A Worker may stop after account creation committed. Recover by logging
   // in once, never by repeating creation or bypassing a database allowance.
@@ -17410,7 +17504,7 @@ async function restoreCloudState(options = {}) {
     const response = await requestAccountLogin({
       action: adminTargetEmail ? "adminLoadUser" : "login",
       email: requestEmail, password: requestPassword, targetEmail: adminTargetEmail,
-      mode: options.mode || "login", responseMode: options.responseMode || "full",
+      mode: options.mode || "login", responseMode: options.responseMode || "full", remember: options.stayLoggedIn === true,
       realName: options.realName || "", cachedRevision: options.cachedRevision || "",
       allowInlineBuild: options.allowInlineBuild !== false,
     });
@@ -17810,8 +17904,8 @@ function reportBackgroundValidationError(error, options = {}) {
 async function loadDeferredAccountContext(options = {}) {
   const requestEmail = normalizeEmail(options.targetEmail) ? authUserEmail : currentUserEmail;
   const requestPassword = normalizeEmail(options.targetEmail) ? authUserPassword : currentUserPassword;
-  if (!requestEmail || !requestPassword || !cloudAvailable) return null;
-  const response = await fetch("/api/state", {
+  if (!requestEmail || !hasAccountAuthentication(requestPassword) || !cloudAvailable) return null;
+  const response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -17853,8 +17947,8 @@ async function resolveCurrentAccountClaims(targetEmailOverride = "", options = {
   if (!currentUserEmail || (!targetEmail && currentUserEmail === OWNER_EMAIL)) return;
   const requestEmail = targetEmail ? authUserEmail : currentUserEmail;
   const requestPassword = targetEmail ? authUserPassword : currentUserPassword;
-  if (!requestEmail || !requestPassword) return;
-  const response = await fetch("/api/state", {
+  if (!requestEmail || !hasAccountAuthentication(requestPassword)) return;
+  const response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -17877,7 +17971,7 @@ async function restoreDoctorProfileState() {
     restoredSessionState = loadCurrentSessionState();
     return;
   }
-  const response = await fetch("/api/state", {
+  const response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -18074,7 +18168,7 @@ async function applyCloudStateData(data, options = {}) {
 }
 
 function calendarRevisionView() {
-  if (document.hidden || !currentUserEmail || !currentUserPassword || !cloudAvailable) return null;
+  if (document.hidden || !currentUserEmail || !hasAccountAuthentication() || !cloudAvailable) return null;
   const overview = isFacilityOverviewOpen();
   const when = insightsState?.mode === 'when' && !insightsModal.classList.contains('hidden');
   const available = when ? (insightsState.hospitalFilters?.length ? insightsState.hospitalFilters : ['mmc', 'mch', 'ddh', 'vhh']) : overview ? facilityOverviewFacilityOptions() : normalizedDoctorSourceTypes(selectedDoctor());
@@ -18146,7 +18240,7 @@ async function refreshVisibleRosterView(view) {
   let unchanged = false;
   let loaded;
   if (activeDoctorProfile) {
-    const response = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+    const response = await accountFetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
       action: 'loadDoctorProfile', email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
       profileId: activeDoctorProfile.id, doctorKey: activeDoctorProfile.doctorKey, displayName: activeDoctorProfile.displayName, sourceTypes: activeDoctorProfile.sourceTypes,
       allowInlineBuild: false, cachedRevision,
@@ -18183,7 +18277,7 @@ async function loadCloudCalendarEvents(options = {}) {
   const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
   const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
-  if (!requestEmail || !requestPassword) return false;
+  if (!requestEmail || !hasAccountAuthentication(requestPassword)) return false;
   const preferredDoctorKey = normalizeRosterName(
     options.doctorKey
     || (adminTargetEmail ? preferredDoctorKeyForAccountEmail(adminTargetEmail) : currentDefaultDoctorKey)
@@ -18206,7 +18300,7 @@ async function loadCloudCalendarEvents(options = {}) {
     skipRebuild: options.skipRebuild === true,
     responseMode: options.allowInlineBuild === false ? "fast" : "full",
   };
-  let response = await fetch("/api/state", {
+  let response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(requestBody),
@@ -18215,7 +18309,7 @@ async function loadCloudCalendarEvents(options = {}) {
   // failure and forbid an inline rebuild so the recovery request remains a
   // cheap registry/R2 read and cannot repeat the expensive work.
   if (response.status === 503 && await calendarLoadResponseIsRetryable(response)) {
-    response = await fetch("/api/state", {
+    response = await accountFetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...requestBody, allowInlineBuild: false }),
@@ -18530,7 +18624,7 @@ function snapshotMatchesDoctorProfile(snapshot, profile) {
 
 async function saveCloudStateNow(snapshot = null) {
   const payload = snapshot || snapshotCloudSavePayload();
-  if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
+  if (!payload.accountEmail || !payload.requestEmail || !hasAccountAuthentication(payload.requestPassword) || !cloudAvailable) return;
   const isDeleteSave = (payload.removedImportIds || []).length > 0;
   const snapshotPayload = isDeleteSave ? null : await buildWorkspaceSnapshotPayload(payload.session);
   const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload) && !isDeleteSave
@@ -18540,7 +18634,7 @@ async function saveCloudStateNow(snapshot = null) {
   const baseline = persistedSessionBases.get(key) || restoredSessionState || {};
   const changes = makeSessionPatch(baseline, payload.session);
   if (!changes.length) return;
-  const response = await fetch("/api/state", {
+  const response = await accountFetch("/api/state", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ action: "saveSessionSettings", email: payload.requestEmail, password: payload.requestPassword, targetEmail: payload.targetEmail, profile: payload.doctorProfile, changes }),
   });
@@ -18797,7 +18891,7 @@ async function loadServerUsers() {
   if (serverUsersRequest) return serverUsersRequest;
   const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
-  if (!requestEmail || !requestPassword || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
+  if (!requestEmail || !hasAccountAuthentication(requestPassword) || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
   serverUsersLoading = true;
   serverUsersUnavailable = false;
   const refreshPanel = () => {
@@ -18812,9 +18906,9 @@ async function loadServerUsers() {
       let data;
       for (let page = 0; page < 10; page += 1) {
         const body = JSON.stringify({ action:'listUsers', email:requestEmail, password:requestPassword, cursor });
-        let response = await fetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
+        let response = await accountFetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
         if (response.status === 503 && await calendarLoadResponseIsRetryable(response)) {
-          response = await fetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
+          response = await accountFetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
         }
         const incoming = await readJsonResponse(response, 'Could not load users.');
         if (incoming.unavailable === true) throw new Error('User directory unavailable.');
@@ -19029,7 +19123,7 @@ function refreshAdminConsoleMarkupIfVisible() {
 }
 
 async function persistConsoleMessage(message, isError) {
-  if (!cloudAvailable || !currentUserEmail || !currentUserPassword) return;
+  if (!cloudAvailable || !currentUserEmail || !hasAccountAuthentication()) return;
   try {
     await calendarStoreRequest("appendConsoleMessage", { message, isError: isError === true });
   } catch {
@@ -19139,7 +19233,7 @@ function assertDerivedCalendarFilePayload(importEntry, doctors, eventCount) {
 }
 
 async function calendarStoreRequest(action, extra = {}) {
-  const response = await fetch("/api/state", {
+  const response = await accountFetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -19157,7 +19251,7 @@ async function calendarStoreRequestWithRetry(action, extra = {}, options = {}) {
   let lastError = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const response = await fetch("/api/state", {
+      const response = await accountFetch("/api/state", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -21071,7 +21165,10 @@ async function refreshSnapshotInBackground() {
 async function bootstrapApp() {
   try {
     removeLegacyCalendarSnapshotCaches();
-    if (new URLSearchParams(window.location.search).get("invite")) {
+    if (pendingAccountEmailAction) {
+      showAccountEmailForm(); hideLoadingScreen(); return;
+    }
+    if (pendingInvitationToken) {
       entrancePage.classList.remove("hidden");
       appShell.classList.add("hidden");
       loginForm.classList.add("hidden");
@@ -21083,7 +21180,7 @@ async function bootstrapApp() {
       return;
     }
     renderLoginState();
-    if (!currentUserEmail || !currentUserPassword) {
+    if (!currentUserEmail || !hasAccountAuthentication()) {
       openLoginModal();
       setStatus("Log in with an email address to load your roster workspace.");
       queueStoredCalendarSnapshotMaintenance();
@@ -21093,20 +21190,12 @@ async function bootstrapApp() {
     const transition = beginCalendarTransition();
     forceConsoleSkin();
     const cacheContext = accountCalendarContextForEmail(currentUserEmail);
-    const renderedCachedSnapshot = await renderCachedCalendarSnapshotForContextAsync(cacheContext, {
-      loginStartedAt,
-      transition,
-      suppressInsightWarmup: currentUserEmail === OWNER_EMAIL,
-    });
-    if (renderedCachedSnapshot) {
-      renderLoginState();
-      hideLoadingScreen();
-      markLoginPhase("firstCalendarPaint", loginStartedAt);
-      markLoginPaintCommitted(loginStartedAt);
-      setStatus("Checking calendar for updates...");
-    } else {
-      setStatus("Loading calendar...");
-    }
+    // Authenticate before exposing a private calendar, including the first
+    // upgrade from legacy browser credentials. Keep the saved calendar for the
+    // same conditional request and render it immediately after that envelope.
+    const cachedBeforeAuthentication = loadCachedCalendarSnapshotForContext(cacheContext);
+    let renderedCachedSnapshot = false;
+    setStatus('Loading calendar...');
     const loginData = await restoreCloudState({
       mode: "login",
       responseMode: "fast",
@@ -21114,15 +21203,15 @@ async function bootstrapApp() {
       deferContext: true,
       deferSnapshotPersistence: true,
       skipSnapshotCacheWriteIfCurrent: true,
-      cachedRevision: renderedCachedSnapshot ? currentSnapshot?.calendarRevision || "" : "",
-      preserveExistingSnapshot: renderedCachedSnapshot,
+      cachedRevision: cachedBeforeAuthentication?.calendarRevision || "",
+      preserveExistingSnapshot: false,
       loginStartedAt,
       transition,
     });
     if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
     renderLoginState();
     if (creatorStartupContainmentActive()) {
-      finishContainedCreatorStartup({ transition }, loginStartedAt);
+      finishContainedCreatorStartup({ transition, cachedSnapshot: cachedBeforeAuthentication }, loginStartedAt);
       return;
     }
     if (isNonClinicalDirectorWorkspace()) {
@@ -21147,6 +21236,7 @@ async function bootstrapApp() {
       markLoginPhase("firstCalendarPaint", loginStartedAt);
       markLoginPaintCommitted(loginStartedAt);
     }
+    if(!openedOnShift&&!inlineSnapshotReady)renderedCachedSnapshot=await renderCachedCalendarSnapshotForContextAsync(cacheContext,{loginStartedAt,transition,expectedRevision:currentCalendarRevision});
     if ((loginData?.responseMode || "full") === "fast") {
       queueDeferredAccountContextLoad({
         loginStartedAt,
@@ -21231,11 +21321,13 @@ function facilityOverviewCachedReadDenied(error) {
 
 async function readJsonResponse(response, fallbackMessage = "Request failed.") {
   const text = await response.text().catch(() => "");
+  if (!accountTransport.responseCurrent(response)) throw new Error('The account changed. Please try again.');
   if (!response.ok) {
     const error = new Error(parseError(text, `${fallbackMessage} Server returned ${response.status}.`));
     error.status = response.status;
     try {
       const payload = JSON.parse(text);
+      error.code = payload.code;
       error.facilityOverviewAccess = payload.facilityOverviewAccess;
       error.readerUnavailable = payload.readerUnavailable === true;
     } catch {}

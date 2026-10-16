@@ -86,8 +86,8 @@ assert.match(loginHandler, /loginResponseMode = \(loginRole === "creator" \|\| l
 assert.match(loginHandler, /creatorStartupHydrationEnabled: creatorStartupHydrationEnabled\(context\.env\)/,
   "login must tell the browser whether deferred Creator hydration is explicitly enabled");
 
-const contextHandler = section(/if \(action === "loadAccountContext"\)[\s\S]*?(?=\n    if \(action === "claimRosterName"\))/);
-assert.match(contextHandler, /creatorStartupContained[\s\S]*prepareFastLoginEnvelope[\s\S]*: await prepareAccountResponse/,
+const contextHandler = section(/async function accountContextResponse[\s\S]*?(?=\nasync function handleAccountContextRequest)/);
+assert.match(contextHandler, /creatorStartupContained[\s\S]*prepareFastLoginEnvelope[\s\S]*: await prepareAccountContextResponse/,
   "stale Creator context requests must use the minimal envelope while contained");
 
 assert.equal((wranglerSource.match(/CREATOR_STARTUP_HYDRATION_ENABLED = "false"/g) || []).length, 2,

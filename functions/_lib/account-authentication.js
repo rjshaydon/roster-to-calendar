@@ -1,6 +1,6 @@
 import { normalizeEmail } from './email.js';
 import { AuthenticationError, supabaseAuthenticationConfig, signInWithSupabasePassword, createSupabaseMigrationUser, getSupabaseMigrationUser } from './supabase-auth.js';
-import { loadAuthenticationLink, reserveAuthenticationMigration, finishAuthenticationMigration } from './authentication-migration.js';
+import { loadAuthenticationLink, reserveAuthenticationMigration, finishAuthenticationMigration, finishNewAccountAuthentication } from './authentication-migration.js';
 
 function denied() { return new AuthenticationError('invalid-credentials', 'Sign-in could not be completed.', 401); }
 
@@ -10,8 +10,13 @@ export async function authenticateExistingAccount(env, input) {
   const config = supabaseAuthenticationConfig(env), db = env.ROSTER_DB;
   const email = normalizeEmail(input.email), password = input.password;
   if (!email || email.length > 254 || typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 1024) throw denied();
+  if(await db.prepare("SELECT 1 FROM account_auth_deletions WHERE email=? AND phase='queued' LIMIT 1").bind(email).first())throw denied();
   const link = await loadAuthenticationLink(db, email);
   if (link?.phase === 'ready') return signInWithSupabasePassword(env, { email, password, expectedSubject: link.provider_subject });
+  if (link?.phase === 'pending' && link.credential_revision === 'new-account') {
+    const proof=await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject});
+    await finishNewAccountAuthentication(db,{link,proof});return proof;
+  }
   // Delivery and the legacy migration window are distinct activation gates.
   // The window cannot silently reopen after expiration or a configuration typo.
   const deadline = Date.parse(config.legacyMigrationUntil || '');

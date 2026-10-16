@@ -1,9 +1,13 @@
-import { AuthenticationError } from '../../_lib/supabase-auth.js';
+import { acceptAccountInvitation } from '../../_lib/account-invitations.js';
+import { finishAccountAuthenticationDeletion } from '../../_lib/account-auth-deletions.js';
+import { registerAccount } from '../../_lib/account-registration.js';
+import { sendAccountEmailProof, completeAccountEmailProof } from '../../_lib/account-email.js';
+import { AuthenticationError, changeSupabasePassword } from '../../_lib/supabase-auth.js';
 import { authenticateExistingAccount } from '../../_lib/account-authentication.js';
 import { normalizeEmail } from '../../_lib/email.js';
 import {
   accountSessionsEnabled, requireSameOrigin, issueAccountSession, readAccountSession,
-  renewAccountSession, revokeAccountSession, revokeOtherAccountSessions, clearSessionCookie, hasSessionCookie,
+  renewAccountSession, revokeAccountSession, revokeOtherAccountSessions, clearSessionCookie, hasSessionCookie, requireRecentAuthentication,
 } from '../../_lib/account-sessions.js';
 
 const headers = { 'Cache-Control': 'no-store', 'Vary': 'Cookie' };
@@ -32,6 +36,21 @@ async function boundedBody(request) {
   } finally { reader.releaseLock(); }
 }
 
+
+async function admit(env,identity) {
+  if (!env.AUTH_LOGIN_LIMITER?.limit && !env.AUTH_LOGIN_LIMITER?.fetch) throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity));
+  const key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');
+  if(env.AUTH_LOGIN_LIMITER.limit){
+    if((await env.AUTH_LOGIN_LIMITER.limit({key:'login:'+key}))?.success===true)return;
+  }else{
+    const response=await env.AUTH_LOGIN_LIMITER.fetch('https://admission.internal/check',{method:'POST',body:'login:'+key});
+    if(response.status===204)return;
+    if(response.status!==429)throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
+  }
+  throw new AuthenticationError('auth-rate-limited','Too many attempts. Please wait before trying again.',429);
+}
+
 export async function onRequestPost(context) {
   if (!accountSessionsEnabled(context.env)) return reply({ error: 'The sign-in upgrade is not enabled.', code: 'auth-disabled' }, 503);
   try {
@@ -39,6 +58,30 @@ export async function onRequestPost(context) {
     if (!context.env.ROSTER_DB) throw new AuthenticationError('auth-unavailable', 'Sign-in is currently unavailable. Please try again later.');
     const body = await boundedBody(context.request), action = String(body.action || '');
     const db = context.env.ROSTER_DB;
+    if (action === 'acceptInvite') {
+      if(typeof body.inviteToken!=='string'||body.inviteToken.length>256)throw new AuthenticationError('auth-invite','Invalid invitation.',400);
+      await admit(context.env,body.inviteToken);
+      return reply(await acceptAccountInvitation(context.env,{inviteToken:body.inviteToken,newPassword:body.newPassword}));
+    }
+    if (action === 'signup') {
+      const email=normalizeEmail(body.email);if(!email||email.length>254)throw new AuthenticationError('auth-request','Check your email address.',400);
+      await admit(context.env,email);
+      await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin});
+      return reply({error:'Check your email for a confirmation link, then sign in.',code:'email-verification-required'},403);
+    }
+    if (action === 'requestRecovery') {
+      const email=normalizeEmail(body.email);
+      if(!email||email.length>254||!email.includes('@')||/[\s\x00-\x1f\x7f]/.test(email))throw new AuthenticationError('auth-request','Check your email address.',400);
+      await admit(context.env,email);
+      try { await sendAccountEmailProof(context.env,{email,purpose:'recovery',origin:new URL(context.request.url).origin}); }
+      catch(error) { if(error?.code==='LOCAL_OUTBOUND_BLOCKED')throw error; console.warn('Account recovery email unavailable.'); }
+      return reply({ok:true,message:'If this account can be recovered, a one-time link will be emailed to it.'});
+    }
+    if (action === 'completeEmail') {
+      if(typeof body.id!=='string'||body.id.length!==36)throw new AuthenticationError('auth-request','Invalid verification link.',400);
+      await admit(context.env,body.id);
+      return reply(await completeAccountEmailProof(context.env,{id:body.id,token:body.token,newPassword:body.newPassword}));
+    }
     if (action === 'login' || action === 'reauthenticate') {
       // No legacy fallback here. Accounts without a completed verified migration
       // keep their existing journey until that separate rollout is ready.
@@ -46,20 +89,24 @@ export async function onRequestPost(context) {
       if (!email || email.length > 254 || typeof body.password !== 'string' || !body.password || body.password.length > 1024) {
         throw new AuthenticationError('invalid-credentials', 'Check your email and password.', 400);
       }
-      // Admission precedes D1 and password work. No D1 counter per failed guess.
-      // Fail closed until a supported rate-limit binding is staged and verified.
-      if (!context.env.AUTH_LOGIN_LIMITER?.limit) throw new AuthenticationError('auth-unavailable', 'Sign-in is currently unavailable. Please try again later.');
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
-      const key = Array.from(new Uint8Array(digest), x => x.toString(16).padStart(2, '0')).join('');
-      const admission = await context.env.AUTH_LOGIN_LIMITER.limit({ key: 'login:' + key });
-      if (admission?.success !== true) throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);
+      await admit(context.env,email);
       let oldSession;
       if (action === 'reauthenticate') {
         oldSession = await readAccountSession(db, context.request);
         if (email !== oldSession.email) throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
       }
-      const proof = await authenticateExistingAccount(context.env, { email, password: body.password });
+      let proof;
+      try { proof = await authenticateExistingAccount(context.env, { email, password: body.password }); }
+      catch(error) {
+        if(error?.code!=='email-verification-required')throw error;
+        await sendAccountEmailProof(context.env,{email,purpose:'confirm',origin:new URL(context.request.url).origin});
+        return reply({error:'Check your email for a confirmation link, then sign in again.',code:'email-verification-required'},403);
+      }
       const issued = await issueAccountSession(db, { email: proof.email, subject: proof.subject, persistent: body.remember === true });
+      if (!oldSession && hasSessionCookie(context.request)) {
+        try { oldSession = await readAccountSession(db, context.request); }
+        catch(error) { if(error?.code!=='auth-session-expired')throw error; }
+      }
       if (oldSession) await revokeAccountSession(db, oldSession);
       return reply({ ok: true, email: issued.email }, 200, issued.setCookie);
     }
@@ -73,6 +120,22 @@ export async function onRequestPost(context) {
       return reply({ ok: true }, 200, clearSessionCookie());
     }
     const session = await readAccountSession(db, context.request);
+    if (action === 'retryAuthenticationDeletion') {
+      if(!['creator','owner'].includes(session.role))throw new AuthenticationError('auth-forbidden','Creator access is required.',403);
+      requireRecentAuthentication(session);
+      const email=normalizeEmail(body.email);if(!email||email.length>254)throw new AuthenticationError('auth-request','Invalid account.',400);
+      return reply({ok:true,...await finishAccountAuthenticationDeletion(context.env,email)});
+    }
+    if (action === 'changePassword') {
+      await admit(context.env,session.email);
+      if(typeof body.newPassword!=='string'||body.newPassword.length<12||new TextEncoder().encode(body.newPassword).length>1024)throw new AuthenticationError('auth-password','Use a password of at least 12 characters.',400);
+      const proof=await authenticateExistingAccount(context.env,{email:session.email,password:body.currentPassword});
+      // A provider timeout must not leave pre-change app sessions authorized.
+      await db.prepare('DELETE FROM account_sessions WHERE email=?').bind(session.email).run();
+      await changeSupabasePassword(context.env,{email:session.email,subject:proof.subject,password:body.newPassword,accessToken:proof.accessToken});
+      const issued=await issueAccountSession(db,{email:session.email,subject:proof.subject,persistent:session.persistent===1});
+      return reply({ok:true,email:session.email},200,issued.setCookie);
+    }
     if (action === 'status') return reply({ ok: true, email: session.email, role: session.role });
     if (action === 'activity') {
       const renewed = await renewAccountSession(db, context.request, session);
@@ -91,4 +154,10 @@ export async function onRequestPost(context) {
   }
 }
 
-export function onRequestGet() { return reply({ error: 'Use POST for account requests.' }, 405); }
+export function onRequestGet(context) {
+  if(new URL(context.request.url).searchParams.get('options')==='1'){
+    let config;try{config=JSON.parse(context.env.ROSTER_AUTH_CONFIG||'{}');}catch{config={};}
+    const enabled=accountSessionsEnabled(context.env);return reply({enabled,recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
+  }
+  return reply({ error: 'Use POST for account requests.' }, 405);
+}
