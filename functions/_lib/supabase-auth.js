@@ -83,10 +83,16 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
     // Modern project keys belong in apikey, not Authorization: Bearer.
     // Never log request/response bodies: these paths handle passwords and tokens.
     const response = await guardedFetch(env, config.url + '/auth/v1/' + path, {
-      method, redirect: 'error', signal: controller.signal,
+      // Workers supports manual redirect handling, not redirect: 'error'.
+      // Never forward credentials to a Location supplied by the provider.
+      method, redirect: 'manual', signal: controller.signal,
       headers: { apikey: admin ? config.secretKey : config.publishableKey, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }, { label: 'Supabase authentication' });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new AuthenticationError('auth-provider-response', 'Authentication returned an invalid response.');
+    }
     if (response.status === 429) throw new AuthenticationError('auth-rate-limited', 'Too many sign-in attempts. Please wait before trying again.', 429);
     if (response.status >= 500) throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');
     const data = await boundedJson(response);

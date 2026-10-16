@@ -2,7 +2,7 @@
 
 ## Verified setup
 
-The user's new `roster-to-calendar-auth` project is healthy, Free, and in Sydney (`ap-southeast-2`). Its approved origin is `https://nncmejyfkujpfuivlart.supabase.co`. The earlier Mumbai project is not an authentication destination. Read-only public Auth settings returned HTTP 200 with email authentication enabled, signups enabled and email autoconfirm disabled. No private API key was revealed, stored or transferred, and no staff/test Auth user was created.
+The user's new `roster-to-calendar-auth` project is healthy, Free, and in Sydney (`ap-southeast-2`). Its approved origin is `https://nncmejyfkujpfuivlart.supabase.co`. The earlier Mumbai project is not an authentication destination. Read-only public Auth settings returned HTTP 200 with email authentication enabled, signups enabled and email autoconfirm disabled. The replacement private API key is now saved in encrypted Cloudflare production configuration with migration disabled. The isolated read-only public and privileged checks both returned HTTP 200. No staff/test Auth user was created.
 
 ## Prepared code
 
@@ -21,14 +21,14 @@ The adapter and migration primitives are intentionally not exposed as API routes
 
 ## Next integration steps
 
-1. After specific credential-transfer approval, copy the existing secret directly from the authenticated dashboard into encrypted Cloudflare server configuration, including the isolated test environment. Keep rollout disabled. Do not create a new key or grant wider access as part of this step.
+1. Complete: the user-created replacement key was transferred into encrypted Cloudflare configuration with rollout disabled. Public and privileged read-only provider checks passed; the disposable test Worker was deleted.
 2. Verify the private admin and ordinary sign-in API behavior with synthetic accounts only; provider documentation and mocks are not live proof. In particular verify caller-selected UUID handling, modern API key headers, email confirmation state, rate limits, uncertain responses and resumed migration. Do not overwrite pre-existing provider accounts to resolve conflicts.
 3. Configure confirmation/recovery delivery and its existing Postmark allowance. Creating an unconfirmed account with an admin API does not itself complete email confirmation. Test the explicit confirmation flow and prove fallback availability under Free's inactivity policy; do not manufacture keepalive traffic to evade that policy.
 4. Build cookie sessions and the common API verifier/client transport before enabling any hash retirement. Remove routine password bodies/storage only after session exchange succeeds; migrated accounts must never fall back to the legacy password initializer. Finish signup/invite, password change, account deletion and secure recovery integration, including inactive-account retirement policy. Provider deletion/revocation must be reconciled with local account deletion and session revocation.
 5. Supabase's passkey API is currently **experimental** and requires explicit SDK opt-in. Registration requires a confirmed account. Test it as an optional journey with reliable password fallback; verify browser credentials/tokens stay out of persistent JavaScript storage and preserve the approved idle/outer expiry and recent-authentication rules. Test iPhone, Android and the real Citrix environment.
 6. Run the planned security review, native full-route CPU/D1 tests, browser cold startup/account switching, and isolated canary rollout. Only then activate migration for real accounts. Batch 6 request/reply/dispute UI remains part of the approved larger plan and is not implemented by these foundations.
 
-## Credential configuration attempt and replacement required
+## Credential replacement history
 
 The user explicitly approved copying the existing Sydney project's secret API key, publishable key and project URL into encrypted Cloudflare app/test configuration. `ROSTER_AUTH_CONFIG` was saved in the production Pages project's **Secret** configuration with `enabled:false`; the UI subsequently concealed its value. No deployment or staff migration was triggered. Configuration is not accepted for activation or reuse yet.
 
@@ -37,6 +37,14 @@ During native UI extraction, the Supabase accessibility value wrapped the secret
 The credential/configuration strings held in the computer-use session were cleared. The unconfigured `roster-auth-validation` Worker created during this attempt was successfully deleted. It never received the Supabase secret and had no D1/R2 bindings. No provider account was created, no staff password was sent and no private provider API test was run. The production app remains on its existing authentication implementation; the disabled encrypted configuration still contains the old key and must be replaced after rotation.
 
 Safari is open to the Sydney project's API Keys page. The user must create a replacement secret key and revoke the old **secret** key (not the publishable key). Credential-changing final actions require user handoff under the computer-use policy. Then copy the replacement directly into Cloudflare using private session memory, emitting only whitelisted status booleans; never output an entire accessibility tree after revealing or entering a credential, even with a redaction regex. Existing destination/storage approval remains applicable to the replacement configuration, but no key creation or revocation should be silently performed for the user.
+
+## Replacement and live verification completed
+
+The user confirmed deletion of the exposed default secret and creation of `roster_calendar_auth`. The replacement configuration was entered using private computer-use memory and verified before saving, with `enabled:false`. The production Pages dashboard subsequently showed the concealed `ROSTER_AUTH_CONFIG` secret. Because its Add form does not overwrite existing names and its encrypted value was read-only, the revoked configuration was preserved under `ROSTER_AUTH_CONFIG_REVOKED` before adding the replacement. That obsolete binding grants no valid provider access and can be removed during later configuration cleanup. No production application code was deployed by this configuration step.
+
+The isolated `roster-auth-validation` Worker had no D1/R2 bindings. Its gated check returned HTTP 200 with `publishableStatus:200`, `privateStatus:200`, `migrationDisabled:true` and `approvedProject:true`. It requested at most one provider user but discarded the response body and returned no account data. No account was created or modified. The Worker was then successfully deleted, removing its secret binding. The credential-bearing clipboard was replaced with the public binding name and transfer variables were cleared.
+
+The live probe exposed a Workers runtime incompatibility: `redirect: 'error'` throws before making the provider request. Using `redirect: 'manual'` succeeded; the prepared server adapter now uses that supported setting and explicitly rejects every 3xx response without following Location. The authentication foundation tests pass, including 301/302/303/307/308 rejection and no second request. This proves connectivity and this compatibility correction, not full password/session migration acceptance. Live synthetic account lifecycle tests, delivery configuration, session integration and rollout remain pending.
 
 ## References checked
 

@@ -27,7 +27,7 @@ try {
   assert.equal(requests[0].url, AUTH_PROJECT_ORIGIN + '/auth/v1/token?grant_type=password');
   assert.equal(requests[0].init.headers.apikey, 'sb_publishable_fixture');
   assert.equal(requests[0].init.headers.Authorization, undefined, 'new keys are not used as bearer JWTs');
-  assert.equal(requests[0].init.redirect, 'error', 'credentials cannot follow redirects');
+  assert.equal(requests[0].init.redirect, 'manual', 'credentials cannot follow redirects in Workers');
   assert.deepEqual(JSON.parse(requests[0].init.body), { email, password });
   const beforeLocal = requests.length;
   await assert.rejects(() => signInWithSupabasePassword({ ...env, LOCAL_ONLY: 'true' }, { email, password }), e => e.code === 'LOCAL_OUTBOUND_BLOCKED');
@@ -59,6 +59,12 @@ try {
   await assert.rejects(() => createSupabaseMigrationUser(env, { email, password, subject }), e => e.code === 'auth-migration-unconfirmed' && !e.message.includes(password));
   response = () => { throw Error('fetch failed with ' + password); };
   await assert.rejects(() => signInWithSupabasePassword(env, { email, password }), e => e.code === 'auth-provider-unavailable' && !e.message.includes(password));
+  for (const status of [301, 302, 303, 307, 308]) {
+    response = () => new Response(null, { status, headers: { Location: 'https://attacker.invalid' } });
+    const beforeRedirect = requests.length;
+    await assert.rejects(() => signInWithSupabasePassword(env, { email, password }), e => e.code === 'auth-provider-response');
+    assert.equal(requests.length, beforeRedirect + 1, 'provider redirects never trigger a second request');
+  }
   response = () => new Response('not json');
   await assert.rejects(() => signInWithSupabasePassword(env, { email, password }), e => e.code === 'auth-provider-response');
   response = () => new Response('x'.repeat(65537));
