@@ -1,3 +1,4 @@
+import {authenticationSettings} from './authentication-settings.js';
 import { AuthenticationError } from './supabase-auth.js';
 import { normalizeEmail } from './email.js';
 
@@ -10,7 +11,7 @@ const TOKEN = /^[a-f0-9]{64}$/;
 const MAX_SESSIONS = 20;
 
 export function accountSessionsEnabled(env = {}) {
-  try { const c = JSON.parse(env.ROSTER_AUTH_CONFIG || '{}'); return c.enabled === true && c.sessionsEnabled === true; }
+  try { const c = authenticationSettings(env); return c.enabled === true && c.sessionsEnabled === true; }
   catch { return false; }
 }
 

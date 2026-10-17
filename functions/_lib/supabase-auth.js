@@ -1,3 +1,4 @@
+import {authenticationSettings} from './authentication-settings.js';
 import { normalizeEmail } from './email.js';
 import { guardedFetch } from './outbound-network.js';
 
@@ -18,7 +19,7 @@ export class AuthenticationError extends Error {
 
 export function supabaseAuthenticationConfig(env = {}) {
   let config;
-  try { config = JSON.parse(env.ROSTER_AUTH_CONFIG || '{}'); }
+  try { config = authenticationSettings(env); }
   catch { throw new AuthenticationError('auth-configuration', 'Authentication is not configured.'); }
   if (config.enabled !== true) throw new AuthenticationError('auth-disabled', 'The authentication upgrade is not enabled.');
   // Pin the approved project. Neither request bodies nor arbitrary environment

@@ -1,3 +1,4 @@
+import {authenticationSettings} from './authentication-settings.js';
 import { normalizeEmail } from './email.js';
 import { AuthenticationError } from './supabase-auth.js';
 
@@ -27,7 +28,7 @@ export function allowLegacyStateDuringRollout(env,request,body,now=Date.now()) {
   // verifier. Never turn a rejected cookie into legacy password authentication.
   if((request.headers.get('Cookie')||'').split(';').some(p=>p.trim().split('=')[0]==='__Host-roster_session'))return false;
   if(body?.action==='login'&&body?.mode==='create'||body?.action==='acceptInvite')return false;
-  let config;try{config=JSON.parse(env.ROSTER_AUTH_CONFIG||'{}');}catch{return false;}
+  let config;try{config=authenticationSettings(env);}catch{return false;}
   const emails=cohort(config),email=normalizeEmail(body?.email);
   if(emails&&email&&!emails.has(email))return true;
   // An explicitly dated, short grace period preserves already-open clients.

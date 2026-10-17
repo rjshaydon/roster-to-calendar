@@ -1,3 +1,4 @@
+import {authenticationSettings} from '../../_lib/authentication-settings.js';
 import {applyCredentialChange,beginCredentialChange} from '../../_lib/account-credential-change.js';
 import {loadAuthenticationLink} from '../../_lib/authentication-migration.js';
 import { acceptAccountInvitation } from '../../_lib/account-invitations.js';
@@ -168,7 +169,7 @@ export async function onRequestPost(context) {
 
 export function onRequestGet(context) {
   if(new URL(context.request.url).searchParams.get('options')==='1'){
-    let config;try{config=JSON.parse(context.env.ROSTER_AUTH_CONFIG||'{}');}catch{config={};}
+    let config;try{config=authenticationSettings(context.env);}catch{config={};}
     const enabled=accountSessionsEnabled(context.env);return reply({enabled,cohortRollout:enabled&&Array.isArray(config.migrationEmails),recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
   }
   return reply({ error: 'Use POST for account requests.' }, 405);

@@ -133,3 +133,18 @@ sqlite.prepare('DELETE FROM account_profiles WHERE email=?').run(email);
 assert.equal(await loadAuthenticationLink(db, email), null, 'deleting the account removes its provider mapping');
 assert(!queries.some(q => /UPDATE.*(?:role|subscription_token)\s*=/i.test(q)), 'migration does not change privileges or feeds');
 console.log('Authentication foundation passed: provider destination pinning, bounded/redacted failures, local isolation, verified UUID/email binding, pending retries, transactional credential retirement, concurrent password change, legacy bypass denial and indexed queries. No external network or real accounts.');
+
+const {authenticationSettings}=await import('../functions/_lib/authentication-settings.js');
+const {accountSessionsEnabled}=await import('../functions/_lib/account-sessions.js');
+const disabled={ROSTER_AUTH_CONFIG:JSON.stringify({...JSON.parse(env.ROSTER_AUTH_CONFIG),enabled:false})};
+const staged={...disabled,ROSTER_AUTH_ROLLOUT:JSON.stringify({enabled:true,sessionsEnabled:true,migrationEnabled:true,migrationEmails:[email],signupEnabled:false})};
+assert.equal(supabaseAuthenticationConfig(staged).secretKey,'sb_secret_fixture');
+assert.equal(accountSessionsEnabled(staged),true);
+assert.deepEqual(authenticationSettings(staged).migrationEmails,[email]);
+assert.equal(accountSessionsEnabled(disabled),false);
+for(const invalid of [{url:'https://wrong.test'},{secretKey:'sb_secret_other'},{publishableKey:'sb_publishable_other'},{enabled:'true'},{migrationEmails:[null]},{legacyStateUntil:'tomorrow'},[],null]){
+ const bad={...staged,ROSTER_AUTH_ROLLOUT:JSON.stringify(invalid)};
+ assert.throws(()=>supabaseAuthenticationConfig(bad),/not configured/);
+ assert.equal(accountSessionsEnabled(bad),false);
+}
+console.log('Separate rollout controls preserve encrypted credentials and reject provider/key overrides, malformed flags, cohorts and deadlines.');
