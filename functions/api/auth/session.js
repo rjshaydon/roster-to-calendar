@@ -150,6 +150,18 @@ export async function onRequestPost(context) {
       const issued=await issueAccountSession(db,{email:session.email,subject:changed.subject,credentialVersion:changed.credentialVersion,persistent:session.persistent===1});
       return reply({ok:true,email:session.email},200,issued.setCookie);
     }
+    if(action==='migrationAccounts'){
+      if(!['creator','owner'].includes(session.role))throw new AuthenticationError('auth-forbidden','Creator access is required.',403);
+      const cursor=body.cursor??'';
+      if(typeof cursor!=='string'||cursor.length>254)throw new AuthenticationError('auth-request','Invalid account cursor.',400);
+      const page=await db.prepare(`SELECT a.email,a.real_name AS name,
+        CASE WHEN l.phase='ready' AND a.password_hash='' AND a.password_salt='' THEN 'migrated'
+          WHEN l.phase='pending' THEN 'pending' ELSE 'unmigrated' END AS status
+        FROM account_profiles a LEFT JOIN account_authentication_links l ON l.email=a.email
+        WHERE a.email>? ORDER BY a.email LIMIT 101`).bind(cursor).all();
+      const accounts=page.results.slice(0,100);
+      return reply({ok:true,accounts,nextCursor:page.results.length>100?accounts.at(-1).email:''});
+    }
     if(action==='migrationSummary'){
       if(!['creator','owner'].includes(session.role))throw new AuthenticationError('auth-forbidden','Creator access is required.',403);
       const counts=await db.prepare(`SELECT count(*) AS total,

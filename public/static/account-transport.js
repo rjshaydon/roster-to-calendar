@@ -21,7 +21,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   async function auth(body,options={}){
     const lease=generation;
     const payload={...body};
-    if(hint&&['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary'].includes(body.action))payload.expectedAccount=hint.email;
+    if(hint&&['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary','migrationAccounts'].includes(body.action))payload.expectedAccount=hint.email;
     const response=await fetchImpl('/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
     responseLeases.set(response,lease);
     if(lease===generation&&hint&&[401,403].includes(response.status)){
@@ -105,6 +105,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     changePassword:(currentPassword,newPassword)=>explicitAuth({action:'changePassword',currentPassword,newPassword},hint?.persistent===true),
     signOutOtherDevices:()=>auth({action:'signOutOtherDevices'}),
     migrationSummary:()=>auth({action:'migrationSummary'}),
+    migrationAccounts:cursor=>auth({action:'migrationAccounts',cursor}),
     checkSession(){
       if(!validated||!hint||statusPromise||now()-lastStatus<15000)return statusPromise;
       lastStatus=now();statusPromise=auth({action:'status'}).catch(()=>{lastStatus=0;}).finally(()=>{statusPromise=null;});return statusPromise;

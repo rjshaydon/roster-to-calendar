@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-sessions2';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-migration-list';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -321,6 +321,8 @@ let restoredSessionState = null;
 let statusMessageId = 0;
 let authenticationMigrationSummary = null;
 let authenticationMigrationSummaryRequest = null;
+let authenticationMigrationAccounts = null;
+let authenticationMigrationAccountsRequest = null;
 let currentUserEmail = loadCurrentUserEmail();
 let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || localStorage.getItem(PERSISTENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
@@ -1429,6 +1431,12 @@ mobileAccountButton?.addEventListener("click", async () => {
 });
 mobileAccountAccessButton?.addEventListener("click", async () => {
   await openAccountsSurface({ defaultAdminTab: "users" });
+});
+accountsBody.addEventListener('toggle',event=>{
+  if(event.target.matches('[data-password-migration-section]')&&event.target.open)void loadAuthenticationMigrationAccounts();
+},true);
+accountsBody.addEventListener('click',event=>{
+  const button=event.target.closest('[data-migration-more]');if(button){button.disabled=true;void loadAuthenticationMigrationAccounts({more:true}).finally(()=>{button.disabled=false;});}
 });
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
@@ -9179,6 +9187,7 @@ function hasActiveExportFilters() {
 
 function closeAccountsModal() {
   adminConsoleOpen = false;
+  accountsBody.querySelector('[data-password-migration-section]')?.removeAttribute('open');
   closeShiftCodeReviewModal();
   accountsModal.classList.add("hidden");
   accountsModal.setAttribute("aria-hidden", "true");
@@ -12856,10 +12865,47 @@ function renderSystemAdminCard() {
     <div class="issues-list">
       ${renderCalendarStoreCard()}
       ${renderAdminFilesMarkup({ canRemove: canRemoveImports(), canAdd: true })}
-      <article class="review-card"><div class="review-top"><strong data-password-migration-count>${passwordMigrationCountText()}</strong></div></article>
+      <details class="review-card create-user-card" data-password-migration-section>
+        <summary class="review-top"><strong data-password-migration-count>${passwordMigrationCountText()}</strong></summary>
+        <div class="review-body" data-password-migration-accounts>${renderAuthenticationMigrationAccounts()}</div>
+      </details>
       ${renderLoginPerformanceCard()}
     </div>
   `;
+}
+
+function renderAuthenticationMigrationAccounts() {
+  if(!authenticationMigrationAccounts)return '<p>Open this section to load accounts.</p>';
+  const rows=authenticationMigrationAccounts.rows;
+  const groups=[['migrated','Migrated'],['unmigrated','Not yet migrated'],['pending','Pending']];
+  return groups.filter(([key])=>key!=='pending'||rows.some(row=>row.status===key)).map(([key,title])=>{
+    const matches=rows.filter(row=>row.status===key).sort((a,b)=>(a.name||a.email).localeCompare(b.name||b.email));
+    return `<section><h4>${title}</h4>${matches.length?`<ul>${matches.map(row=>`<li><strong>${escapeHtml(row.name||row.email)}</strong>${row.name?` · ${escapeHtml(row.email)}`:''}</li>`).join('')}</ul>`:'<p>None.</p>'}</section>`;
+  }).join('')+(authenticationMigrationAccounts.nextCursor?'<button type="button" class="button button-secondary" data-migration-more>Load more accounts</button>':'');
+}
+async function loadAuthenticationMigrationAccounts({more=false}={}) {
+  const section=accountsBody.querySelector('[data-password-migration-section]');
+  if(!section?.open||!isViewingCreatorAccount()||!accountTransport.expected())return;
+  if(authenticationMigrationAccountsRequest)return authenticationMigrationAccountsRequest;
+  if(!more&&authenticationMigrationAccounts&&Date.now()-authenticationMigrationAccounts.at<60000){section.querySelector('[data-password-migration-accounts]').innerHTML=renderAuthenticationMigrationAccounts();return;}
+  const panel=section.querySelector('[data-password-migration-accounts]');
+  const cursor=more?authenticationMigrationAccounts?.nextCursor||'':'';
+  if(more&&!cursor)return;
+  if(!more)panel.textContent='Loading accounts…';
+  const account=authenticatedAccountEmail();
+  authenticationMigrationAccountsRequest=(async()=>{
+    try{
+      const response=await accountTransport.migrationAccounts(cursor);
+      const data=await readJsonResponse(response,'Could not load migration accounts.');
+      if(!accountTransport.responseCurrent(response)||account!==authenticatedAccountEmail())return;
+      if(!Array.isArray(data.accounts)||data.accounts.length>100||typeof data.nextCursor!=='string'
+        ||data.accounts.some(row=>typeof row.email!=='string'||typeof row.name!=='string'||!['migrated','unmigrated','pending'].includes(row.status)))throw Error('Could not load migration accounts.');
+      const rows=more?[...authenticationMigrationAccounts.rows,...data.accounts]:data.accounts;
+      authenticationMigrationAccounts={rows:[...new Map(rows.map(row=>[row.email,row])).values()],nextCursor:data.nextCursor,at:Date.now()};
+      if(panel.isConnected)panel.innerHTML=renderAuthenticationMigrationAccounts();
+    }catch(error){if(panel.isConnected){panel.textContent=error.message;authenticationMigrationAccounts=null;}}
+    finally{authenticationMigrationAccountsRequest=null;}
+  })();return authenticationMigrationAccountsRequest;
 }
 
 function passwordMigrationCountText() {
@@ -17206,6 +17252,7 @@ async function logoutCurrentUser(options = {}) {
   }
   closeAccountsModal();
   authenticationMigrationSummary = null;
+  authenticationMigrationAccounts = null;
   cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);

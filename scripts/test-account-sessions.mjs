@@ -185,8 +185,25 @@ const summary=await sessionRoute(context(request(promoted.setCookie,{action:'mig
 assert.equal(summary.status,200);const counts=await summary.json();
 assert.equal(counts.total,sqlite.prepare('SELECT count(*) n FROM account_profiles').get().n);
 assert.equal(counts.migrated,3);assert.deepEqual(Object.keys(counts).sort(),['migrated','ok','total']);
+const accountList=await sessionRoute(context(request(promoted.setCookie,{action:'migrationAccounts',expectedAccount:email})));
+assert.equal(accountList.status,200);const initialList=await accountList.json();
+assert(initialList.accounts.some(row=>row.email===email&&row.status==='migrated'));
+assert(initialList.accounts.every(row=>JSON.stringify(Object.keys(row).sort())===JSON.stringify(['email','name','status'])),'list never returns credentials or tokens');
+sqlite.exec('SAVEPOINT migration_list_pages');
+for(let i=0;i<105;i++)sqlite.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,?,'user','fixture-hash','fixture-salt',?)").run('paging'+String(i).padStart(3,'0')+'@example.test','Page Fixture '+i,'paging-feed-'+i);
+let cursor='',seen=[];
+do{
+ const response=await sessionRoute(context(request(promoted.setCookie,{action:'migrationAccounts',expectedAccount:email,cursor})));
+ assert.equal(response.status,200);const page=await response.json();assert(page.accounts.length<=100);
+ seen.push(...page.accounts);cursor=page.nextCursor;
+}while(cursor);
+assert.equal(new Set(seen.map(row=>row.email)).size,seen.length,'pages never repeat or omit cursor boundary accounts');
+assert.equal(seen.length,sqlite.prepare('SELECT count(*) n FROM account_profiles').get().n);
+assert.equal(seen.filter(row=>row.status==='unmigrated').length,105);
+sqlite.exec('ROLLBACK TO migration_list_pages; RELEASE migration_list_pages');
 const summaryOther=await issueAccountSession(db,{email:other,subject:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',persistent:false});
 assert.equal((await sessionRoute(context(request(summaryOther.setCookie,{action:'migrationSummary',expectedAccount:other})))).status,403);
+assert.equal((await sessionRoute(context(request(summaryOther.setCookie,{action:'migrationAccounts',expectedAccount:other})))).status,403);
 await revokeAccountSession(db,await readAccountSession(db,request(summaryOther.setCookie)));
 
 
