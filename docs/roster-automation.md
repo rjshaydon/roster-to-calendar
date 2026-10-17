@@ -61,25 +61,22 @@ Authorization: Bearer <ROSTER_AUTOMATION_TOKEN>
 
 ## Monash SharePoint / Power Automate
 
-Create a Power Automate flow in the Monash tenant. The signed-in Monash account and its MFA remain in Microsoft 365; the app receives only the roster file.
+Production uses the existing scheduled **Reconcile current and next-term roster metadata** Flow (`f46e3e52-ff98-4db9-9067-51a5de909236`). It checks the approved Monash and VHH library metadata every five minutes, sends one batched version preflight, and retrieves only changed eligible workbooks. Current terms remain checked while the next term becomes eligible on the first day of the preceding month. The Monash site remains authenticated through its existing SharePoint connection.
 
-1. Use **SharePoint – When a file is created or modified (properties only)** for the `Medical Roster` folder.
-2. Filter to the two approved filenames/prefixes and spreadsheet extensions. Use separate branches:
-   - Adult roster: `sourceId` = `monash-adults`
-   - Paediatric roster: `sourceId` = `monash-paeds`
-3. Use **Get file content** for the triggering file.
-4. Use the tenant-approved HTTP action to POST JSON to the ingress URL. A successful new upload returns HTTP `202` with `status: queued`. This connector is often Premium and may be blocked by DLP; confirm that with the Monash Power Platform administrator before enabling it.
+The old **Sync Monash roster files**, **Sync Monash Paediatrics roster files**, and **VHH Active Medical Roster to Production** save-trigger Flows are deliberately **Off**, retained for rollback. Bootstrap Flows also remain Off. Do not enable them alongside reconciliation: that would restore overlapping callers.
+
+For MMC/MCH, only the approved Medical Roster folder and eligible term filenames are accepted. A bounded DRAFT suffix is supported (for example `Paeds - Term 4 2026_ DRAFT.xlsx`); the final filename takes precedence if both are present. The actual SharePoint path is downloaded, while the canonical roster name identifies draft/final replacements. Draft and final provider versions are distinguished. Unchanged versions cause no content retrieval or parsing; ETags are checked before and after changed downloads. No matching file means waiting, independently for each site/term.
 
 Use this JSON body (replace the dynamic-content fields with the corresponding Power Automate values):
 
 ```json
 {
   "sourceId": "monash-adults",
-  "fileName": "@{triggerOutputs()?['body/{FilenameWithExtension}']}",
+  "fileName": "@{items('Changed_files')?['fileName']}",
   "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "contentBase64": "@{body('Get_file_content')?['$content']}",
-  "providerModifiedAt": "@{triggerOutputs()?['body/Modified']}",
-  "providerVersion": "@{triggerOutputs()?['body/ETag']}"
+  "contentBase64": "@{body('Get_file_content_using_path')?['$content']}",
+  "providerModifiedAt": "@{items('Changed_files')?['providerModifiedAt']}",
+  "providerVersion": "@{items('Changed_files')?['providerVersion']}"
 }
 ```
 
@@ -111,7 +108,7 @@ Normal source updates never require a full rebuild. In Admin → System, **Advan
 
 ## Dandenong / Findmyshift
 
-The scheduled watchdog checks Findmyshift every 15 minutes using the lightweight `teams/last-modified` endpoint. It imports the current term until the next term is four weeks away, then imports that next term as a separate retained roster so its shifts can appear before the rollover. A changed provider version refreshes the selected term; an unpublished upcoming term is recorded as waiting and retried only after Findmyshift changes. The report is converted to the same retained DDH workbook format used by manual exports, then processed by the normal GitHub queue.
+The scheduled watchdog checks Findmyshift every five minutes using the lightweight `teams/last-modified` endpoint. It imports the current term until the first day of the month preceding the next term, then imports that next term as a separate retained roster so its shifts can appear before the rollover. A changed provider version refreshes the selected term; an unpublished upcoming term is recorded as waiting and retried only after Findmyshift changes. The report is converted to the same retained DDH workbook format used by manual exports, then processed by the normal GitHub queue.
 
 Save the Findmyshift API key and team ID only as Pages secrets:
 

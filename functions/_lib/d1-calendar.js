@@ -3340,12 +3340,12 @@ export async function supersedeObsoleteQueuedRosterSyncRuns(db) {
   return { ok: true, changes: Number(result?.meta?.changes || result?.changes || 0) };
 }
 
-export async function claimRosterDispatch(db, { sourceId = "", reason = "", retryAfter = "", now = new Date().toISOString() } = {}) {
+export async function claimRosterDispatch(db, { sourceId = "", reason = "", retryAfter = "", now = new Date().toISOString(), publicationPending = false } = {}) {
   const normalizedSourceId = String(sourceId || "").trim();
   if (!db?.prepare || !normalizedSourceId) return { claimed: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   const pending = (await listQueuedRosterSyncRuns(db, normalizedSourceId, 1))[0];
-  if (!pending?.id) return { claimed: false, reason: "queue-empty" };
+  if (!pending?.id && !publicationPending) return { claimed: false, reason: "queue-empty" };
   const active = await db.prepare(`
     SELECT * FROM roster_dispatches
     WHERE status IN ('requested', 'accepted', 'running', 'failed', 'deferred')

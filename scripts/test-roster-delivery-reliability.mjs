@@ -67,10 +67,18 @@ try{
  const pending=await (await pendingCheck({env:publishingEnv,request:new Request('https://test/api/automation/pending?sourceId=monash-adults',{headers:{authorization:'Bearer fixture'}})})).json();
  assert.equal(pending.publicationPending,true);
  assert.equal(pending.runs.length,0,'publication resumes after the file import is already successful');
+ globalThis.fetch=async()=>new Response(null,{status:204});
+ const resumed=await requestQueuedRosterProcessing({...publishingEnv,ROSTER_ACCOUNT_BUDGET_ENABLED:'false'},{sourceId:'monash-adults'});
+ assert.equal(resumed.dispatched,true,'pending published-term views must dispatch with an empty import queue');
+ const concurrent=await requestQueuedRosterProcessing({...publishingEnv,ROSTER_ACCOUNT_BUDGET_ENABLED:'false'},{sourceId:'monash-adults'});
+ assert.equal(concurrent.dispatched,false,'publication-only continuation retains the source lease');
+ await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:resumed.dispatch.id,event:'completed'});
+
  sqlite.prepare("UPDATE facility_refresh_jobs SET status='complete'").run();
  sqlite.prepare("INSERT INTO facility_refresh_jobs(source_type,term_start,dates_json,content_signature,request_revision,updated_at) VALUES('mmc','2026-11-02','[\"2026-11-02\"]','boundary','boundary',?)").run(queuedAt);
  const boundary=await (await pendingCheck({env:publishingEnv,request:new Request('https://test/api/automation/pending?sourceId=monash-adults',{headers:{authorization:'Bearer fixture'}})})).json();
  assert.equal(boundary.publicationPending,false,'an overnight boundary without a next-term roster must not create no-op jobs or a delayed-sync warning');
+ assert.equal((await requestQueuedRosterProcessing({...publishingEnv,ROSTER_ACCOUNT_BUDGET_ENABLED:'false'},{sourceId:'monash-adults'})).reason,'queue-empty','an invisible boundary does not qualify for publication-only dispatch');
  await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
  assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[]);
 }finally{globalThis.fetch=originalFetch;}

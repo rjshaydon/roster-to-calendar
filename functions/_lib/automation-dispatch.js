@@ -39,6 +39,7 @@ export async function requestQueuedRosterProcessing(env, { sourceId = "", reason
   }
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {
     sourceId: normalizedSourceId,
+    publicationPending: Boolean(await loadPendingRosterPublication(env,normalizedSourceId)),
     reason,
     now: requestedAt.toISOString(),
     retryAfter: addMilliseconds(requestedAt, REQUEST_LEASE_MS).toISOString(),
