@@ -176,8 +176,8 @@ export async function onRequestPost(context) {
       return reply({ ok: true }, 200, renewed.setCookie);
     }
     if (action === 'signOutOtherDevices') {
-      await revokeOtherAccountSessions(db, session);
-      return reply({ ok: true });
+      const revokedSessions=await revokeOtherAccountSessions(db, session);
+      return reply({ ok: true, revokedSessions });
     }
     throw new AuthenticationError('auth-request', 'Unknown account action.', 400);
   } catch (error) {

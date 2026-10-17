@@ -11,7 +11,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icons/roster-arrow-192.png" type="image/png">
     <link rel="apple-touch-icon" href="/icons/roster-arrow-180.png">
-    <link rel="stylesheet" href="/static/styles.css?v=20261017-migration-layout">
+    <link rel="stylesheet" href="/static/styles.css?v=20261017-revoke-confirm">
   </head>
   <body data-skin="console">
     <div id="loadingScreen" class="loading-screen" role="status" aria-live="polite">
@@ -470,11 +470,19 @@
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
         <button type="button" class="modal-close" id="appDialogCloseButton" aria-label="Close dialog">×</button>
         <div class="modal-head"><h2 id="appDialogTitle">Confirm</h2></div>
-        <div class="modal-body"><p id="appDialogMessage"></p></div>
-        <div class="modal-actions">
-          <button type="button" class="button button-secondary" id="appDialogCancelButton">Cancel</button>
-          <button type="button" class="button button-primary hidden" id="appDialogConfirmButton">Confirm</button>
-        </div>
+        <form id="appDialogForm" method="post">
+          <div class="modal-body">
+            <p id="appDialogMessage"></p>
+            <div id="appDialogPasswordFields" hidden>
+              <label class="field"><span>Email address</span><input id="appDialogUsername" name="username" type="email" autocomplete="username" readonly disabled></label>
+              <label class="field"><span>Current password</span><input id="appDialogPassword" name="password" type="password" autocomplete="current-password" disabled></label>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button button-secondary" id="appDialogCancelButton">Cancel</button>
+            <button type="submit" class="button button-primary hidden" id="appDialogConfirmButton">Confirm</button>
+          </div>
+        </form>
       </section>
     </div>
 
@@ -715,6 +723,6 @@
         }
       }
     </script>
-    <script type="module" src="/static/app.js?v=20261017-autofill1"></script>
+    <script type="module" src="/static/app.js?v=20261017-revoke-confirm"></script>
   </body>
 </html>

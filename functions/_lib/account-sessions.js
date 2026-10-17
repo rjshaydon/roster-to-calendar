@@ -117,7 +117,10 @@ export async function revokeAccountSession(db, session) {
 
 export async function revokeOtherAccountSessions(db, session, options = {}) {
   requireRecentAuthentication(session, options);
-  await db.prepare('DELETE FROM account_sessions WHERE email=? AND token_hash<>?').bind(session.email, session.token_hash).run();
+  const result=await db.prepare('DELETE FROM account_sessions WHERE email=? AND token_hash<>?').bind(session.email, session.token_hash).run();
+  const revoked=Number(result.meta?.changes);
+  if(!Number.isSafeInteger(revoked)||revoked<0)throw new AuthenticationError('auth-revocation-unconfirmed','Sign-out could not be confirmed. Please try again.');
+  return revoked;
 }
 
 export async function cleanExpiredAccountSessions(db, options = {}) {

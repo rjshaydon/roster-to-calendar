@@ -44,3 +44,27 @@ runInNewContext(app.slice(restoreStart,restoreEnd)+';this.restore=restoreCloudSt
 await assert.rejects(()=>restoreContext.restore({mode:'login'}),error=>error===upgradeError);
 assert.equal(restoreContext.currentUserEmail,'fixture@example.test');
 console.log('Inline password-upgrade signals reach the login prompt without erasing its draft.');
+
+// Recent-auth confirmation is a visible, separate username/current-password
+// form; cancellation and submission always clear its transient values.
+{
+ const nodes=new Map();const field=()=>({value:'',disabled:true,required:false,focus(){},reportValidity(){return Boolean(this.value);}});
+ const password=field(),username=field(),fields={hidden:true};
+ nodes.set('#appDialogPassword',password);nodes.set('#appDialogUsername',username);nodes.set('#appDialogPasswordFields',fields);
+ const classList=classes('hidden');classList.toggle=(value,force)=>force?classList.add(value):classList.remove(value);
+ const dialog={classList,setAttribute(){}};
+ const buttonClasses=classes();buttonClasses.toggle=(value,force)=>force?buttonClasses.add(value):buttonClasses.remove(value);
+ const dialogContext={appDialog:dialog,document:{querySelector:key=>nodes.get(key)},appDialogTitle:{},appDialogMessage:{},appDialogConfirmButton:{classList:buttonClasses},appDialogCancelButton:{focus(){}},isMobileLayout:()=>true};
+ const start=app.indexOf('let appDialogResolve = null;'),end=app.indexOf('appDialogCloseButton?.addEventListener',start);
+ runInNewContext(app.slice(start,end)+';this.show=showAppDialog;this.close=closeAppDialog;',dialogContext);
+ const plain=dialogContext.show({title:'Generic confirm',message:'Fixture',confirmLabel:'Confirm'});assert.equal(password.disabled,true);dialogContext.close(true);assert.equal(await plain,true);
+ const cancelled=dialogContext.show({title:'Confirm other devices',message:'Fixture',confirmLabel:'Confirm sign out',requirePassword:true,email:'fixture@example.test'});
+ assert.equal(password.disabled,false);assert.equal(username.value,'fixture@example.test');password.value='Transient fixture password';dialogContext.close(false);
+ assert.equal(await cancelled,false);assert.equal(password.value,'');assert.equal(username.value,'');assert.equal(password.disabled,true);
+ const submitted=dialogContext.show({title:'Confirm',message:'Fixture',confirmLabel:'Confirm sign out',requirePassword:true,email:'fixture@example.test'});
+ dialogContext.close(true);assert.equal(dialog.classList.contains('hidden'),false,'empty password cannot confirm');password.value='Transient fixture password';dialogContext.close(true);
+ assert.equal(await submitted,'Transient fixture password');assert.equal(password.value,'');assert.equal(password.disabled,true);
+ assert.match(html,/<form id="appDialogForm" method="post">/);
+ assert.match(html,/<input id="appDialogPassword"[^>]*autocomplete="current-password"[^>]*disabled/);
+}
+console.log('Recent-auth dialog passed explicit confirmation, empty-password refusal, generic-dialog compatibility and transient credential cleanup.');

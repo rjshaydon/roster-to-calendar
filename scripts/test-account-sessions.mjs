@@ -144,7 +144,11 @@ for(const action of ['status','activity','logout','signOutOtherDevices']){
 const currentRole=await readAccountSession(db,request(first.setCookie));
 const second=await issueAccountSession(db,{email,subject,persistent:false},{now:now+1});
 assert.doesNotMatch(second.setCookie,/Max-Age|Expires|Domain/);
-await revokeOtherAccountSessions(db,currentRole,{now:now+10});
+await assert.rejects(()=>revokeOtherAccountSessions(db,{...currentRole,authenticated_at:now-11*60000},{now}),error=>error.code==='auth-reauthentication-required');
+assert.equal((await readAccountSession(db,request(second.setCookie))).email,email,'an unconfirmed command revokes nothing');
+const revokeResponse=await sessionRoute(context(request(first.setCookie,{action:'signOutOtherDevices',expectedAccount:email})));
+assert.equal(revokeResponse.status,200);assert.deepEqual(await revokeResponse.json(),{ok:true,revokedSessions:1});
+assert.equal(await revokeOtherAccountSessions(db,currentRole,{now:now+10}),0,'no-op revocation is distinguishable from actual deletion');
 await assert.rejects(()=>readAccountSession(db,request(second.setCookie)),e=>e.status===401);
 assert.equal((await readAccountSession(db,request(first.setCookie))).email,email);
 await assert.rejects(()=>readAccountSession(db,request(first.setCookie),{now:now+SESSION_OUTER_MS}),e=>e.status===401);

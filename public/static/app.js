@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-autofill1';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-revoke-confirm';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -1519,31 +1519,46 @@ shiftCodeReviewModalBody?.addEventListener("click", (event) => {
   }
 });
 let appDialogResolve = null;
+let appDialogNeedsPassword = false;
 
 function closeAppDialog(result = false) {
   if (!appDialog || appDialog.classList.contains("hidden")) return;
+  const password=document.querySelector('#appDialogPassword');
+  if(result&&appDialogNeedsPassword&&!password?.reportValidity())return;
+  const answer=result&&appDialogNeedsPassword?password.value:result;
+  if(password){password.value='';password.disabled=true;password.required=false;}
+  const username=document.querySelector('#appDialogUsername');if(username){username.value='';username.disabled=true;}
+  appDialogNeedsPassword=false;
   appDialog.classList.add("hidden");
   appDialog.setAttribute("aria-hidden", "true");
   const resolve = appDialogResolve;
   appDialogResolve = null;
-  resolve?.(result);
+  resolve?.(answer);
 }
 
-function showAppDialog({ title, message, confirmLabel = "" }) {
+function showAppDialog({ title, message, confirmLabel = "", requirePassword=false, email="" }) {
   if (!appDialog) return Promise.resolve(false);
+  if(appDialogResolve)closeAppDialog(false);
+  appDialogNeedsPassword=requirePassword;
+  const fields=document.querySelector('#appDialogPasswordFields'),password=document.querySelector('#appDialogPassword'),username=document.querySelector('#appDialogUsername');
+  if(fields)fields.hidden=!requirePassword;
+  if(username){username.value=requirePassword?email:'';username.disabled=!requirePassword;}
+  if(password){password.value='';password.disabled=!requirePassword;password.required=requirePassword;}
   appDialogTitle.textContent = title;
   appDialogMessage.textContent = message;
   appDialogConfirmButton.textContent = confirmLabel || "Confirm";
   appDialogConfirmButton.classList.toggle("hidden", !confirmLabel);
   appDialog.classList.remove("hidden");
   appDialog.setAttribute("aria-hidden", "false");
-  appDialogCancelButton.focus();
+  if(!requirePassword)appDialogCancelButton.focus();
+  else if(!isMobileLayout())password?.focus();
   return new Promise((resolve) => { appDialogResolve = resolve; });
 }
 
 appDialogCloseButton?.addEventListener("click", () => closeAppDialog(false));
 appDialogCancelButton?.addEventListener("click", () => closeAppDialog(false));
-appDialogConfirmButton?.addEventListener("click", () => closeAppDialog(true));
+document.querySelector('#appDialogForm')?.addEventListener('submit',event=>{event.preventDefault();closeAppDialog(true);});
+appDialog?.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeAppDialog(false);}});
 appDialog?.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-app-dialog]")) closeAppDialog(false);
 });
@@ -12960,6 +12975,7 @@ function renderLoginPerformanceCard() {
   const server = client.server || {};
   const value = (milliseconds) => Number.isFinite(Number(milliseconds)) ? `${Math.round(Number(milliseconds))} ms` : "Not measured";
   const source = String(server.snapshotSource || "unknown").replaceAll("-", " ");
+  const clientVersion = new URL(document.querySelector('script[type="module"][src*="/static/app.js"]')?.src || location.href).searchParams.get('v') || 'unknown';
   return `
     <article class="review-card">
       <div class="review-top">
@@ -12969,6 +12985,7 @@ function renderLoginPerformanceCard() {
         </div>
       </div>
       <div class="review-body system-admin-body">
+        <p>Client version: ${escapeHtml(clientVersion)}</p>
         <p>Authentication: ${escapeHtml(value(server.authMs))} · Registry: ${escapeHtml(value(server.registryLookupMs))} · R2: ${escapeHtml(value(server.r2ReadMs))}</p>
         <p>Snapshot: ${escapeHtml(source)}${server.validationDeferred === true ? " · revision checked after display" : ""}</p>
       </div>
@@ -17203,18 +17220,22 @@ accountsBody.addEventListener('click',async event=>{
   if(event.target.closest('[data-signout-this-device]')){void logoutCurrentUser();return;}
   const button=event.target.closest('[data-signout-other-devices]');if(!button)return;
   const feedback=button.closest('form')?.querySelector('[data-account-session-status]');
-  const showFeedback=(text,error=false)=>{if(feedback){feedback.hidden=false;feedback.textContent=text;feedback.dataset.error=String(error);}};
+  const showFeedback=(text,error=false)=>{if(feedback?.isConnected){feedback.hidden=false;feedback.textContent=text;feedback.dataset.error=String(error);feedback.scrollIntoView({block:'nearest'});}};
   showFeedback('Signing out other devices…');
-  button.disabled=true;const field=button.closest('form')?.querySelector('[data-account-current-password]');
+  button.disabled=true;const actor=authenticatedAccountEmail();
   try{
     let response=await accountTransport.signOutOtherDevices();
     if(response.status===401&&(await response.clone().json().catch(()=>({}))).code==='auth-reauthentication-required'){
-      if(!field?.value){showFeedback('Enter your current password, then choose Sign out other devices again.',true);field?.focus();return;}
-      await readJsonResponse(await accountTransport.reauthenticate(field.value),'Could not confirm your password.');
+      let password=await showAppDialog({title:'Confirm sign-out of other devices',message:'For security, confirm your current password before signing out your other devices. You can use Apple Passwords.',confirmLabel:'Confirm sign out',requirePassword:true,email:actor});
+      if(!password){showFeedback('Cancelled. Other devices are still signed in.');return;}
+      if(actor!==authenticatedAccountEmail()){password='';throw Error('The account changed. Please try again.');}
+      try{await readJsonResponse(await accountTransport.reauthenticate(password),'Could not confirm your password.');}finally{password='';}
       response=await accountTransport.signOutOtherDevices();
     }
-    await readJsonResponse(response,'Could not sign out other devices.');showFeedback('Other devices have been signed out. This device is still signed in.');
-  }catch(error){showFeedback(error.message,true);}finally{if(field)field.value='';button.disabled=false;}
+    const result=await readJsonResponse(response,'Could not sign out other devices.');
+    if(!Number.isSafeInteger(result.revokedSessions)||result.revokedSessions<0)throw Error('Sign-out could not be confirmed. Please reload the app and try again.');
+    showFeedback(result.revokedSessions?`${result.revokedSessions} other session${result.revokedSessions===1?'':'s'} signed out. This device is still signed in.`:'No other signed-in sessions were found. This device is still signed in.');
+  }catch(error){showFeedback(error.message,true);}finally{button.disabled=false;}
 });
 
 function normalizeAuthMessage(message) {
@@ -17267,6 +17288,7 @@ async function logoutCurrentUser(options = {}) {
     signOutRequest = accountTransport.logout();
   }
   closeAccountsModal();
+  closeAppDialog(false);
   authenticationMigrationSummary = null;
   authenticationMigrationAccounts = null;
   cancelScheduledCloudStateSave();

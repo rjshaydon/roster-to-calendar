@@ -5362,3 +5362,6 @@ body[data-skin="console"] .panel {
 [data-password-migration-accounts] ul { margin: 0; padding-left: 24px; }
 [data-password-migration-accounts] li + li { margin-top: 6px; }
 [data-password-migration-accounts] [data-migration-more] { margin-top: 16px; }
+
+[data-account-session-status] { grid-column: 1 / -1; margin: 8px 0 0; }
+#appDialogPasswordFields:not([hidden]) { display: grid; gap: 12px; margin-top: 16px; }
