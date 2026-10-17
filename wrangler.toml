@@ -10,8 +10,8 @@ binding = "REQUEST_ANALYTICS"
 dataset = "roster_api_invocations"
 
 [vars]
-# Credentials remain encrypted; only this named owner can migrate in the canary.
-ROSTER_AUTH_ROLLOUT = '{"enabled":true,"sessionsEnabled":true,"migrationEnabled":true,"migrationEmails":["rhaydon@gmail.com"],"signupEnabled":false,"emailDeliveryReady":false,"legacyStateUntil":"2026-10-19T04:00:00.000Z"}'
+# Credentials remain encrypted; general migration occurs only after successful login.
+ROSTER_AUTH_ROLLOUT = '{"enabled":true,"sessionsEnabled":true,"migrationEnabled":true,"signupEnabled":true,"emailDeliveryReady":false,"legacyStateUntil":"2026-10-20T00:00:00.000Z"}'
 ROSTER_COMPARISON_ENABLED = "true"
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"
 FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "true"
