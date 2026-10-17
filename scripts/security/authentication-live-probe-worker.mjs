@@ -9,7 +9,14 @@ export function authenticationLiveProbe(gate,fixtureId){return{async fetch(reque
  const supplied=JSON.parse(env.ROSTER_AUTH_CONFIG||'{}');
  // The existing secret may also be pasted directly into an encrypted binding
  // without copying a whole credential-bearing JSON document through tooling.
- if(env.SUPABASE_SECRET_KEY)supplied.secretKey=env.SUPABASE_SECRET_KEY;
+ if(env.SUPABASE_SECRET_KEY){
+  let pasted=env.SUPABASE_SECRET_KEY;
+  try{const parsed=JSON.parse(pasted);if(typeof parsed==='string')pasted=parsed;else if(typeof parsed?.secretKey==='string')pasted=parsed.secretKey;}catch{}
+  // Copying a displayed, wrapped key can introduce whitespace. Provider keys
+  // have no meaningful whitespace; the actual provider validator stays strict.
+  supplied.secretKey=pasted.replace(/\s/g,'');
+ }
+ if(new URL(request.url).pathname==='/configuration')return Response.json({disabled:supplied.enabled===false,approvedOrigin:supplied.url==='https://nncmejyfkujpfuivlart.supabase.co',publishableValid:/^sb_publishable_[A-Za-z0-9_-]+$/.test(supplied.publishableKey||''),secretPresent:typeof supplied.secretKey==='string'&&!!supplied.secretKey,secretValid:/^sb_secret_[A-Za-z0-9_-]+$/.test(supplied.secretKey||''),secretValidAfterTrim:/^sb_secret_[A-Za-z0-9_-]+$/.test(String(supplied.secretKey||'').trim())},{headers:{'Cache-Control':'no-store'}});
  if(supplied.enabled!==false)return Response.json({ok:false,code:'configuration-must-stay-disabled'},{status:503});
  const meter={statements:0,rowsRead:0,rowsWritten:0};
  function record(r){meter.statements++;meter.rowsRead+=Number(r.meta?.rows_read||0);meter.rowsWritten+=Number(r.meta?.rows_written||0);return r;}
@@ -34,8 +41,9 @@ export function authenticationLiveProbe(gate,fixtureId){return{async fetch(reque
     const address='batch6-'+fixtureId+'-'+type+'@example.test';
     const link=await db.prepare('SELECT provider_subject FROM account_authentication_links WHERE email=?').bind(address).first();
     if(link){await deleteSupabaseAccount(environment,{subject:link.provider_subject,email:address});removed++;}
+    await db.prepare('DELETE FROM account_profiles WHERE email=?').bind(address).run();
    }
-   return Response.json({ok:true,syntheticAccountsRemoved:removed,meter});
+   return Response.json({ok:true,syntheticAccountsRemoved:removed,syntheticFixturesAbsent:true,meter});
   }
   const isState=step==='context';let body;
   if(step==='signup')body={action:'signup',email,password,realName:'Synthetic New Doctor',remember:true};

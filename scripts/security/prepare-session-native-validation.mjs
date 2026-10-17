@@ -34,4 +34,4 @@ const response=await middleware(context);await response.body?.cancel();
 return Response.json({ok:response.ok,status:response.status,meter},{headers:{'Cache-Control':'no-store',...(response.headers.get('Set-Cookie')?{'Set-Cookie':response.headers.get('Set-Cookie')}:{})}});
 }catch{return Response.json({ok:false,code:'native-probe-failed',meter},{status:503});}
 }};`);
-fs.writeFileSync(out+'/wrangler.toml','name = "roster-session-native-validation"\nmain = "worker.mjs"\ncompatibility_date = "2026-10-15"\nworkers_dev = true\npreview_urls = false\n[[d1_databases]]\nbinding = "TEST_DB"\ndatabase_name = "roster-session-native-validation"\ndatabase_id = "'+databaseId+'"\n');
+fs.writeFileSync(out+'/wrangler.toml','name = "roster-session-native-validation"\nmain = "worker.mjs"\ncompatibility_date = "2026-04-22"\nworkers_dev = true\npreview_urls = false\n[[d1_databases]]\nbinding = "TEST_DB"\ndatabase_name = "roster-session-native-validation"\ndatabase_id = "'+databaseId+'"\n');

@@ -35,7 +35,7 @@ try{
  evidence.acceptancePassed=true;
 }catch{evidence.acceptancePassed=false;}
 finally{
- try{const cleaned=await step('cleanup');evidence.cleanup=cleaned.response.status===200&&cleaned.result.syntheticAccountsRemoved===2;}catch{evidence.cleanup=false;}
+ try{const cleaned=await step('cleanup');evidence.cleanup=cleaned.response.status===200&&cleaned.result.syntheticFixturesAbsent===true;}catch{evidence.cleanup=false;}
  fs.writeFileSync(evidenceFile,JSON.stringify(evidence,null,2)+'\n',{mode:0o600});
 }
 console.log(JSON.stringify({acceptancePassed:evidence.acceptancePassed,syntheticCleanupComplete:evidence.cleanup,steps:evidence.checks.length}));

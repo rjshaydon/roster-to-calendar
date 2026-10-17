@@ -109,6 +109,12 @@ try{
  // exposing it to live provider credentials. Only its provider remains mocked.
  const gate='f'.repeat(64),probe=authenticationLiveProbe(gate,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
  const probeEnv={TEST_DB:db,ROSTER_AUTH_CONFIG:JSON.stringify({...config,enabled:false,secretKey:undefined}),SUPABASE_SECRET_KEY:config.secretKey};
+ for(const pasted of [config.secretKey,' '+config.secretKey+'\n',JSON.stringify(config.secretKey),JSON.stringify({secretKey:config.secretKey})]){
+  const check=await probe.fetch(new Request('https://probe.example.test/configuration',{method:'POST',headers:{Authorization:'Bearer '+gate}}),{...probeEnv,SUPABASE_SECRET_KEY:pasted});
+  assert.equal((await check.json()).secretValid,true,'test credential paste accepts only the validated key after formatting removal');
+ }
+ const invalidProbeConfig=await probe.fetch(new Request('https://probe.example.test/configuration',{method:'POST',headers:{Authorization:'Bearer '+gate}}),{...probeEnv,SUPABASE_SECRET_KEY:'roster_calendar_auth'});
+ assert.equal((await invalidProbeConfig.json()).secretValid,false,'the display name cannot be accepted as the key');
  async function probeStep(step,kind='new',cookie=''){
   return probe.fetch(new Request('https://probe.example.test/'+step+'?kind='+kind,{method:'POST',headers:{Authorization:'Bearer '+gate,...(cookie?{Cookie:cookie}:{})}}),probeEnv);
  }
@@ -127,5 +133,6 @@ try{
   }
  }
  const cleanup=await probeStep('cleanup');assert.equal(cleanup.status,200);assert.equal((await cleanup.json()).syntheticAccountsRemoved,2);
+ const repeatedCleanup=await probeStep('cleanup');assert.equal(repeatedCleanup.status,200);const repeatedResult=await repeatedCleanup.json();assert.equal(repeatedResult.syntheticFixturesAbsent,true);assert.equal(repeatedResult.syntheticAccountsRemoved,0,'exact fixture cleanup is resumable after partial/no provider provisioning');
  console.log('Connected auth journeys passed: password login -> migration -> cookie -> account/calendar envelope; no-mail signup -> cookie -> envelope; unchanged reads without provider work/writes; migration pause preserves ready users; logout replay denied. No external services.');
 }finally{globalThis.fetch=oldFetch;sql.close();}

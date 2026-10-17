@@ -1,0 +1,38 @@
+{
+  "at": "2026-10-17T02:24:24.286Z",
+  "compatibilityDate": "2026-04-22",
+  "syntheticOnly": true,
+  "providerCalls": false,
+  "productionChanged": false,
+  "cpuMeasured": false,
+  "workloads": [
+    {
+      "users": 100,
+      "requests": 200,
+      "failures": 0,
+      "wallMs": {
+        "p50": 115,
+        "p95": 151,
+        "max": 203
+      },
+      "maxStatements": 3,
+      "maxRowsRead": 4,
+      "rowsWritten": 0
+    },
+    {
+      "users": 500,
+      "requests": 1000,
+      "failures": 0,
+      "wallMs": {
+        "p50": 110,
+        "p95": 145,
+        "max": 324
+      },
+      "maxStatements": 3,
+      "maxRowsRead": 4,
+      "rowsWritten": 0
+    }
+  ],
+  "actorAndRevocationChecks": true,
+  "passed": true
+}
