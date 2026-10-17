@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-17T23:23:23.933Z",
+  "syntheticOnly": true,
+  "staffAccountsTouched": false,
+  "emailsRequested": false,
+  "results": [
+    {
+      "name": "signup-without-email",
+      "passed": true,
+      "status": 202
+    },
+    {
+      "name": "verified-password-login",
+      "passed": true,
+      "status": 200
+    },
+    {
+      "name": "secure-cookie",
+      "passed": true
+    },
+    {
+      "name": "session-validation",
+      "passed": true
+    },
+    {
+      "name": "admin-access-denied",
+      "passed": true
+    },
+    {
+      "name": "account-mismatch-denied",
+      "passed": true
+    },
+    {
+      "name": "ordinary-account-context",
+      "passed": true
+    },
+    {
+      "name": "logout",
+      "passed": true
+    },
+    {
+      "name": "revoked-cookie-denied",
+      "passed": true
+    },
+    {
+      "name": "returning-provider-login",
+      "passed": true
+    },
+    {
+      "name": "synthetic-account-cleanup",
+      "passed": true,
+      "status": 200
+    }
+  ],
+  "cleaned": true
+}
