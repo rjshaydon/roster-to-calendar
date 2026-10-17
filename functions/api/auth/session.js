@@ -150,6 +150,14 @@ export async function onRequestPost(context) {
       const issued=await issueAccountSession(db,{email:session.email,subject:changed.subject,credentialVersion:changed.credentialVersion,persistent:session.persistent===1});
       return reply({ok:true,email:session.email},200,issued.setCookie);
     }
+    if(action==='migrationSummary'){
+      if(!['creator','owner'].includes(session.role))throw new AuthenticationError('auth-forbidden','Creator access is required.',403);
+      const counts=await db.prepare(`SELECT count(*) AS total,
+        coalesce(sum(CASE WHEN a.password_hash='' AND a.password_salt='' AND EXISTS
+          (SELECT 1 FROM account_authentication_links l WHERE l.email=a.email AND l.phase='ready') THEN 1 ELSE 0 END),0) AS migrated
+        FROM account_profiles a`).first();
+      return reply({ok:true,total:Number(counts.total),migrated:Number(counts.migrated)});
+    }
     if (action === 'status') return reply({ ok: true, email: session.email, role: session.role });
     if (action === 'activity') {
       const renewed = await renewAccountSession(db, context.request, session);

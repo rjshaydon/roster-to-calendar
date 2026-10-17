@@ -98,3 +98,29 @@ for(const informed of [false,true]){
  assert.equal((await pending).status,401);assert.equal(transport.expected(),false);assert.deepEqual(requests,['signup']);
 }
 console.log('Browser account transport passed: one-time upgrade, bounded signup verification, no routine passwords/preflights/storage rewrites, cookie hints require validation, Creator target separation, coalesced foreground activity, recent-auth preservation, logout/expiry and stale-response/other-tab isolation.');
+
+// Local authority disappears immediately, while a new login waits for the old
+// response's Set-Cookie to settle. No new cookie can be cleared by late logout.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'old@example.test',persistent:true}));
+ let releaseLogout;const requests=[];
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),fetchImpl:async(_url,init)=>{
+  const body=JSON.parse(init.body);requests.push(body);
+  if(body.action==='logout')return new Promise(resolve=>{releaseLogout=resolve;});
+  return Response.json({ok:true,email:body.email});
+ }});
+ const outgoing=transport.logout();assert.equal(transport.expected(),false);assert.equal(storage.getItem(COOKIE_AUTH_HINT),null);
+ const incoming=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'new@example.test',password:'fixture password',remember:true})});assert.equal(requests.length,1,'new login waits for pending cookie clearance');
+ releaseLogout(Response.json({ok:true}));await outgoing;assert.equal((await incoming).status,200);assert.equal(transport.email(),'new@example.test');
+ assert.equal(requests[0].expectedAccount,'old@example.test');
+}
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let checks=0,expired=0;let time=100000;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>time,onExpired(){expired++;},fetchImpl:async(_url,init)=>{
+  const body=JSON.parse(init.body);checks++;return body.action==='status'&&checks>1?Response.json({code:'auth-session-expired'},{status:401}):Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});
+ await Promise.all([transport.checkSession(),transport.checkSession()]);assert.equal(checks,2);assert.equal(expired,1);assert.equal(transport.expected(),false);
+ await transport.checkSession();assert.equal(checks,2,'signed-out tabs never poll');
+}
+console.log('Immediate local logout, serialized cookie clearance/new login and coalesced foreground revocation checks passed.');

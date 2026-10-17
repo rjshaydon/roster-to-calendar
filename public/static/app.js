@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-canary1';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-sessions2';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -319,6 +319,8 @@ let conflictSelections = {};
 let accountState = loadAccountState();
 let restoredSessionState = null;
 let statusMessageId = 0;
+let authenticationMigrationSummary = null;
+let authenticationMigrationSummaryRequest = null;
 let currentUserEmail = loadCurrentUserEmail();
 let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || localStorage.getItem(PERSISTENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
@@ -344,6 +346,9 @@ if (accountTransport.expected()) {
   clearBrowserPasswordsAfterCookieAuthentication(currentUserEmail);
 }
 window.addEventListener('storage', event => { if (event.key === AUTH_NOTICE) accountTransport.notice(event.newValue); });
+window.addEventListener('focus', () => { if (!document.hidden) void accountTransport.checkSession(); });
+window.addEventListener('pageshow', () => { if (!document.hidden) void accountTransport.checkSession(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void accountTransport.checkSession(); });
 for (const type of ['pointerdown','keydown']) document.addEventListener(type, event => {
   if (event.isTrusted && !document.hidden) void accountTransport.noteActivity();
 }, { passive: true });
@@ -12656,9 +12661,11 @@ function renderAccountsModal(options = {}) {
         ` : ''}
         <div class="modal-actions">
           <button type="submit" class="button button-primary">Save changes</button>
+          ${normalizeEmail(me.email) === authenticatedAccountEmail() ? '<button type="button" class="button button-secondary" data-signout-this-device>Sign out</button>' : ''}
           ${accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? '<button type="button" class="button button-secondary" data-signout-other-devices>Sign out other devices</button>' : ''}
           ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
+        <p data-account-session-status role="status" aria-live="polite" hidden></p>
       </form>
       `}
       ${renderAccountHospitalLocationsCard({ directorPreference: currentNonClinical && currentDirectorViewEnabled && !doctorProfileView })}
@@ -12844,13 +12851,38 @@ function mountAdminIdentityReview() {
 }
 
 function renderSystemAdminCard() {
+  queueMicrotask(() => { void loadAuthenticationMigrationSummary(); });
   return `
     <div class="issues-list">
       ${renderCalendarStoreCard()}
       ${renderAdminFilesMarkup({ canRemove: canRemoveImports(), canAdd: true })}
+      <article class="review-card"><div class="review-top"><strong data-password-migration-count>${passwordMigrationCountText()}</strong></div></article>
       ${renderLoginPerformanceCard()}
     </div>
   `;
+}
+
+function passwordMigrationCountText() {
+  return authenticationMigrationSummary
+    ? `${authenticationMigrationSummary.migrated} of ${authenticationMigrationSummary.total} passwords migrated`
+    : 'Password migration count unavailable';
+}
+async function loadAuthenticationMigrationSummary() {
+  if (!isViewingCreatorAccount() || currentAdminTab !== 'system' || accountsModal.classList.contains('hidden') || !accountTransport.expected()) return;
+  if (authenticationMigrationSummaryRequest) return authenticationMigrationSummaryRequest;
+  if (authenticationMigrationSummary && Date.now()-authenticationMigrationSummary.at<60000) return;
+  const account=authenticatedAccountEmail();
+  authenticationMigrationSummaryRequest=(async()=>{
+    try{
+      const response=await accountTransport.migrationSummary();
+      const data=await readJsonResponse(response,'Password migration count unavailable.');
+      if (!accountTransport.responseCurrent(response) || account!==authenticatedAccountEmail()) return;
+      if(!Number.isSafeInteger(data.migrated)||!Number.isSafeInteger(data.total)||data.migrated<0||data.total<data.migrated) return;
+      authenticationMigrationSummary={migrated:data.migrated,total:data.total,at:Date.now()};
+      const label=accountsBody.querySelector('[data-password-migration-count]');if(label)label.textContent=passwordMigrationCountText();
+    }catch{ /* Keep a quiet unavailable label; retry on the next System visit. */ }
+    finally{authenticationMigrationSummaryRequest=null;}
+  })();return authenticationMigrationSummaryRequest;
 }
 
 function renderAdvancedRosterRecovery() {
@@ -17109,17 +17141,21 @@ document.querySelector('#accountEmailActionForm')?.addEventListener('submit',asy
 });
 
 accountsBody.addEventListener('click',async event=>{
+  if(event.target.closest('[data-signout-this-device]')){void logoutCurrentUser();return;}
   const button=event.target.closest('[data-signout-other-devices]');if(!button)return;
+  const feedback=button.closest('form')?.querySelector('[data-account-session-status]');
+  const showFeedback=(text,error=false)=>{if(feedback){feedback.hidden=false;feedback.textContent=text;feedback.dataset.error=String(error);}};
+  showFeedback('Signing out other devices…');
   button.disabled=true;const field=button.closest('form')?.querySelector('[data-account-current-password]');
   try{
     let response=await accountTransport.signOutOtherDevices();
     if(response.status===401&&(await response.clone().json().catch(()=>({}))).code==='auth-reauthentication-required'){
-      if(!field?.value){setStatus('Enter your current password, then choose Sign out other devices again.',true);field?.focus();return;}
+      if(!field?.value){showFeedback('Enter your current password, then choose Sign out other devices again.',true);field?.focus();return;}
       await readJsonResponse(await accountTransport.reauthenticate(field.value),'Could not confirm your password.');
       response=await accountTransport.signOutOtherDevices();
     }
-    await readJsonResponse(response,'Could not sign out other devices.');setStatus('Other devices have been signed out.');
-  }catch(error){setStatus(error.message,true);}finally{if(field)field.value='';button.disabled=false;}
+    await readJsonResponse(response,'Could not sign out other devices.');showFeedback('Other devices have been signed out. This device is still signed in.');
+  }catch(error){showFeedback(error.message,true);}finally{if(field)field.value='';button.disabled=false;}
 });
 
 function normalizeAuthMessage(message) {
@@ -17163,10 +17199,13 @@ async function logoutCurrentUser(options = {}) {
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewAutomaticLaunchEnabled = false;
+  let signOutRequest;
   if (!options.expired) {
-    try { await flushCloudStateSave(); } catch { /* Keep sign out moving. */ }
-    try { await accountTransport.logout(); } catch (error) { setStatus(error.message, true); return; }
+    void flushCloudStateSave().catch(() => {});
+    signOutRequest = accountTransport.logout();
   }
+  closeAccountsModal();
+  authenticationMigrationSummary = null;
   cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -17207,6 +17246,10 @@ async function logoutCurrentUser(options = {}) {
   renderLoginState();
   openLoginModal();
   setStatus("Log in to load a roster workspace.");
+  if (signOutRequest) {
+    try { await signOutRequest; }
+    catch { setEntranceStatus("Signed out on this device. Server sign-out could not be confirmed; check your connection.", true); }
+  }
 }
 
 function renderLoginState() {

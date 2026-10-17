@@ -4,7 +4,7 @@ export const AUTH_NOTICE = 'roster-auth-notice';
 const RENEW_INTERVAL = 6 * 3600000;
 export function createAccountTransport({ fetchImpl = (...args) => fetch(...args), persistentStorage, tabStorage, onAuthenticated = () => {}, onExpired = () => {}, now = () => Date.now() } = {}) {
   function readHint() { try { const x=JSON.parse(tabStorage?.getItem(COOKIE_AUTH_HINT)||persistentStorage?.getItem(COOKIE_AUTH_HINT)||'null');return x&&typeof x.email==='string'&&x.email.length<=254?x:null; } catch { return null; } }
-  let hint=readHint(),validated=false,generation=0,authIntent=0,activityPromise=null,lastActivity=0,upgradeAvailable=Boolean(readHint()),cohortRollout=false,optionsPromise;
+  let hint=readHint(),validated=false,generation=0,authIntent=0,activityPromise=null,lastActivity=0,upgradeAvailable=Boolean(readHint()),cohortRollout=false,optionsPromise,logoutPromise=null,statusPromise=null,lastStatus=0;
   const responseLeases=new WeakMap();
   function removeHints(){try{persistentStorage?.removeItem(COOKIE_AUTH_HINT);}catch{}try{tabStorage?.removeItem(COOKIE_AUTH_HINT);}catch{}}
   function notify(email){try{persistentStorage?.setItem(AUTH_NOTICE,JSON.stringify({email,at:now(),nonce:Math.random()}));}catch{}}
@@ -18,11 +18,11 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   }
   function expire(){authIntent++;generation++;hint=null;validated=false;removeHints();onExpired();}
   function changedResponse(){return Response.json({error:'The account changed. Please try again.',code:'auth-session-changed'},{status:401});}
-  async function auth(body){
+  async function auth(body,options={}){
     const lease=generation;
     const payload={...body};
-    if(hint&&['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate'].includes(body.action))payload.expectedAccount=hint.email;
-    const response=await fetchImpl('/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(hint&&['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary'].includes(body.action))payload.expectedAccount=hint.email;
+    const response=await fetchImpl('/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
     responseLeases.set(response,lease);
     if(lease===generation&&hint&&[401,403].includes(response.status)){
       const data=await response.clone().json().catch(()=>null);
@@ -44,6 +44,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   }
   async function explicitAuth(body,persistent){
     const intent=++authIntent,lease=++generation;
+    if(logoutPromise){await logoutPromise.catch(()=>{});if(intent!==authIntent||lease!==generation)return changedResponse();}
     let response=await auth(body);
     if(['signup','login'].includes(body.action)&&response.status===202){
       if(intent!==authIntent||lease!==generation)return changedResponse();
@@ -103,9 +104,21 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     completeEmail:body=>auth({action:'completeEmail',...body}),
     changePassword:(currentPassword,newPassword)=>explicitAuth({action:'changePassword',currentPassword,newPassword},hint?.persistent===true),
     signOutOtherDevices:()=>auth({action:'signOutOtherDevices'}),
+    migrationSummary:()=>auth({action:'migrationSummary'}),
+    checkSession(){
+      if(!validated||!hint||statusPromise||now()-lastStatus<15000)return statusPromise;
+      lastStatus=now();statusPromise=auth({action:'status'}).catch(()=>{lastStatus=0;}).finally(()=>{statusPromise=null;});return statusPromise;
+    },
     reauthenticate:password=>explicitAuth({action:'reauthenticate',email:hint?.email,password,remember:hint?.persistent===true},hint?.persistent===true),
     expected:()=>Boolean(hint),validated:()=>validated,email:()=>hint?.email||'',
-    async logout(){authIntent++;generation++;if(hint){const r=await auth({action:'logout'});if(!r.ok)throw Error('Sign out could not be confirmed. Please try again.');}generation++;hint=null;validated=false;removeHints();notify('');},
+    logout(){
+      if(logoutPromise)return logoutPromise;
+      authIntent++;generation++;
+      const pending=hint?auth({action:'logout'},{signal:AbortSignal.timeout(10000)}):Promise.resolve(null);
+      generation++;hint=null;validated=false;removeHints();notify('');
+      logoutPromise=pending.then(r=>{if(r&&!r.ok)throw Error('Signed out on this device, but server sign-out could not be confirmed.');}).finally(()=>{logoutPromise=null;});
+      return logoutPromise;
+    },
     async noteActivity(){
       if(!validated||!hint||activityPromise||now()-lastActivity<RENEW_INTERVAL)return activityPromise;
       lastActivity=now();activityPromise=(async()=>{try{const r=await auth({action:'activity'});if(r.status===401)expire();else if(!r.ok)lastActivity=0;}catch{lastActivity=0;}finally{activityPromise=null;}})();return activityPromise;

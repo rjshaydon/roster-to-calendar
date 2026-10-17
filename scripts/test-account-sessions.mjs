@@ -142,7 +142,6 @@ for(const action of ['status','activity','logout','signOutOtherDevices']){
  assert.equal((await readAccountSession(db,request(first.setCookie))).email,email);
 }
 const currentRole=await readAccountSession(db,request(first.setCookie));
-
 const second=await issueAccountSession(db,{email,subject,persistent:false},{now:now+1});
 assert.doesNotMatch(second.setCookie,/Max-Age|Expires|Domain/);
 await revokeOtherAccountSessions(db,currentRole,{now:now+10});
@@ -182,6 +181,16 @@ const roleCookie=await issueAccountSession(db,{email,subject});
 sqlite.prepare("UPDATE account_profiles SET role='creator' WHERE email=?").run(email);
 await assert.rejects(()=>readAccountSession(db,request(roleCookie.setCookie)),e=>e.status===401,'privilege changes require fresh authentication');
 const promoted=await issueAccountSession(db,{email,subject});assert.equal((await readAccountSession(db,request(promoted.setCookie))).role,'creator');
+const summary=await sessionRoute(context(request(promoted.setCookie,{action:'migrationSummary',expectedAccount:email})));
+assert.equal(summary.status,200);const counts=await summary.json();
+assert.equal(counts.total,sqlite.prepare('SELECT count(*) n FROM account_profiles').get().n);
+assert.equal(counts.migrated,3);assert.deepEqual(Object.keys(counts).sort(),['migrated','ok','total']);
+const summaryOther=await issueAccountSession(db,{email:other,subject:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',persistent:false});
+assert.equal((await sessionRoute(context(request(summaryOther.setCookie,{action:'migrationSummary',expectedAccount:other})))).status,403);
+await revokeAccountSession(db,await readAccountSession(db,request(summaryOther.setCookie)));
+
+
+
 sqlite.prepare("UPDATE account_profiles SET role='user' WHERE email=?").run(email);
 await assert.rejects(()=>readAccountSession(db,request(promoted.setCookie)),e=>e.status===401,'demotion immediately revokes cookies');
 const deleted=await issueAccountSession(db,{email,subject});sqlite.prepare('DELETE FROM account_profiles WHERE email=?').run(email);
