@@ -5349,3 +5349,16 @@ body[data-skin="console"] .panel {
   margin-top: 12px;
   margin-right: 8px;
 }
+
+/* Migration groups stack vertically, with long emails contained on phones. */
+[data-password-migration-accounts].review-body {
+  display: block;
+  min-width: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+[data-password-migration-accounts] section + section { margin-top: 20px; }
+[data-password-migration-accounts] h4 { margin: 0 0 10px; }
+[data-password-migration-accounts] ul { margin: 0; padding-left: 24px; }
+[data-password-migration-accounts] li + li { margin-top: 6px; }
+[data-password-migration-accounts] [data-migration-more] { margin-top: 16px; }

@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-migration-list';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-migration-layout';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -1436,7 +1436,10 @@ accountsBody.addEventListener('toggle',event=>{
   if(event.target.matches('[data-password-migration-section]')&&event.target.open)void loadAuthenticationMigrationAccounts();
 },true);
 accountsBody.addEventListener('click',event=>{
-  const button=event.target.closest('[data-migration-more]');if(button){button.disabled=true;void loadAuthenticationMigrationAccounts({more:true}).finally(()=>{button.disabled=false;});}
+  const button=event.target.closest('[data-migration-more]');
+  if(button){button.disabled=true;void loadAuthenticationMigrationAccounts({more:true}).finally(()=>{button.disabled=false;});return;}
+  const section=event.target.closest('[data-password-migration-section]');
+  if(section?.open&&!event.target.closest('summary,button,a,input,select,textarea')&&!window.getSelection()?.toString())section.open=false;
 });
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
