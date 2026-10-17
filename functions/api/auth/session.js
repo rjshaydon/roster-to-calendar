@@ -44,13 +44,14 @@ async function admit(env,identity) {
   if (!env.AUTH_LOGIN_LIMITER?.limit && !env.AUTH_LOGIN_LIMITER?.fetch) throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity));
   const key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');
-  if(env.AUTH_LOGIN_LIMITER.limit){
-    if((await env.AUTH_LOGIN_LIMITER.limit({key:'login:'+key}))?.success===true)return;
-  }else{
+  // A service binding synthesizes truthy RPC methods for arbitrary names.
+  // Prefer its explicit fetch API; probing .limit first invokes a nonexistent
+  // remote method instead of the service's native-limiter HTTP adapter.
+  if(env.AUTH_LOGIN_LIMITER.fetch){
     const response=await env.AUTH_LOGIN_LIMITER.fetch('https://admission.internal/check',{method:'POST',body:'login:'+key});
     if(response.status===204)return;
     if(response.status!==429)throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
-  }
+  }else if((await env.AUTH_LOGIN_LIMITER.limit({key:'login:'+key}))?.success===true)return;
   throw new AuthenticationError('auth-rate-limited','Too many attempts. Please wait before trying again.',429);
 }
 

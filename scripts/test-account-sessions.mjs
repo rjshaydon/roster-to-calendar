@@ -29,7 +29,7 @@ assert.equal((await sessionRoute(context(request(null),{ROSTER_DB:{prepare(){thr
 const admissionBody={action:'login',email,password:'fixture-password'};
 for(const [status,expected] of [[429,429],[503,503]]){
   const before=queries.length;
-  const binding={async fetch(url,options){
+  const binding={async limit(){assert.fail('Service binding RPC proxy must never be used as a native limiter.');},async fetch(url,options){
     assert.equal(url,'https://admission.internal/check');
     assert.match(options.body,/^login:[a-f0-9]{64}$/);
     assert.equal(options.body.includes(email),false);
