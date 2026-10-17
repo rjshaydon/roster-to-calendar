@@ -124,3 +124,77 @@ console.log('Browser account transport passed: one-time upgrade, bounded signup 
  await transport.checkSession();assert.equal(checks,2,'signed-out tabs never poll');
 }
 console.log('Immediate local logout, serialized cookie clearance/new login and coalesced foreground revocation checks passed.');
+
+// Activity denial has a single owner; one revoked response opens login once.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let expired=0;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>1e9,onExpired(){expired++;},fetchImpl:async(_url,init)=>JSON.parse(init.body).action==='activity'?Response.json({code:'auth-session-expired'},{status:401}):Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}})});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});await transport.noteActivity();assert.equal(expired,1);
+}
+// A prior session's denial cannot sign out a successful newer login.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'old@example.test'}));let releaseActivity,expired=0;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>1e9,onExpired(){expired++;},fetchImpl:async(url,init)=>{
+  const b=JSON.parse(init.body);if(b.action==='activity')return new Promise(r=>releaseActivity=r);
+  return url==='/api/auth/session'?Response.json({ok:true,email:b.email}):Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});const old=transport.noteActivity();await transport.logout();
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'new@example.test',password:'Synthetic fixture only'})});
+ releaseActivity(Response.json({code:'auth-session-expired'},{status:401}));await old;assert.equal(transport.email(),'new@example.test');assert.equal(expired,0);
+}
+// Coalesce focus bursts, but never drop a real background/foreground return.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let clock=1e6,checks=0,revoked=false,expired=0;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>clock,onExpired(){expired++;},fetchImpl:async(_url,init)=>{
+  if(JSON.parse(init.body).action==='status'){checks++;return revoked?Response.json({code:'auth-session-expired'},{status:401}):Response.json({ok:true});}
+  return Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});await transport.checkSession();clock+=5000;
+ await transport.checkSession();assert.equal(checks,1);revoked=true;
+ await Promise.all([transport.checkSession({resume:true}),transport.checkSession({resume:true}),transport.checkSession()]);assert.equal(checks,2);assert.equal(expired,1);
+}
+// Response decoding is asynchronous too: recheck generation after JSON decoding.
+for(const endpoint of ['/api/auth/session','/api/state']){
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let releaseJson,jsonStarted,expired=0;
+ const started=new Promise(r=>jsonStarted=r);let deny=false;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>1e9,onExpired(){expired++;},fetchImpl:async(url,init)=>{
+  const b=JSON.parse(init.body);
+  if(deny&&url===endpoint&&(b.action==='status'||b.action==='oldRead')){
+   const response=Response.json({},{status:401});response.clone=()=>({json(){jsonStarted();return new Promise(r=>releaseJson=r);}});return response;
+  }
+  return url==='/api/auth/session'?Response.json({ok:true,email:b.email}):Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});deny=true;
+ const old=endpoint==='/api/state'?transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'oldRead'})}):transport.checkSession();await started;
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'fixture@example.test',password:'Synthetic fixture only'})});
+ releaseJson({code:'auth-session-expired'});await old;assert.equal(transport.email(),'fixture@example.test');assert.equal(expired,0);
+}
+// Passwords/Face ID returning during explicit sign-in must not validate its old cookie.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let releaseLogin;const calls=[];
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>1e9,fetchImpl:async(url,init)=>{
+  const b=JSON.parse(init.body);calls.push(b.action);if(url==='/api/auth/session'&&b.action==='login')return new Promise(r=>releaseLogin=r);
+  return Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});
+ const login=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'fixture@example.test',password:'Synthetic fixture only'})});
+ await transport.checkSession({resume:true});await transport.noteActivity();assert.deepEqual(calls,['loadAccountContext','login']);
+ releaseLogin(Response.json({ok:true,email:'fixture@example.test'}));await login;assert.equal(transport.validated(),true);
+}
+console.log('Home Screen session regressions passed single expiry, old-response/JSON-decoding fences, genuine resume checks and suppression during explicit authentication.');
+// iOS may suspend a response obtained before backgrounding. A resume must queue
+// one fresh check after that old response, with no ongoing polling afterward.
+{
+ const storage=store();storage.setItem(COOKIE_AUTH_HINT,JSON.stringify({email:'fixture@example.test'}));let releaseStatus,checks=0,expired=0;
+ const transport=createAccountTransport({persistentStorage:storage,tabStorage:store(),now:()=>1e9,onExpired(){expired++;},fetchImpl:async(_url,init)=>{
+  if(JSON.parse(init.body).action==='status'){
+   checks++;if(checks===1)return new Promise(r=>releaseStatus=r);
+   return Response.json({code:'auth-session-expired'},{status:401});
+  }
+  return Response.json({ok:true},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'loadAccountContext'})});
+ const beforeBackground=transport.checkSession();transport.checkSession({resume:true});transport.checkSession({resume:true});
+ releaseStatus(Response.json({ok:true}));await beforeBackground;assert.equal(checks,2);assert.equal(expired,1);assert.equal(transport.expected(),false);
+}
+console.log('Suspended pre-background checks receive one fresh, coalesced resume validation.');

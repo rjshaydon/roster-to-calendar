@@ -42,25 +42,25 @@
           <button id="createTabButton" type="button" class="entrance-tab" role="tab" aria-selected="false" aria-controls="createAccountForm" data-entrance-tab="create">Create account</button>
         </div>
         <div class="entrance-form-grid">
-          <form id="loginForm" class="entrance-form" data-entrance-panel="login" role="tabpanel" aria-labelledby="loginTabButton">
+          <form id="loginForm" name="login" method="post" class="entrance-form" data-entrance-panel="login" role="tabpanel" aria-labelledby="loginTabButton">
             <div class="section-head">
               <h2>Log in</h2>
               <p>Use your existing account to restore your roster workspace.</p>
             </div>
             <label class="field">
               <span>Email address</span>
-              <input id="loginEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+              <input id="loginEmail" name="username" type="email" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required placeholder="you@example.com">
             </label>
             <label class="field">
               <span>Password</span>
               <span class="password-input-wrap">
-                <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password">
+                <input id="loginPassword" name="password" type="password" autocomplete="current-password" required placeholder="Enter password">
                 <button type="button" class="password-reveal" data-password-visibility-toggle="loginPassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
             <label id="loginPasswordUpgradeField" class="field hidden">
               <span>New password</span>
-              <input id="loginUpgradePassword" type="password" autocomplete="new-password" minlength="12" placeholder="Choose a password of at least 12 characters">
+              <input id="loginUpgradePassword" type="password" disabled autocomplete="new-password" minlength="12" placeholder="Choose a password of at least 12 characters">
             </label>
             <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox"> Keep me signed in on this device</label>
             <button type="submit" class="button button-primary">Log in</button>
@@ -715,6 +715,6 @@
         }
       }
     </script>
-    <script type="module" src="/static/app.js?v=20261017-migration-layout"></script>
+    <script type="module" src="/static/app.js?v=20261017-autofill1"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-migration-layout';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-autofill1';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -348,9 +348,14 @@ if (accountTransport.expected()) {
   clearBrowserPasswordsAfterCookieAuthentication(currentUserEmail);
 }
 window.addEventListener('storage', event => { if (event.key === AUTH_NOTICE) accountTransport.notice(event.newValue); });
+let accountSessionWasHidden = document.hidden;
 window.addEventListener('focus', () => { if (!document.hidden) void accountTransport.checkSession(); });
-window.addEventListener('pageshow', () => { if (!document.hidden) void accountTransport.checkSession(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) void accountTransport.checkSession(); });
+window.addEventListener('pageshow', event => { if (!document.hidden) void accountTransport.checkSession({resume:event.persisted===true}); });
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden){accountSessionWasHidden=true;return;}
+  const resume=accountSessionWasHidden;accountSessionWasHidden=false;
+  void accountTransport.checkSession({resume});
+});
 for (const type of ['pointerdown','keydown']) document.addEventListener(type, event => {
   if (event.isTrusted && !document.hidden) void accountTransport.noteActivity();
 }, { passive: true });
@@ -1839,16 +1844,21 @@ accountsBody.addEventListener("click", (event) => {
 });
 function clearLoginPasswordUpgrade() {
   document.querySelector('#loginPasswordUpgradeField')?.classList.add('hidden');
-  const field=document.querySelector('#loginUpgradePassword');if(field){field.value='';field.required=false;}
+  const field=document.querySelector('#loginUpgradePassword');if(field){field.value='';field.required=false;field.disabled=true;}
 }
 loginEmail.addEventListener('input',clearLoginPasswordUpgrade);
+let loginSubmissionPending = false;
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if(loginSubmissionPending)return;
   setEntranceTab("login");
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
-  await loginWithEmail(email, password, { mode: "login", stayLoggedIn: Boolean(stayLoggedIn?.checked), newPassword: document.querySelector('#loginPasswordUpgradeField')?.classList.contains('hidden') ? '' : document.querySelector('#loginUpgradePassword')?.value || '' });
+  loginSubmissionPending=true;
+  const submit=loginForm.querySelector('[type=submit]');if(submit)submit.disabled=true;
+  try{await loginWithEmail(email, password, { mode: "login", stayLoggedIn: Boolean(stayLoggedIn?.checked), newPassword: document.querySelector('#loginPasswordUpgradeField')?.classList.contains('hidden') ? '' : document.querySelector('#loginUpgradePassword')?.value || '' });}
+  finally{loginSubmissionPending=false;if(submit)submit.disabled=false;}
 });
 createAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -17220,14 +17230,17 @@ function normalizeAuthMessage(message) {
   return normalized;
 }
 
-function openLoginModal(prefillEmail = currentUserEmail || "") {
+function openLoginModal(prefillEmail = currentUserEmail || "", {resetPassword=false}={}) {
+  const alreadyOpen=!entrancePage.classList.contains('hidden')&&!loginForm.classList.contains('hidden');
+  const differentAccount=Boolean(prefillEmail&&loginEmail.value&&normalizeEmail(prefillEmail)!==normalizeEmail(loginEmail.value));
+  const preserveDraft=alreadyOpen&&!differentAccount&&!resetPassword;
   setEntranceTab("login");
   forceConsoleSkin();
-  loginEmail.value = prefillEmail;
-  loginPassword.value = "";
-  clearLoginPasswordUpgrade();
+  // A late expiry/resume callback must not erase Passwords/Face ID autofill.
+  // New presentations, account changes and rejected submissions still clear it.
+  if(!preserveDraft){loginEmail.value=prefillEmail;loginPassword.value='';clearLoginPasswordUpgrade();}
   const stayLoggedInPreference = localStorage.getItem(STAY_LOGGED_IN_PREFERENCE_KEY);
-  if (stayLoggedIn) stayLoggedIn.checked = stayLoggedInPreference === null ? false : stayLoggedInPreference === "true";
+  if (stayLoggedIn&&!preserveDraft) stayLoggedIn.checked = stayLoggedInPreference === null ? false : stayLoggedInPreference === "true";
   document.querySelector('#recoveryRequestForm')?.classList.add('hidden');
   document.querySelector('#accountEmailActionForm')?.classList.add('hidden');
   loginTabButton?.classList.remove('hidden'); createTabButton?.classList.remove('hidden');
@@ -17235,7 +17248,7 @@ function openLoginModal(prefillEmail = currentUserEmail || "") {
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
   void accountTransport.options().then(options => document.querySelector('#requestPasswordRecovery')?.classList.toggle('hidden', options.recovery !== true));
-  setTimeout(() => loginEmail.focus(), 0);
+  if(!preserveDraft&&!isMobileLayout())setTimeout(() => loginEmail.focus(), 0);
 }
 
 function closeLoginModal() {
@@ -17581,7 +17594,7 @@ async function loginWithEmail(email, password, options = {}) {
     accountTransport.forget();
     const upgradeField=document.querySelector('#loginPasswordUpgradeField');
     const upgrading=error.code==='auth-password-upgrade-required'||error.code==='auth-password-policy'&&!upgradeField?.classList.contains('hidden');
-    if(upgrading){upgradeField?.classList.remove('hidden');const field=document.querySelector('#loginUpgradePassword');if(field){field.required=true;field.focus();}}
+    if(upgrading){upgradeField?.classList.remove('hidden');const field=document.querySelector('#loginUpgradePassword');if(field){field.disabled=false;field.required=true;field.focus();}}
     currentUserPassword = ''; authUserPassword = ''; if(!upgrading)loginPassword.value = ''; createPassword.value = ''; password = ''; options.newPassword='';
     const upgradePassword=document.querySelector('#loginUpgradePassword');if(upgradePassword)upgradePassword.value='';
     const message = normalizeAuthMessage(error.message || "Login failed.");
@@ -17605,6 +17618,7 @@ async function requestAccountLogin(payload) {
 
 async function restoreCloudState(options = {}) {
   if (!currentUserEmail) return;
+  let submittedPassword=false;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
     setActiveCalendarContext(adminTargetEmail
@@ -17614,6 +17628,7 @@ async function restoreCloudState(options = {}) {
         : "claimed-account", { email: adminTargetEmail || currentUserEmail });
     const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
     const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
+    submittedPassword=!adminTargetEmail&&Boolean(requestPassword);
     const response = await requestAccountLogin({
       action: adminTargetEmail ? "adminLoadUser" : "login",
       email: requestEmail, password: requestPassword, targetEmail: adminTargetEmail,
@@ -17639,6 +17654,9 @@ async function restoreCloudState(options = {}) {
   } catch (error) {
     if (!calendarTransitionStillCurrent(options.transition)) return null;
     cancelScheduledCloudStateSave();
+    // The outer login handler owns the inline password-upgrade prompt.
+    // Do not swallow its signal or clear the current-password draft first.
+    if(['auth-password-upgrade-required','auth-password-policy'].includes(error.code))throw error;
     const attemptedEmail = currentUserEmail;
     const message = error.message === "Cloud storage is not configured."
       ? serverStorageRequiredMessage()
@@ -17672,7 +17690,7 @@ async function restoreCloudState(options = {}) {
     impersonatedByCreator = false;
     returnToCreatorAvailable = false;
     renderLoginState();
-    openLoginModal(attemptedEmail);
+    openLoginModal(attemptedEmail,{resetPassword:submittedPassword});
     setStatus(message, true);
     setEntranceStatus(message, true);
   }

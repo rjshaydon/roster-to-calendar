@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {runInNewContext} from 'node:vm';
+const app=await readFile('public/static/app.js','utf8'),html=await readFile('public/index.html','utf8');
+const classes=(...initial)=>{const set=new Set(initial);return{contains:x=>set.has(x),add:x=>set.add(x),remove:x=>set.delete(x)};};
+let mobile=true,focuses=0,resets=0;
+const loginEmail={value:'',focus(){focuses++;}},loginPassword={value:''},loginForm={classList:classes()};
+const entrancePage={classList:classes('hidden')};
+const context={currentUserEmail:'',normalizeEmail:s=>String(s).trim().toLowerCase(),entrancePage,loginForm,loginEmail,loginPassword,
+ setEntranceTab(){},forceConsoleSkin(){},clearLoginPasswordUpgrade(){resets++;},localStorage:{getItem(){return null;}},STAY_LOGGED_IN_PREFERENCE_KEY:'fixture',stayLoggedIn:{checked:false},
+ document:{querySelector(){return null;}},loginTabButton:null,createTabButton:null,appShell:{classList:classes()},mobileActionBar:{classList:classes()},
+ accountTransport:{options:async()=>({recovery:false})},setTimeout:fn=>fn(),isMobileLayout:()=>mobile};
+const start=app.indexOf('function openLoginModal('),end=app.indexOf('function closeLoginModal(',start);
+runInNewContext(app.slice(start,end)+';this.open=openLoginModal;',context);
+context.open();assert.equal(resets,1);assert.equal(focuses,0,'Home Screen login must not force keyboard focus');
+loginEmail.value='fixture@example.test';loginPassword.value='Synthetic autofill draft';
+context.open();assert.equal(loginEmail.value,'fixture@example.test');assert.equal(loginPassword.value,'Synthetic autofill draft');assert.equal(resets,1);
+context.open('fixture@example.test');assert.equal(loginPassword.value,'Synthetic autofill draft');
+context.open('fixture@example.test',{resetPassword:true});assert.equal(loginPassword.value,'','rejected submissions still clear the password');
+loginPassword.value='Another synthetic draft';context.open('other@example.test');assert.equal(loginEmail.value,'other@example.test');assert.equal(loginPassword.value,'');
+entrancePage.classList.add('hidden');mobile=false;context.open('other@example.test');assert.equal(focuses,1,'desktop keeps initial username focus');
+assert.match(html,/<input id="loginEmail"[^>]*autocomplete="username"/);
+assert.match(html,/<input id="loginPassword"[^>]*name="password"[^>]*autocomplete="current-password"/);
+assert.match(html,/<form id="loginForm"[^>]*method="post"/,'named credentials never use a default GET submission');
+assert.match(html,/<input id="loginUpgradePassword"[^>]*disabled/);
+// Exercise the real submit handler: OS submission plus a tap creates one login.
+let handler,releaseLogin,logins=0;const submit={disabled:false};
+const submitContext={loginForm:{addEventListener(_type,fn){handler=fn;},querySelector(){return submit;}},setEntranceTab(){},normalizeEmail:s=>s.trim().toLowerCase(),
+ loginEmail:{value:'fixture@example.test'},loginPassword:{value:'Synthetic fixture'},stayLoggedIn:{checked:true},
+ document:{querySelector(){return{classList:classes('hidden')};}},loginWithEmail:async()=>{logins++;await new Promise(r=>releaseLogin=r);}};
+const submitStart=app.indexOf('let loginSubmissionPending = false;'),submitEnd=app.indexOf('createAccountForm.addEventListener',submitStart);
+runInNewContext(app.slice(submitStart,submitEnd),submitContext);
+const first=handler({preventDefault(){}});await handler({preventDefault(){}});assert.equal(logins,1);assert.equal(submit.disabled,true);
+releaseLogin();await first;assert.equal(submit.disabled,false);
+console.log('Login UI passed autofill draft preservation, explicit rejection/account-change clearing, mobile/desktop focus, inactive upgrade input and duplicate submit coalescing.');
+// The legacy envelope must propagate provider password-upgrade signals to the
+// outer login prompt instead of swallowing them and reopening a blank form.
+const upgradeError=Object.assign(new Error('Synthetic upgrade required'),{code:'auth-password-upgrade-required'});
+const restoreContext={currentUserEmail:'fixture@example.test',currentUserPassword:'Synthetic old password',OWNER_EMAIL:'owner@example.test',authUserEmail:'fixture@example.test',authUserPassword:'',
+ normalizeEmail:s=>String(s||'').trim().toLowerCase(),setActiveCalendarContext(){},calendarTransitionStillCurrent:()=>true,cancelScheduledCloudStateSave(){},
+ requestAccountLogin:async()=>{throw upgradeError;}};
+const restoreStart=app.indexOf('async function restoreCloudState('),restoreEnd=app.indexOf('async function hydrateAuthenticatedWorkspace(',restoreStart);
+runInNewContext(app.slice(restoreStart,restoreEnd)+';this.restore=restoreCloudState;',restoreContext);
+await assert.rejects(()=>restoreContext.restore({mode:'login'}),error=>error===upgradeError);
+assert.equal(restoreContext.currentUserEmail,'fixture@example.test');
+console.log('Inline password-upgrade signals reach the login prompt without erasing its draft.');

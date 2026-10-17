@@ -5,7 +5,7 @@
   "scripts": {
     "test:authentication-foundation": "node --no-warnings scripts/test-authentication-foundation.mjs",
     "test:account-sessions": "node --no-warnings scripts/test-account-sessions.mjs && node --no-warnings scripts/test-authentication-coordinator.mjs && node --no-warnings scripts/test-account-credential-races.mjs",
-    "test:account-browser": "node scripts/test-account-transport.mjs && node --no-warnings scripts/test-account-email.mjs && node --no-warnings scripts/test-account-lifecycle.mjs && node scripts/test-melbourne-clock.mjs && node --no-warnings scripts/test-authentication-journey.mjs",
+    "test:account-browser": "node scripts/test-account-transport.mjs && node scripts/test-account-login-ui.mjs && node --no-warnings scripts/test-account-email.mjs && node --no-warnings scripts/test-account-lifecycle.mjs && node scripts/test-melbourne-clock.mjs && node --no-warnings scripts/test-authentication-journey.mjs",
     "dev": "npm run dev:local",
     "dev:local": "node scripts/local-dev.mjs dev",
     "local:check": "node scripts/local-dev.mjs check",
