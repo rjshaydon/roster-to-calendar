@@ -3,7 +3,7 @@ import { normalizeEmail } from './email.js';
 import { guardedFetch } from './outbound-network.js';
 
 // Server-only. A single secret binding avoids expanding the Pages variable count.
-// This module is not an API route and is not enabled in production yet.
+// This module is not an API route; explicit rollout controls govern activation.
 export const AUTH_PROJECT_ORIGIN = 'https://nncmejyfkujpfuivlart.supabase.co';
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const MAX_RESPONSE_BYTES = 64 * 1024;
