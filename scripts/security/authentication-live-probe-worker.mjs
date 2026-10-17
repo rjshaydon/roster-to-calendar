@@ -7,6 +7,9 @@ import {deleteSupabaseAccount} from '../../functions/_lib/supabase-auth.js';
 export function authenticationLiveProbe(gate,fixtureId){return{async fetch(request,env){
  if(request.method!=='POST'||request.headers.get('Authorization')!=='Bearer '+gate)return new Response(null,{status:404});
  const supplied=JSON.parse(env.ROSTER_AUTH_CONFIG||'{}');
+ // The existing secret may also be pasted directly into an encrypted binding
+ // without copying a whole credential-bearing JSON document through tooling.
+ if(env.SUPABASE_SECRET_KEY)supplied.secretKey=env.SUPABASE_SECRET_KEY;
  if(supplied.enabled!==false)return Response.json({ok:false,code:'configuration-must-stay-disabled'},{status:503});
  const meter={statements:0,rowsRead:0,rowsWritten:0};
  function record(r){meter.statements++;meter.rowsRead+=Number(r.meta?.rows_read||0);meter.rowsWritten+=Number(r.meta?.rows_written||0);return r;}

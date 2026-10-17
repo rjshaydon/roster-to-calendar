@@ -108,7 +108,7 @@ try{
  // Exercise the deployable probe with the same real route/schema adapter before
  // exposing it to live provider credentials. Only its provider remains mocked.
  const gate='f'.repeat(64),probe=authenticationLiveProbe(gate,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
- const probeEnv={TEST_DB:db,ROSTER_AUTH_CONFIG:JSON.stringify({...config,enabled:false})};
+ const probeEnv={TEST_DB:db,ROSTER_AUTH_CONFIG:JSON.stringify({...config,enabled:false,secretKey:undefined}),SUPABASE_SECRET_KEY:config.secretKey};
  async function probeStep(step,kind='new',cookie=''){
   return probe.fetch(new Request('https://probe.example.test/'+step+'?kind='+kind,{method:'POST',headers:{Authorization:'Bearer '+gate,...(cookie?{Cookie:cookie}:{})}}),probeEnv);
  }
