@@ -1,5 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-revoke-confirm';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-workspace-auth';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -17497,6 +17497,7 @@ async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   const loginStartedAt = performance.now();
   let requestTransition;
+  let loginEnvelopeAccepted=false;
   try {
     beginFacilityOverviewAccountSession();
     currentFacilityOverviewMaintenance = true;
@@ -17547,6 +17548,7 @@ async function loginWithEmail(email, password, options = {}) {
       transition,
     });
     if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
+    loginEnvelopeAccepted=true;
     if (!accountTransport.expected()) {
       if (!accountTransport.expected() && currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
       if (options.stayLoggedIn) localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
@@ -17613,7 +17615,17 @@ async function loginWithEmail(email, password, options = {}) {
     }, loginStartedAt);
   } catch (error) {
     if(requestTransition&&!calendarTransitionStillCurrent(requestTransition))return;
+    // A workspace/cache/render failure after authentication is not a failed
+    // password. Keep the verified cookie usable instead of stranding a visible
+    // workspace with no local authority and silently disabled admin actions.
+    if(loginEnvelopeAccepted&&accountTransport.validated()&&accountTransport.email()===normalizeEmail(email)){
+      loginPassword.value='';createPassword.value='';password='';options.newPassword='';
+      renderLoginState();closeLoginModal();
+      setStatus(normalizeAuthMessage(error.message||'Could not finish loading the workspace.'),true);
+      return;
+    }
     accountTransport.forget();
+    renderLoginState();
     const upgradeField=document.querySelector('#loginPasswordUpgradeField');
     const upgrading=error.code==='auth-password-upgrade-required'||error.code==='auth-password-policy'&&!upgradeField?.classList.contains('hidden');
     if(upgrading){upgradeField?.classList.remove('hidden');const field=document.querySelector('#loginUpgradePassword');if(field){field.disabled=false;field.required=true;field.focus();}}
@@ -19186,7 +19198,11 @@ function sanitizeGlobalUnresolvedShiftCodes(items) {
 }
 
 async function refreshCalendarStoreStatus(options = {}) {
-  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  if(!isCreatorAuthenticated()){
+    if(options.silent===false){accountTransport.forget();await logoutCurrentUser({expired:true});setEntranceStatus('Please sign in again to check roster database status.',true);}
+    return;
+  }
+  if (!cloudAvailable&&options.silent!==false) return;
   if (document.hidden && options.silent !== false) return;
   if (calendarStoreStatusRequest) return calendarStoreStatusRequest;
   calendarStoreStatusRequest = performCalendarStoreStatusRefresh(options)

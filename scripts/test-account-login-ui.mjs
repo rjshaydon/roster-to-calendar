@@ -68,3 +68,31 @@ console.log('Inline password-upgrade signals reach the login prompt without eras
  assert.match(html,/<input id="appDialogPassword"[^>]*autocomplete="current-password"[^>]*disabled/);
 }
 console.log('Recent-auth dialog passed explicit confirmation, empty-password refusal, generic-dialog compatibility and transient credential cleanup.');
+// A post-auth render exception used to clear the hint while leaving the private
+// UI visible, making status checks silently stop before reaching the server.
+{
+ let hint=true,workspaceVisible=false,forgotten=0;const noop=()=>{},field={value:'',classList:{contains:()=>true,remove(){}}};
+ const context={performance:{now:()=>1},currentUserEmail:'fixture@example.test',OWNER_EMAIL:'fixture@example.test',OWNER_DOCTOR_KEY:'FIXTURE',
+  beginFacilityOverviewAccountSession:noop,cancelScheduledCloudStateSave:noop,clearActiveViewedAccountState:noop,ensureLocalAccountLogin:noop,normalizeEmail:s=>String(s).toLowerCase(),setActiveCalendarContext:noop,primeInsightsAccessForCurrentView:noop,
+  beginCalendarTransition:()=>({}),calendarTransitionStillCurrent:()=>true,localStorage:{setItem(){}},CURRENT_EMAIL_KEY:'email',STAY_LOGGED_IN_PREFERENCE_KEY:'remember',forceConsoleSkin:noop,setStatus:noop,setEntranceStatus:noop,
+  accountCalendarContextForEmail:()=>({}),loadCachedCalendarSnapshotForContext:()=>null,restoreCloudState:async()=>({}),
+  accountTransport:{expected:()=>hint,validated:()=>hint,email:()=>hint?'fixture@example.test':'',forget(){hint=false;forgotten++;}},loginPassword:{value:'Synthetic draft'},createPassword:{value:''},clearLoginPasswordUpgrade:noop,
+  renderLoginState(){workspaceVisible=hint;},closeLoginModal(){workspaceVisible=true;},markLoginPhase:noop,creatorStartupContainmentActive:()=>true,
+  finishContainedCreatorStartup(){throw Error('Synthetic local rendering failure');},document:{querySelector:()=>field},normalizeAuthMessage:s=>s};
+ const start=app.indexOf('async function loginWithEmail('),end=app.indexOf('async function requestAccountLogin(',start);
+ runInNewContext(app.slice(start,end)+';this.login=loginWithEmail;',context);
+ await context.login('fixture@example.test','Synthetic password',{stayLoggedIn:true});assert.equal(hint,true);assert.equal(forgotten,0);assert.equal(workspaceVisible,true);
+ context.restoreCloudState=async()=>{throw Error('Synthetic pre-auth rejection');};
+ await context.login('fixture@example.test','Synthetic invalid password');assert.equal(hint,false);assert.equal(workspaceVisible,false);
+}
+{
+ let forgotten=0,loggedOut=0,requests=0,creator=false,cloud=false;const context={
+  isCreatorAuthenticated:()=>creator,get cloudAvailable(){return cloud;},document:{hidden:false},calendarStoreStatusRequest:null,
+  accountTransport:{forget(){forgotten++;}},logoutCurrentUser:async options=>{assert.equal(options.expired,true);loggedOut++;},setEntranceStatus(){},
+  performCalendarStoreStatusRefresh:async()=>{requests++;return{ok:true};}};
+ const start=app.indexOf('async function refreshCalendarStoreStatus('),end=app.indexOf('async function performCalendarStoreStatusRefresh(',start);
+ runInNewContext(app.slice(start,end)+';this.refresh=refreshCalendarStoreStatus;',context);
+ await context.refresh({silent:true});assert.equal(loggedOut,0);await context.refresh({silent:false});assert.equal(forgotten,1);assert.equal(loggedOut,1);assert.equal(requests,0);
+ creator=true;await context.refresh({silent:false});assert.equal(requests,1,'explicit status checks can recover from a transient cloud-availability flag');
+}
+console.log('Post-auth rendering failures preserve valid sessions; failed authentication hides the workspace; explicit status checks never silently ignore missing authority.');
