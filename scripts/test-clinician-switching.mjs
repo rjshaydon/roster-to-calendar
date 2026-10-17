@@ -115,3 +115,24 @@ assert.equal(closed,true,'Back to creator must immediately close the old overvie
 assert.equal(backGlobals.currentUserRole,'creator');
 assert.equal(backGlobals.activeDoctorProfile,null);
 console.log('Clinician switching passed cached disabled/enabled/Creator transitions, profile access refresh, stale-response denial and immediate overview exit.');
+
+// Fresh cookie logins must recover the switcher without loading roster files.
+{
+ let release,reads=0,paints=0,eligible=true;
+ const picker={value:'self',innerHTML:''};
+ const state={calendarTransitionRunId:1,cloudAvailable:true,availableRosterDoctors:[],
+  authenticatedAccountEmail:()=> 'creator@example.test',canUseCreatorDoctorSwitcher:()=>eligible,
+  calendarStoreRequest:async action=>{assert.equal(action,'listRosterDoctors');reads++;return new Promise(resolve=>release=resolve);},
+  applyAuthoritativeAvailableDoctors:doctors=>state.availableRosterDoctors=doctors,
+  renderDoctorState:options=>{assert.equal(options.preserveSettings,true);paints++;},
+  doctorPickerOptions:()=>state.availableRosterDoctors,document:{querySelectorAll:()=>[picker]},
+  MOBILE_RETURN_TO_CREATOR_VALUE:'self',escapeHtml:value=>String(value),console};
+ runInNewContext(section('let creatorSwitcherDirectoryRequest=null;', 'function finishContainedCreatorStartup(')+';this.load=loadCreatorSwitcherDirectory;',state);
+ const first=state.load(),second=state.load();assert.equal(reads,1,'startup calls coalesce');
+ release({availableDoctors:[{key:'mch-doctor',displayName:'MCH Doctor'}]});await Promise.all([first,second]);
+ assert.equal(paints,1);assert.match(picker.innerHTML,/MCH Doctor/);assert.equal(picker.value,'self');
+ const stale=state.load();state.calendarTransitionRunId++;release({availableDoctors:[{key:'stale',displayName:'Old account'}]});await stale;
+ assert.equal(paints,1,'a late directory cannot repaint a switched account');
+ eligible=false;await state.load();assert.equal(reads,2,'ordinary users never request this directory');
+}
+console.log('Fresh admin switcher restores published names, coalesces reads, preserves settings/At a glance and rejects stale replies.');

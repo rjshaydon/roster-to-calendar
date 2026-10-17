@@ -3938,7 +3938,7 @@ async function waitForCreatorSwitcherRemovalSettled(removedEntry, options = {}) 
   throw new Error("Switcher did not refresh after roster removal.");
 }
 
-function renderDoctorState() {
+function renderDoctorState(options = {}) {
   const pickerOptions = doctorPickerOptions();
   doctorSelect.innerHTML = "";
   doctorName.textContent = "";
@@ -3946,7 +3946,7 @@ function renderDoctorState() {
   doctorSelect.classList.add("hidden");
   doctorSection.classList.add("hidden");
   syncControlBarVisibility();
-  closeSettingsPanel();
+  if(options.preserveSettings!==true)closeSettingsPanel();
 
   if (!pickerOptions.length) {
     const message = canUseDoctorPicker()
@@ -17383,6 +17383,37 @@ function creatorStartupContainmentActive() {
   return isViewingCreatorAccount() && currentCreatorStartupHydrationEnabled !== true;
 }
 
+let creatorSwitcherDirectoryRequest=null;
+function renderCreatorSwitcherDirectory() {
+  renderDoctorState({preserveSettings:true});
+  // Update the mounted At a glance control without reloading its data/view.
+  const options=doctorPickerOptions();
+  for(const picker of document.querySelectorAll('[data-facility-overview-doctor]')){
+    const selected=picker.value;
+    picker.innerHTML=`<option value="${MOBILE_RETURN_TO_CREATOR_VALUE}">Back to creator</option>`+options.map(doctor=>`<option value="${escapeHtml(doctor.key)}">${escapeHtml(doctor.displayName)}</option>`).join('');
+    if(selected===MOBILE_RETURN_TO_CREATOR_VALUE||options.some(doctor=>doctor.key===selected))picker.value=selected;
+  }
+}
+function loadCreatorSwitcherDirectory() {
+  if(!canUseCreatorDoctorSwitcher()||!cloudAvailable)return Promise.resolve();
+  const transition=calendarTransitionRunId,actor=authenticatedAccountEmail();
+  if(creatorSwitcherDirectoryRequest?.transition===transition)return creatorSwitcherDirectoryRequest.promise;
+  const request={transition,promise:null};
+  request.promise=(async()=>{
+    try{
+      const data=await calendarStoreRequest('listRosterDoctors');
+      if(transition!==calendarTransitionRunId||actor!==authenticatedAccountEmail()||!canUseCreatorDoctorSwitcher())return;
+      if(Array.isArray(data?.availableDoctors)&&data.availableDoctors.length){
+        applyAuthoritativeAvailableDoctors(data.availableDoctors);
+        renderCreatorSwitcherDirectory();
+      }
+    }catch(error){console.warn('Admin doctor switcher could not refresh.',error.message);}
+    finally{if(creatorSwitcherDirectoryRequest===request)creatorSwitcherDirectoryRequest=null;}
+  })();
+  creatorSwitcherDirectoryRequest=request;
+  return request.promise;
+}
+
 function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
   cancelDeferredAccountContextLoad();
   cancelDeferredBootstrapImports();
@@ -17414,6 +17445,7 @@ function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
     allowInlineBuild: true,
   });
   queueStoredCalendarSnapshotMaintenance();
+  void loadCreatorSwitcherDirectory();
 }
 
 function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
@@ -19089,7 +19121,10 @@ async function loadServerUsers() {
       serverUsers = users.map(user => (directoryRevision !== adminUserDirectoryRevision || pendingAdminPermissions.has(normalizeEmail(user.email)))
         && local.has(normalizeEmail(user.email)) ? local.get(normalizeEmail(user.email)) : user);
       serverUsersLoaded = true;
-      if (Array.isArray(data?.availableDoctors)) applyAuthoritativeAvailableDoctors(data.availableDoctors);
+      if (Array.isArray(data?.availableDoctors)) {
+        applyAuthoritativeAvailableDoctors(data.availableDoctors);
+        if(canUseCreatorDoctorSwitcher())renderCreatorSwitcherDirectory();
+      }
       applyIssueConfig(data?.issueConfig);
       syncAccountsButton();
     } catch {

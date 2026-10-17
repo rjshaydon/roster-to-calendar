@@ -105,8 +105,8 @@ assert.equal(visibleIdleTabs * visibleIdleMinutes * d1OperationsPerContainedIdle
 console.log(JSON.stringify({
   pausedActions: pausedResults,
   creatorStartup: {
-    explicitLoginAutomaticFollowUpActions: 1,
-    persistedLoginAutomaticFollowUpActions: 1,
+    explicitLoginAutomaticFollowUpActions: 2,
+    persistedLoginAutomaticFollowUpActions: 2,
     disabledAtAGlanceD1Operations: 0,
     visibleIdleTabs,
     visibleIdleMinutes,
