@@ -111,7 +111,7 @@ const globals = {
  calendarRevisionRefreshAllowed:()=>true,calendarRevisionView:()=>({key:globals.key}),key:'profile-A',
  activeDoctorProfile:{id:'A',doctorKey:'EXAMPLE',sourceTypes:['mmc']},
  currentUserEmail:'fixture',currentUserPassword:'fixture',authUserEmail:'fixture',authUserPassword:'fixture',
- buildActiveSessionState:()=>session,fetch:()=>new Promise(resolve=>{responseResolver=resolve}),
+ buildActiveSessionState:()=>session,accountFetch:()=>new Promise(resolve=>{responseResolver=resolve}),
  readJsonResponse:async response=>response,sanitizeWorkspaceSnapshot:s=>structuredClone(s),
  applyLoadedCalendarFileRefs:()=>{},renderWorkspaceFromSnapshot:(_snapshot,_session,options)=>{assert.equal(options.preserveScroll,true);rendered++;},
 };
