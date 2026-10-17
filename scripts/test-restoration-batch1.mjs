@@ -74,6 +74,32 @@ assert.equal((await call({mode:'reconcile',libraries:[libraries[0],libraries[0]]
 const misplaced=structuredClone(libraries);misplaced[0].files[0].FileRef='/Shared Documents/Elsewhere/AdultTerm3.2026.xlsx';
 assert.deepEqual((await (await call({mode:'reconcile',libraries:misplaced})).json()).downloads,[],'file name alone cannot select a workbook from the wrong folder');
 
+// Draft/final SharePoint files share a logical roster but distinct receipts.
+env.ROSTER_AUTOMATION_SOURCE_ALLOWLIST='monash-adults,monash-paeds';
+const draftLibraries=structuredClone(libraries);
+const draftPath='/sites/MonashEDMMC-CLA-PFU-DEP-MedicalRoster/Shared Documents/Medical Roster/Paeds - Term 4 2026_ DRAFT.xlsx';
+const draftFile={FileRef:draftPath,Modified:'2026-10-04T01:00:00Z',OData__UIVersionString:'1.0',File:{ETag:'draft-etag'}};
+draftLibraries[0].files.push(draftFile);
+const draftResult=await (await call({mode:'reconcile',libraries:draftLibraries})).json();
+assert.equal(draftResult.downloads.length,1);
+const draft=draftResult.downloads[0];assert.equal(draft.sourceId,'monash-paeds');assert.equal(draft.fileName,'Paeds - Term 4 2026.xlsx');
+assert.equal(draft.path,'/Shared Documents/Medical Roster/Paeds - Term 4 2026_ DRAFT.xlsx');assert.match(draft.providerVersion,/^draft:/);
+sqlite.prepare("INSERT INTO raw_roster_files(file_id,name,object_key) VALUES('draft',?,'draft-retained')").run(draft.fileName);
+sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,provider_version,file_id,source_file_id,status,started_at) VALUES('draft-run','monash-paeds',?,'draft','draft','success','2026-10-01')").run(draft.providerVersion);
+assert.equal((await (await call({mode:'reconcile',libraries:draftLibraries})).json()).downloads.length,0,'unchanged draft is not downloaded again');
+draftLibraries[0].files.push({...draftFile,FileRef:draftPath.replace('_ DRAFT',''),File:{ETag:'final-etag'}});
+const finalResult=await (await call({mode:'reconcile',libraries:draftLibraries})).json();assert.equal(finalResult.downloads.length,1);
+assert.equal(finalResult.downloads[0].providerVersion,'1.0','same version number on final is independently checked');assert.equal(finalResult.downloads[0].etag,'final-etag');
+const ambiguous=structuredClone(draftLibraries);ambiguous[0].files.pop();ambiguous[0].files.push({...draftFile,FileRef:draftPath.replace('_ DRAFT',' - draft')});
+assert.equal((await call({mode:'reconcile',libraries:ambiguous})).status,400,'multiple drafts are not guessed');
+const wrongFolder=structuredClone(libraries);wrongFolder[0].files.push({...draftFile,FileRef:draftPath.replace('Medical Roster/Paeds','Medical Roster/Old Rosters/Paeds')});
+assert.equal((await (await call({mode:'reconcile',libraries:wrongFolder})).json()).downloads.length,0,'draft matching never widens the approved folder');
+const caseOnly=structuredClone(libraries);caseOnly[0].files.push({...draftFile,FileRef:draftPath.toLowerCase()});
+assert.equal((await (await call({mode:'reconcile',libraries:caseOnly})).json()).downloads.length,1,'matching is case insensitive while preserving the real retrieval path');
+const invalidDraft=structuredClone(libraries);invalidDraft[0].files.push({...draftFile,OData__UIVersionString:''});
+assert.equal((await call({mode:'reconcile',libraries:invalidDraft})).status,400,'a draft label cannot disguise a missing provider version');
+assert.equal(writes,0,'draft/final preflight performs no writes');
+
 sqlite.exec(`INSERT INTO facility_staff_seniority_overrides(id,source_type,doctor_key,display_name,seniority,term_start,active,created_at,updated_at) VALUES('old','mmc','ALIAS','Example','Junior Registrar','2026-05-04',1,'now','now');`);
 assert.equal((await queryFacilityStaffSeniorityOverrides(db,{sourceType:'mmc',termStart:'2026-05-04'})).length,1);
 assert.equal((await queryFacilityStaffSeniorityOverrides(db,{sourceType:'mmc',termStart:'2026-08-03'})).length,0,'old correction never follows promotion');

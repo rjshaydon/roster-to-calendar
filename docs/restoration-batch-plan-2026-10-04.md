@@ -601,3 +601,9 @@ while loading cancels the pending jump. This adds no network or D1 requests.
 AM/PM/Night, aliases, overnight roster dates, active-shift selection and
 cancellation regressions passed, alongside whole-shift contact session,
 restricted-access/startup, contact safeguards and client request-budget checks.
+
+### MCH next-term draft discovery correction — 17 October
+
+Live Safari review confirmed reconciliation `f46e3e52-ff98-4db9-9067-51a5de909236` On, five-minute successful runs through 22:41 Melbourne time, and the original MMC/MCH/VHH save-trigger flows Off as intended by the 5 October cutover. The 22:41 run `08584093696030168841073725169CU11` returned SharePoint metadata including `Paeds - Term 4 2026_ DRAFT.xlsx` in the approved Medical Roster folder. It contained current Term 3 MMC/MCH and no Term 4 MMC file. The server required the exact final filename `Paeds - Term 4 2026.xlsx`, so it silently recorded waiting-for-file and never requested the available draft. Successful Flow execution was not evidence of next-term ingestion.
+
+Reconciliation now accepts a bounded DRAFT suffix for the eligible Monash term filenames, case-insensitively, only within the existing approved folder. A final filename takes precedence when both exist; multiple draft candidates fail closed. Downloads use the actual physical SharePoint path but retain the canonical logical roster name so draft/final replacement and delivery ordering share an identity. Draft provider versions include the physical draft filename, distinguishing draft v1 from final v1 while preserving zero-download unchanged receipts. Existing eligibility dates, ETag checks, five-minute coalescing, account budgets, bounded import and publication remain unchanged. No Flows are toggled or re-enabled. Tests cover the observed suffix, unchanged drafts, draft/final version collision, final preference, ambiguous drafts, case, wrong folders and zero-write metadata checks.

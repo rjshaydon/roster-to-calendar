@@ -28,6 +28,27 @@ export function sharepointRosterWindows(now = new Date()) {
   return windows;
 }
 
+// Keep one logical roster filename across draft/final publication so a final
+// replaces the draft instead of becoming an overlapping active roster.
+function matchRosterInventory(window, files) {
+  const sitePath=new URL(window.dataset).pathname;
+  const folder=window.path.slice(0,window.path.lastIndexOf('/')+1);
+  const canonical=window.fileName.toLowerCase();
+  const candidates=[];
+  for(const file of files){
+    if(typeof file?.FileRef!=='string')continue;
+    const ref=file.FileRef;
+    const path=ref.toLowerCase().startsWith(sitePath.toLowerCase()+'/')?ref.slice(sitePath.length):ref;
+    if(path.slice(0,path.lastIndexOf('/')+1).toLowerCase()!==folder.toLowerCase())continue;
+    const name=path.slice(path.lastIndexOf('/')+1);
+    const final=name.toLowerCase()===canonical;
+    const draft=window.sourceId.startsWith('monash-')&&name.replace(/[ _-]+draft(?=\.xlsx$)/i,'').toLowerCase()===canonical;
+    if(final||draft)candidates.push({file,path,name,final});
+  }
+  const finals=candidates.filter(candidate=>candidate.final);
+  return finals.length?finals:candidates;
+}
+
 export async function onRequestPost(context, checkTime = new Date()) {
   const configured = String(context.env.ROSTER_AUTOMATION_TOKEN || '');
   if (!configured || context.request.headers.get('authorization') !== `Bearer ${configured}`) return new Response('Unauthorized', { status: 401 });
@@ -43,17 +64,20 @@ export async function onRequestPost(context, checkTime = new Date()) {
     for (const window of windows) {
       const group = groups.find(group => group.site === (window.sourceId === 'vhh-active-medical-roster' ? 'vhh' : 'monash'));
       if (group.unavailable || group.nextLink) { checks.push({sourceId:window.sourceId,fileName:window.fileName,status:group.unavailable?'provider-unavailable':'incomplete-inventory'}); continue; }
-      const matches = group.files.filter(file => file?.FileRef === window.path || file?.FileRef === new URL(window.dataset).pathname + window.path);
+      const matches = matchRosterInventory(window,group.files);
       if (!matches.length) { checks.push({sourceId:window.sourceId,fileName:window.fileName,status:'waiting-for-file'}); continue; }
       if (matches.length !== 1) return new Response('Ambiguous metadata', { status: 400 });
-      const file = matches[0];
-      const providerVersion = String(window.sourceId === 'vhh-active-medical-roster' ? file.File?.ETag || '' : file.OData__UIVersionString || '');
-      if (typeof file.File?.ETag !== 'string' || !file.File.ETag || typeof file.Modified !== 'string' || !providerVersion || providerVersion.length > 200 || !Number.isFinite(Date.parse(file.Modified))) return new Response('Invalid provider metadata', { status: 400 });
+      const {file,path,name,final}=matches[0];
+      const rawVersion = String(window.sourceId === 'vhh-active-medical-roster' ? file.File?.ETag || '' : file.OData__UIVersionString || '');
+      // SharePoint version numbers belong to a physical file: draft v1 and
+      // final v1 must never be mistaken for the same successful receipt.
+      const providerVersion=final?rawVersion:`draft:${name}:${rawVersion}`;
+      if (typeof file.File?.ETag !== 'string' || !file.File.ETag || typeof file.Modified !== 'string' || !rawVersion || providerVersion.length > 200 || !Number.isFinite(Date.parse(file.Modified))) return new Response('Invalid provider metadata', { status: 400 });
       const response = await checkRosterMetadata(context,{sourceId:window.sourceId,fileName:window.fileName,providerVersion},checkTime);
       if (!response.ok) return response;
       const result = await response.json();
       checks.push({sourceId:window.sourceId,fileName:window.fileName,status:result.status});
-      if (result.download) downloads.push({...window,providerVersion,providerModifiedAt:file.Modified,etag:String(file.File?.ETag || '')});
+      if (result.download) downloads.push({...window,path,providerVersion,providerModifiedAt:file.Modified,etag:String(file.File?.ETag || '')});
     }
     return Response.json({ok:true,downloads,checks});
   }
