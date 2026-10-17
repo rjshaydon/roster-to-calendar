@@ -22,14 +22,20 @@ export function requirePasswordMigrationAdmission(config,email,now=Date.now()) {
   if(emails&&!emails.has(normalizeEmail(email)))throw new AuthenticationError('auth-migration-paused','The account upgrade is not yet enabled for this account.');
 }
 
-export function allowLegacyStateDuringRollout(env,request,body) {
+export function allowLegacyStateDuringRollout(env,request,body,now=Date.now()) {
   // Any session cookie, including malformed/expired cookies, stays on the cookie
   // verifier. Never turn a rejected cookie into legacy password authentication.
   if((request.headers.get('Cookie')||'').split(';').some(p=>p.trim().split('=')[0]==='__Host-roster_session'))return false;
   if(body?.action==='login'&&body?.mode==='create'||body?.action==='acceptInvite')return false;
   let config;try{config=JSON.parse(env.ROSTER_AUTH_CONFIG||'{}');}catch{return false;}
   const emails=cohort(config),email=normalizeEmail(body?.email);
-  return Boolean(emails&&email&&!emails.has(email));
+  if(emails&&email&&!emails.has(email))return true;
+  // An explicitly dated, short grace period preserves already-open clients.
+  // Actual sign-in still upgrades; this cannot create accounts or bypass the
+  // pending-operation and retired-hash checks in the legacy verifier.
+  const until=typeof config.legacyStateUntil==='string'?Date.parse(config.legacyStateUntil):NaN;
+  return Boolean(email&&body?.action&&body.action!=='login'
+    &&Number.isFinite(until)&&until>now&&until-now<=7*86400000);
 }
 
 export async function requireLegacyCredentialNotPending(db,email) {

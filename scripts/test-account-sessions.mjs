@@ -7,6 +7,7 @@ import { SESSION_COOKIE, SESSION_IDLE_MS, SESSION_OUTER_MS, SESSION_RENEW_MS, ac
 import { onRequestPost as sessionRoute } from '../functions/api/auth/session.js';
 import { onRequestPost as stateRoute, prepareAccountResponse, prepareAccountContextResponse } from '../functions/api/state.js';
 import { AUTH_PROJECT_ORIGIN } from '../functions/_lib/supabase-auth.js';
+import {allowLegacyStateDuringRollout} from '../functions/_lib/authentication-rollout.js';
 
 const sqlite=new DatabaseSync(':memory:'); sqlite.exec('PRAGMA foreign_keys=ON');
 for(const name of (await readdir(new URL('../migrations/',import.meta.url))).filter(x=>x.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
@@ -47,6 +48,21 @@ const legacyEmail='legacy@example.test',legacySalt='b'.repeat(32),legacyPassword
 const legacyHash=createHash('sha256').update(legacySalt+':'+legacyPassword).digest('hex');
 sqlite.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,'Legacy Person','user',?,?,'unchanged-legacy-feed')").run(legacyEmail,legacyHash,legacySalt);
 const rolloutEnv={...env,ROSTER_AUTH_CONFIG:JSON.stringify({...JSON.parse(env.ROSTER_AUTH_CONFIG),migrationEnabled:true,migrationEmails:[email]})};
+const graceConfig={...JSON.parse(env.ROSTER_AUTH_CONFIG),migrationEnabled:true,legacyStateUntil:new Date(now+2*86400000).toISOString()};
+const graceEnv={...env,ROSTER_AUTH_CONFIG:JSON.stringify(graceConfig)};
+const graceBody={action:'loadAccountContext',email:legacyEmail,password:legacyPassword,responseMode:'fast'};
+function graceRequest(body=graceBody,cookie=''){return new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});}
+const graceContext=context(graceRequest(),graceEnv);graceContext.data.stateAction='loadAccountContext';
+assert.equal((await stateRoute(graceContext)).status,200,'already-open legacy tab remains usable during the dated grace period');
+const wrongGrace=context(graceRequest({...graceBody,password:'incorrect'}),graceEnv);wrongGrace.data.stateAction='loadAccountContext';
+assert.equal((await stateRoute(wrongGrace)).status,401,'wrong old-tab credentials return a controlled denial rather than a server error');
+assert.equal(allowLegacyStateDuringRollout(graceEnv,graceRequest(),graceBody,now+2*86400000),false,'grace expires at its exact deadline');
+for(const deadline of [undefined,'invalid',new Date(now-1).toISOString(),new Date(now+8*86400000).toISOString()]){
+ const e={ROSTER_AUTH_CONFIG:JSON.stringify({...graceConfig,legacyStateUntil:deadline})};
+ assert.equal(allowLegacyStateDuringRollout(e,graceRequest(),graceBody,now),false,'missing/invalid/expired/overlong grace stays closed');
+}
+for(const body of [{...graceBody,action:'login'},{...graceBody,action:'login',mode:'create'},{...graceBody,action:'acceptInvite'}])assert.equal(allowLegacyStateDuringRollout(graceEnv,graceRequest(body),body,now),false,'grace cannot defer explicit sign-in, signup or invitations');
+assert.equal(allowLegacyStateDuringRollout(graceEnv,graceRequest(graceBody,SESSION_COOKIE+'=bad'),graceBody,now),false,'grace cannot downgrade a rejected cookie');
 for(const action of ['loadAccountContext','login']){
  const requestBody={action,email:legacyEmail,password:legacyPassword,responseMode:'fast'};
  const req=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json'},body:JSON.stringify(requestBody)});
@@ -68,6 +84,13 @@ for(const action of ['login','loadAccountContext','loadCalendarEvents']){
  const response=await stateRoute(c);assert.equal(response.status,409,'pending reset closes old-password compatibility: '+action);
  assert.equal((await response.json()).code,'auth-upgrade-required');
 }
+const pendingGrace=context(graceRequest(),graceEnv);pendingGrace.data.stateAction='loadAccountContext';
+assert.equal((await stateRoute(pendingGrace)).status,409,'dated grace cannot reopen a pending credential change');
+sqlite.prepare("UPDATE account_profiles SET password_hash='',password_salt='' WHERE email=?").run(legacyEmail);
+sqlite.prepare("UPDATE account_authentication_links SET phase='ready',credential_operation_id='' WHERE email=?").run(legacyEmail);
+const retiredGrace=context(graceRequest(),graceEnv);retiredGrace.data.stateAction='loadAccountContext';
+const retiredGraceResponse=await stateRoute(retiredGrace);assert.equal(retiredGraceResponse.status,409,'dated grace cannot reuse a retired legacy password');
+assert.equal((await retiredGraceResponse.json()).code,'auth-upgrade-required');
 const first=await issueAccountSession(db,{email,subject,persistent:true},{now});
 assert.match(first.setCookie,/^__Host-roster_session=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
 const token=first.setCookie.split(';')[0].split('=')[1];

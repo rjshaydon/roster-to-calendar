@@ -3076,11 +3076,13 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
 async function verifyD1Account(db, email, password, options = {}) {
   const record = await loadAccountMirror(db, email);
   if (!record?.passwordHash || !record?.passwordSalt) {
+    if(options.secureAuthentication)throw new AuthenticationError(record?'auth-upgrade-required':'invalid-credentials',record?'Please use the updated sign-in.':'Check your email and password.',record?409:401);
     throw new Error("Account not found.");
   }
   if(options.secureAuthentication)await requireLegacyCredentialNotPending(db,email);
   const ok = await verifyPassword(password, record.passwordSalt, record.passwordHash);
   if (!ok) {
+    if(options.secureAuthentication)throw new AuthenticationError('invalid-credentials','Check your email and password.',401);
     throw new Error("Incorrect password.");
   }
   return {

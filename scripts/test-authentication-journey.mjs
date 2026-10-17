@@ -8,6 +8,7 @@ import {createAccountTransport,COOKIE_AUTH_HINT} from '../public/static/account-
 import {onRequestPost as authRoute} from '../functions/api/auth/session.js';
 import {onRequestPost as stateRoute} from '../functions/api/state.js';
 import {AUTH_PROJECT_ORIGIN} from '../functions/_lib/supabase-auth.js';
+import {authenticationLiveProbe} from './security/authentication-live-probe-worker.mjs';
 
 const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
 for(const name of (await readdir(new URL('../migrations/',import.meta.url))).filter(n=>n.endsWith('.sql')).sort())sql.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
@@ -28,9 +29,17 @@ globalThis.fetch=async(url,init)=>{
  if(path.startsWith('/auth/v1/admin/users/')&&init.method==='GET'){
   const user=users.get(path.split('/').at(-1));return user?Response.json(user):Response.json({code:'missing'},{status:404});
  }
+ if(path.startsWith('/auth/v1/admin/users/')&&init.method==='DELETE'){
+  users.delete(path.split('/').at(-1));return Response.json({});
+ }
+ if(path==='/auth/v1/user'&&init.method==='PUT'){
+  const subject=new Headers(init.headers).get('Authorization')?.replace('Bearer synthetic-access-','');
+  const user=users.get(subject);assert.ok(user,'password update must carry the verified provider user token');
+  user.password=body.password;return Response.json(user);
+ }
  if(path==='/auth/v1/token'){
   const user=[...users.values()].find(u=>u.email===body.email&&u.password===body.password);
-  return user?Response.json({user,access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600}):Response.json({code:'invalid'},{status:400});
+  return user?Response.json({user,access_token:'synthetic-access-'+user.id,refresh_token:'synthetic-refresh',expires_in:3600}):Response.json({code:'invalid'},{status:400});
  }
  throw Error('Unexpected mocked provider operation');
 };
@@ -96,5 +105,27 @@ try{
   assert.equal(upgrade.calls.at(-1).body.newPassword,undefined,'replacement is not repeated in state/calendar bodies');
  }
  assert.equal(providerCalls.some(c=>c.path.includes('generate_link')||c.path.includes('verify')),false,'no confirmation or recovery operations on signup/migration');
+ // Exercise the deployable probe with the same real route/schema adapter before
+ // exposing it to live provider credentials. Only its provider remains mocked.
+ const gate='f'.repeat(64),probe=authenticationLiveProbe(gate,'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+ const probeEnv={TEST_DB:db,ROSTER_AUTH_CONFIG:JSON.stringify({...config,enabled:false})};
+ async function probeStep(step,kind='new',cookie=''){
+  return probe.fetch(new Request('https://probe.example.test/'+step+'?kind='+kind,{method:'POST',headers:{Authorization:'Bearer '+gate,...(cookie?{Cookie:cookie}:{})}}),probeEnv);
+ }
+ assert.equal((await probe.fetch(new Request('https://probe.example.test/signup',{method:'POST'}),probeEnv)).status,404);
+ assert.equal((await probeStep('seed','legacy')).status,200);
+ for(const [step,kind] of [['signup','new'],['login','legacy']]){
+  const response=await probeStep(step,kind);assert.equal(response.status,200);
+  const cookie=response.headers.get('Set-Cookie').split(';')[0],result=await response.json();
+  assert.equal(result.legacyHashRetired,true);assert.equal(result.identityReady,true);assert.equal(result.legacyFeedPreserved,true);
+  assert.equal((await probeStep('context',kind,cookie)).status,200);
+  if(kind==='legacy'){
+   assert.equal((await probeStep('change',kind,cookie)).status,200);
+   assert.equal((await probeStep('context',kind,cookie)).status,401);
+   assert.equal((await probeStep('oldPassword',kind)).status,401);
+   assert.equal((await probeStep('returning',kind)).status,200);
+  }
+ }
+ const cleanup=await probeStep('cleanup');assert.equal(cleanup.status,200);assert.equal((await cleanup.json()).syntheticAccountsRemoved,2);
  console.log('Connected auth journeys passed: password login -> migration -> cookie -> account/calendar envelope; no-mail signup -> cookie -> envelope; unchanged reads without provider work/writes; migration pause preserves ready users; logout replay denied. No external services.');
 }finally{globalThis.fetch=oldFetch;sql.close();}
