@@ -1,4 +1,5 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
+import { installPasswordAutofillSubmit } from './password-autofill-submit.js';
 import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-workspace-auth';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
@@ -1863,6 +1864,9 @@ function clearLoginPasswordUpgrade() {
 }
 loginEmail.addEventListener('input',clearLoginPasswordUpgrade);
 let loginSubmissionPending = false;
+const loginAutofillSubmit=installPasswordAutofillSubmit({form:loginForm,password:loginPassword,
+  pending:()=>loginSubmissionPending,
+  eligible:()=>!document.hidden&&!entrancePage.classList.contains('hidden')&&!loginForm.classList.contains('hidden')&&Boolean(loginEmail.value)&&Boolean(document.querySelector('#loginPasswordUpgradeField')?.classList.contains('hidden'))});
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if(loginSubmissionPending)return;
@@ -17224,14 +17228,10 @@ accountsBody.addEventListener('click',async event=>{
   showFeedback('Signing out other devices…');
   button.disabled=true;const actor=authenticatedAccountEmail();
   try{
-    let response=await accountTransport.signOutOtherDevices();
-    if(response.status===401&&(await response.clone().json().catch(()=>({}))).code==='auth-reauthentication-required'){
-      let password=await showAppDialog({title:'Confirm sign-out of other devices',message:'For security, confirm your current password before signing out your other devices. You can use Apple Passwords.',confirmLabel:'Confirm sign out',requirePassword:true,email:actor});
-      if(!password){showFeedback('Cancelled. Other devices are still signed in.');return;}
-      if(actor!==authenticatedAccountEmail()){password='';throw Error('The account changed. Please try again.');}
-      try{await readJsonResponse(await accountTransport.reauthenticate(password),'Could not confirm your password.');}finally{password='';}
-      response=await accountTransport.signOutOtherDevices();
-    }
+    const confirmed=await showAppDialog({title:'Sign out other devices?',message:'Your other signed-in sessions will be ended. This device will stay signed in.',confirmLabel:'Sign out other devices'});
+    if(!confirmed){showFeedback('Cancelled. Other devices are still signed in.');return;}
+    if(actor!==authenticatedAccountEmail())throw Error('The account changed. Please try again.');
+    const response=await accountTransport.signOutOtherDevices();
     const result=await readJsonResponse(response,'Could not sign out other devices.');
     if(!Number.isSafeInteger(result.revokedSessions)||result.revokedSessions<0)throw Error('Sign-out could not be confirmed. Please reload the app and try again.');
     showFeedback(result.revokedSessions?`${result.revokedSessions} other session${result.revokedSessions===1?'':'s'} signed out. This device is still signed in.`:'No other signed-in sessions were found. This device is still signed in.');
@@ -17259,7 +17259,7 @@ function openLoginModal(prefillEmail = currentUserEmail || "", {resetPassword=fa
   forceConsoleSkin();
   // A late expiry/resume callback must not erase Passwords/Face ID autofill.
   // New presentations, account changes and rejected submissions still clear it.
-  if(!preserveDraft){loginEmail.value=prefillEmail;loginPassword.value='';clearLoginPasswordUpgrade();}
+  if(!preserveDraft){loginEmail.value=prefillEmail;loginPassword.value='';clearLoginPasswordUpgrade();if(!resetPassword||!prefillEmail)loginAutofillSubmit.reset();}
   const stayLoggedInPreference = localStorage.getItem(STAY_LOGGED_IN_PREFERENCE_KEY);
   if (stayLoggedIn&&!preserveDraft) stayLoggedIn.checked = stayLoggedInPreference === null ? false : stayLoggedInPreference === "true";
   document.querySelector('#recoveryRequestForm')?.classList.add('hidden');
@@ -17329,7 +17329,7 @@ async function logoutCurrentUser(options = {}) {
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
-  openLoginModal();
+  openLoginModal("",{resetPassword:true});
   setStatus("Log in to load a roster workspace.");
   if (signOutRequest) {
     try { await signOutRequest; }
