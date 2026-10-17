@@ -2,8 +2,8 @@
 export default {
   "accountId": "653047f50279c40888ef9715aa7c4c5f",
   "complete": true,
-  "verifiedAt": "2026-10-05T09:54:36.673273+00:00",
-  "evidence": "Wrangler D1 inventory and creation results on 5 October 2026; isolated Batch 2 Preview added without production data bindings.",
+  "verifiedAt": "2026-10-17T03:47:37.334Z",
+  "evidence": "Wrangler D1 inventory and creation results on 5 October 2026; isolated Batch 2 Preview added without production data bindings. Exact synthetic-only authentication/session test databases created and deleted on 17 October 2026 are retained for current-day analytics attribution; no active caller remains.",
   "databases": [
     {
       "id": "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0",
@@ -35,6 +35,22 @@ export default {
       "environment": "preview",
       "knownCallers": [
         "Isolated Batch 2 synthetic acceptance Preview: identity-batch2-acceptance"
+      ]
+    },
+    {
+      "id": "387e37d7-f4d3-4db6-80ff-f140f8fb4bc6",
+      "name": "roster-session-native-validation",
+      "environment": "temporary-deleted",
+      "knownCallers": [
+        "Gated synthetic session-cost probe; Worker and database deleted 17 October 2026"
+      ]
+    },
+    {
+      "id": "5c3d71d4-52c1-4eb0-9b32-0a5f2c3d9f02",
+      "name": "roster-auth-live-acceptance-20261017",
+      "environment": "temporary-deleted",
+      "knownCallers": [
+        "Gated synthetic Supabase lifecycle probe; Worker and database deleted 17 October 2026"
       ]
     }
   ]

@@ -3,7 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
 import {AUTH_PROJECT_ORIGIN} from '../functions/_lib/supabase-auth.js';
 import {loadAuthenticationLink} from '../functions/_lib/authentication-migration.js';
-import {beginCredentialChange,verifyAndCompleteCredentialChange} from '../functions/_lib/account-credential-change.js';
+import {applyCredentialChange,beginCredentialChange,verifyAndCompleteCredentialChange} from '../functions/_lib/account-credential-change.js';
 import {authenticateExistingAccount} from '../functions/_lib/account-authentication.js';
 import {issueAccountSession,readAccountSession} from '../functions/_lib/account-sessions.js';
 import {onRequestPost as authRoute} from '../functions/api/auth/session.js';
@@ -37,6 +37,15 @@ try{
  sql.prepare("INSERT INTO account_invites(token_hash,email,expires_at,created_at,updated_at) VALUES('old-invite',?,'2099-01-01','now','now')").run(email);
  const originalLink=await loadAuthenticationLink(db,email);
  const operation=await beginCredentialChange(env,originalLink,newPassword);
+ const proofBefore={email,subject,emailVerified:true,disabled:false,credentialVersion:0,credentialOperationId:''};
+ const beforeInvalidProof=providerCalls;
+ const originalConfig=env.ROSTER_AUTH_CONFIG;env.ROSTER_AUTH_CONFIG=JSON.stringify({...JSON.parse(originalConfig),secretKey:'sb_secret_rotated_fixture'});
+ await assert.rejects(()=>verifyAndCompleteCredentialChange(env,operation,newPassword),e=>e.code==='auth-password-pending','cached signing keys must follow credential rotation');
+ env.ROSTER_AUTH_CONFIG=originalConfig;
+ for(const changedProof of [{credentialVersion:99},{email:'other@example.test'},{subject:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'},{emailVerified:false},{disabled:true}]){
+  await assert.rejects(()=>applyCredentialChange(env,operation,newPassword,()=>{throw Error('must not mutate');},{differentCurrentProof:{...proofBefore,...changedProof}}),e=>e.code==='auth-password-pending');
+ }
+ assert.equal(providerCalls,beforeInvalidProof,'mismatched optimization proof cannot initiate provider work');
  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM account_sessions').get().n,0,'admission revokes existing sessions atomically');
  assert.equal(sql.prepare("SELECT phase FROM account_email_challenges WHERE id='old-reset'").get().phase,'complete');
  assert.notEqual(sql.prepare("SELECT revoked_at FROM account_invites WHERE token_hash='old-invite'").get().revoked_at,'');

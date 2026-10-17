@@ -5,7 +5,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {createAccountTransport,COOKIE_AUTH_HINT} from '../public/static/account-transport.js';
-import {onRequestPost as authRoute} from '../functions/api/auth/session.js';
+import {onRequestPost as authRoute,onRequestGet as authOptions} from '../functions/api/auth/session.js';
 import {onRequestPost as stateRoute} from '../functions/api/state.js';
 import {AUTH_PROJECT_ORIGIN} from '../functions/_lib/supabase-auth.js';
 import {authenticationLiveProbe} from './security/authentication-live-probe-worker.mjs';
@@ -47,7 +47,7 @@ function storage(){const values=new Map();return{values,getItem:k=>values.get(k)
 function browser(){
  let cookie='';const calls=[],persistent=storage(),tab=storage();
  const transport=createAccountTransport({persistentStorage:persistent,tabStorage:tab,fetchImpl:async(path,init={})=>{
-  if(path.includes('?options'))return Response.json({enabled:true,recovery:false});
+  if(path.includes('?options'))return authOptions({request:new Request('https://app.example.test'+path),env});
   const body=JSON.parse(init.body);calls.push({path,body});
   const request=new Request('https://app.example.test'+path,{...init,headers:{...init.headers,Origin:'https://app.example.test',...(cookie?{Cookie:cookie}:{})}});
   const context={request,env,data:{stateAction:body.action},waitUntil(){}};
@@ -76,6 +76,20 @@ try{
  assert.equal(queries.slice(beforeQueries).some(q=>/^\s*(UPDATE|INSERT|DELETE)/.test(q)),false,'ordinary reads never renew/write');
  assert.equal(b.calls.at(-1).body.password,undefined);assert.equal(b.calls.at(-1).body.email,undefined);
  const hint=b.persistent.getItem(COOKIE_AUTH_HINT);assert.equal(hint.includes(password),false);assert.equal(hint.includes('token'),false);
+ // Opening the actual login form fetches options first. During the owner
+ // canary those options must not force every other legacy user into migration.
+ const outsideEmail='outside-canary@example.test';
+ sql.prepare("INSERT INTO account_profiles(email,real_name,role,password_hash,password_salt,subscription_token) VALUES(?,'Outside Canary','user',?,?,'outside-feed')").run(outsideEmail,hash,salt);
+ env.ROSTER_AUTH_CONFIG=JSON.stringify({...config,migrationEmails:[legacyEmail]});
+ const outside=browser();assert.equal((await outside.transport.options()).cohortRollout,true);
+ const beforeOutside=providerCalls.length;
+ assert.equal((await outside.send({action:'login',email:outsideEmail,password,responseMode:'fast'})).status,200);
+ assert.equal(outside.calls.length,1,'non-cohort sign-in retains its single state request');
+ assert.equal(providerCalls.length,beforeOutside,'non-cohort legacy sign-in makes no provider call');
+ assert.equal(sql.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(outsideEmail).password_hash,hash);
+ env.ROSTER_AUTH_CONFIG=JSON.stringify({...config,migrationEmails:[]});
+ const outsideReady=browser();await outsideReady.transport.options();
+ assert.equal((await outsideReady.send({action:'login',email:legacyEmail,password,responseMode:'fast'})).status,200,'ready accounts outside the current cohort still use provider authentication');
  // A paused migration still accepts the exact completed provider identity.
  env.ROSTER_AUTH_CONFIG=JSON.stringify({...config,migrationEnabled:false,migrationPaused:true,migrationEmails:[]});
  const returning=browser();assert.equal((await returning.send({action:'login',email:legacyEmail,password,responseMode:'fast'})).status,200);
@@ -85,7 +99,7 @@ try{
  const signed=await signup.send({action:'login',mode:'create',email:signupEmail,password:'New synthetic password',realName:'New Person',responseMode:'fast'});
  const signedData=await signed.json();assert.equal(signed.status,200);assert.equal(signedData.realName,'New Person');assert.equal(signup.transport.validated(),true);
  assert.equal(signup.calls.filter(c=>c.path==='/api/auth/session'&&c.body.action==='signup').length,1);
- assert.equal(signup.calls.filter(c=>c.path==='/api/auth/session'&&c.body.action==='login').length,0,'signup requires no second password login');
+ assert.equal(signup.calls.filter(c=>c.path==='/api/auth/session'&&c.body.action==='login').length,1,'one automatic verification follows provisioning; no repeated creation');
  assert.equal(sql.prepare('SELECT password_hash FROM account_profiles WHERE email=?').get(signupEmail).password_hash,'');
  const stolenCookie=signup.cookie;await signup.transport.logout();
  const replay=new Request('https://app.example.test/api/state',{method:'POST',headers:{Origin:'https://app.example.test','Content-Type':'application/json',Cookie:stolenCookie},body:JSON.stringify({action:'loadAccountContext'})});
@@ -121,8 +135,8 @@ try{
  assert.equal((await probe.fetch(new Request('https://probe.example.test/signup',{method:'POST'}),probeEnv)).status,404);
  assert.equal((await probeStep('seed','legacy')).status,200);
  for(const [step,kind] of [['signup','new'],['login','legacy']]){
-  const response=await probeStep(step,kind);assert.equal(response.status,200);
-  const cookie=response.headers.get('Set-Cookie').split(';')[0],result=await response.json();
+  let response=await probeStep(step,kind);if(step==='signup'){assert.equal(response.status,202);assert.equal(response.headers.has('Set-Cookie'),false);assert.equal((await probeStep('context',kind)).status,401);response=await probeStep('login',kind);}assert.equal(response.status,200);
+  const cookie=response.headers.get('Set-Cookie').split(';')[0],inspection=await probeStep('inspect',kind),result=await inspection.json();assert.equal(inspection.status,200);
   assert.equal(result.legacyHashRetired,true);assert.equal(result.identityReady,true);assert.equal(result.legacyFeedPreserved,true);
   assert.equal((await probeStep('context',kind,cookie)).status,200);
   if(kind==='legacy'){

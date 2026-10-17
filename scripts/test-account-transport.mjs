@@ -82,4 +82,19 @@ for(const informed of [false,true]){
  assert.equal((await third).status,401);assert.equal(transport.expected(),false);
  assert.equal(cleanup.at(-1).expectedAccount,'third@example.test');
 }
-console.log('Browser account transport passed: one-time upgrade, no routine passwords/preflights/storage rewrites, cookie hints require validation, Creator target separation, coalesced foreground activity, recent-auth preservation, logout/expiry and stale-response/other-tab isolation.');
+// A prepared account is not an authenticated session, and cancelling its
+// pending request must prevent the automatic verification from being sent.
+{
+ let releasePrepare,prepareReached;const reached=new Promise(r=>prepareReached=r),requests=[];
+ const transport=createAccountTransport({persistentStorage:store(),tabStorage:store(),fetchImpl:async(url,init)=>{
+  if(url.includes('?options'))return Response.json({enabled:true});
+  const body=JSON.parse(init.body);requests.push(body.action);
+  if(body.action==='signup'){prepareReached();return new Promise(r=>releasePrepare=r);}
+  throw Error('Cancelled preparation must not continue to login');
+ }});
+ await transport.options();
+ const pending=transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',mode:'create',email:'prepared@example.test',password:'Strong fixture password',realName:'Prepared Person'})});
+ await reached;await transport.logout();releasePrepare(Response.json({ok:false,code:'auth-account-prepared'},{status:202}));
+ assert.equal((await pending).status,401);assert.equal(transport.expected(),false);assert.deepEqual(requests,['signup']);
+}
+console.log('Browser account transport passed: one-time upgrade, bounded signup verification, no routine passwords/preflights/storage rewrites, cookie hints require validation, Creator target separation, coalesced foreground activity, recent-auth preservation, logout/expiry and stale-response/other-tab isolation.');

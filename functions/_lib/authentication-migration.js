@@ -20,6 +20,17 @@ export async function loadAuthenticationLink(db, email) {
     .bind(normalizeEmail(email)).first();
 }
 
+// One indexed lookup for the login/signup admission state, including tombstones
+// whose local profile/link has already been deleted. No roster data is read.
+export async function loadAuthenticationStatus(db,email){
+  email=normalizeEmail(email);
+  const row=await db.prepare(`SELECT l.email,l.provider,l.provider_subject,l.phase,l.credential_revision,
+    l.credential_version,l.credential_operation_id,l.credential_target_digest,
+    EXISTS(SELECT 1 FROM account_auth_deletions WHERE email=? AND phase='queued' LIMIT 1) AS deletion_queued
+    FROM (SELECT ? AS email) wanted LEFT JOIN account_authentication_links l ON l.email=wanted.email`).bind(email,email).first();
+  return{link:row?.provider_subject?row:null,deletionQueued:row?.deletion_queued===1};
+}
+
 // Internal coordination primitive; never accept browser-supplied records.
 // Password migration verifies the submitted password first. Bounded recovery
 // may instead reserve before email proof, but can only create an undisclosed
@@ -40,7 +51,7 @@ export async function reserveAuthenticationMigration(db, record, options = {}) {
   if (!link || link.credential_revision !== revision || link.phase !== 'pending') {
     throw new AuthenticationError('auth-migration-conflict', 'The account changed during its upgrade. Please sign in again.', 409);
   }
-  return link;
+  return {...link,newlyReserved:link.provider_subject===subject};
 }
 
 // Proof must come from provider verification, never from browser fields or a
@@ -56,7 +67,7 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
   const now = options.now || new Date().toISOString();
   // D1 batch is transactional. A password change/delete or competing linkage
   // between verification and commit must leave the legacy credential untouched.
-  await db.batch([
+  const committed=await db.batch([
     db.prepare(`UPDATE account_authentication_links SET phase = 'ready', updated_at = ?
       WHERE email = ? AND provider_subject = ? AND credential_revision = ? AND phase = 'pending'
       AND credential_version=? AND credential_operation_id=?
@@ -68,6 +79,7 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
         AND credential_revision = ? AND phase = 'ready' AND credential_version=? AND credential_operation_id=?)`)
       .bind(now, email, record.passwordHash, record.passwordSalt, email, reservation.provider_subject, reservation.credential_revision, proof.credentialVersion ?? 0, proof.credentialOperationId || ''),
   ]);
+  if(Number(committed[1]?.meta?.changes)>0)return{email,subject:reservation.provider_subject,ready:true};
   const finalized = await db.prepare(`SELECT l.provider_subject FROM account_authentication_links l
     JOIN account_profiles a ON a.email = l.email WHERE l.email = ? AND l.provider_subject = ?
     AND l.credential_revision = ? AND l.phase = 'ready' AND a.password_hash = '' AND a.password_salt = ''
@@ -79,10 +91,13 @@ export async function finishAuthenticationMigration(db, { reservation, record, p
 
 export async function finishNewAccountAuthentication(db,{link,proof}) {
   if(link?.credential_revision!=='new-account'||link.provider_subject!==proof?.subject||link.email!==normalizeEmail(proof?.email)||proof.emailVerified!==true||proof.disabled===true)throw new AuthenticationError('auth-identity-mismatch','The account could not be verified.');
-  await db.prepare(`UPDATE account_authentication_links SET phase='ready',updated_at=? WHERE email=? AND provider_subject=?
+  const updated=await db.prepare(`UPDATE account_authentication_links SET phase='ready',updated_at=? WHERE email=? AND provider_subject=?
     AND credential_revision='new-account' AND phase='pending' AND credential_version=? AND credential_operation_id=? AND EXISTS
     (SELECT 1 FROM account_profiles WHERE email=? AND password_hash='' AND password_salt='')`)
     .bind(new Date().toISOString(),link.email,link.provider_subject,proof.credentialVersion ?? 0,proof.credentialOperationId || '',link.email).run();
+  // Positive changes prove this uniquely keyed guarded update matched. Final
+  // session issuance still checks the exact current version/ready state itself.
+  if(Number(updated.meta?.changes)>0)return;
   const ready=await loadAuthenticationLink(db,link.email);
   if(ready?.phase!=='ready'||ready.provider_subject!==link.provider_subject||ready.credential_version!==(proof.credentialVersion ?? 0)||ready.credential_operation_id!==(proof.credentialOperationId || ''))throw new AuthenticationError('auth-migration-conflict','The account changed. Please sign in again.',409);
 }

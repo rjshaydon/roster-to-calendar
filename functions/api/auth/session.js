@@ -68,10 +68,8 @@ export async function onRequestPost(context) {
     if (action === 'signup') {
       const email=normalizeEmail(body.email);if(!email||email.length>254)throw new AuthenticationError('auth-request','Check your email address.',400);
       await admit(context.env,email);
-      const proof=await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin});
-      const issued=await issueAccountSession(db,{email:proof.email,subject:proof.subject,credentialVersion:proof.credentialVersion,persistent:body.remember===true});
-      if(hasSessionCookie(context.request)){try{await revokeAccountSession(db,await readAccountSession(db,context.request));}catch(error){if(error?.code!=='auth-session-expired')throw error;}}
-      return reply({ok:true,email:issued.email},200,issued.setCookie);
+      await registerAccount(context.env,{email,password:body.password,realName:body.realName,origin:new URL(context.request.url).origin,prepareOnly:true});
+      return reply({ok:false,code:'auth-account-prepared'},202);
     }
     if (action === 'requestRecovery') {
       const email=normalizeEmail(body.email);
@@ -100,7 +98,8 @@ export async function onRequestPost(context) {
         requireExpectedAccount(oldSession,body.expectedAccount);
         if (email !== oldSession.email) throw new AuthenticationError('auth-identity-mismatch', 'Sign in using the current account.', 403);
       }
-      const proof = await authenticateExistingAccount(context.env, { email, password: body.password, newPassword: body.newPassword });
+      const proof = await authenticateExistingAccount(context.env, { email, password: body.password, newPassword: body.newPassword },{deferProvisioned:action==='login'});
+      if(proof.prepared)return reply({ok:false,code:'auth-account-prepared'},202);
       const issued = await issueAccountSession(db, { email: proof.email, subject: proof.subject, credentialVersion: proof.credentialVersion, persistent: body.remember === true });
       if (!oldSession && hasSessionCookie(context.request)) {
         try { oldSession = await readAccountSession(db, context.request); }
@@ -135,7 +134,8 @@ export async function onRequestPost(context) {
       const operation=await beginCredentialChange(context.env,link,body.newPassword);
       let changed;
       try{changed=await applyCredentialChange(context.env,operation,body.newPassword,
-        ()=>changeSupabasePassword(context.env,{email:session.email,subject:proof.subject,password:body.newPassword,accessToken:proof.accessToken}));}
+        ()=>changeSupabasePassword(context.env,{email:session.email,subject:proof.subject,password:body.newPassword,accessToken:proof.accessToken}),
+        body.currentPassword!==body.newPassword?{differentCurrentProof:proof}:{});}
       catch(error){
         if(error.credentialChangeNotApplied===true){
           // The original password proof remains valid only at this operation's
@@ -169,7 +169,7 @@ export async function onRequestPost(context) {
 export function onRequestGet(context) {
   if(new URL(context.request.url).searchParams.get('options')==='1'){
     let config;try{config=JSON.parse(context.env.ROSTER_AUTH_CONFIG||'{}');}catch{config={};}
-    const enabled=accountSessionsEnabled(context.env);return reply({enabled,recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
+    const enabled=accountSessionsEnabled(context.env);return reply({enabled,cohortRollout:enabled&&Array.isArray(config.migrationEmails),recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
   }
   return reply({ error: 'Use POST for account requests.' }, 405);
 }

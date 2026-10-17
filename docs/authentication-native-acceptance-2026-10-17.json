@@ -1,0 +1,878 @@
+{
+  "at": "2026-10-17T03:47:37.337Z",
+  "syntheticOnly": true,
+  "productionAccountsTouched": false,
+  "providerSettings": {
+    "status": 200,
+    "publicSignupDisabled": true,
+    "passwordProviderEnabled": true,
+    "mailerAutoconfirm": false
+  },
+  "cold": {
+    "test": "isolated-synthetic-real-provider",
+    "at": "2026-10-17T03:39:22.165Z",
+    "productionChanged": false,
+    "emailsSent": false,
+    "checks": [
+      {
+        "step": "seed",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 305,
+        "ok": true,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 2
+        }
+      },
+      {
+        "step": "signup",
+        "kind": "new",
+        "status": 202,
+        "wallMs": 652,
+        "ok": true,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 2,
+          "rowsWritten": 6
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 401,
+        "wallMs": 132,
+        "ok": false,
+        "meter": {
+          "statements": 0,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "login",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 296,
+        "ok": true,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 8,
+          "rowsWritten": 5
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 95,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 143,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 107,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 401,
+        "wallMs": 73,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "login",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 257,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 6,
+          "rowsWritten": 4
+        }
+      },
+      {
+        "step": "login",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 448,
+        "ok": true,
+        "meter": {
+          "statements": 8,
+          "rowsRead": 16,
+          "rowsWritten": 9
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 96,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 111,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "change",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 668,
+        "ok": true,
+        "meter": {
+          "statements": 7,
+          "rowsRead": 16,
+          "rowsWritten": 7
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 100,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 401,
+        "wallMs": 80,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "oldPassword",
+        "kind": "legacy",
+        "status": 401,
+        "wallMs": 192,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 1,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "returning",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 250,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 10,
+          "rowsWritten": 4
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 129,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 101,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "seed",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 80,
+        "ok": true,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 2
+        }
+      },
+      {
+        "step": "login",
+        "kind": "upgrade",
+        "status": 409,
+        "wallMs": 186,
+        "ok": false,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 4,
+          "rowsWritten": 3
+        }
+      },
+      {
+        "step": "upgradeLogin",
+        "kind": "upgrade",
+        "status": 202,
+        "wallMs": 326,
+        "ok": true,
+        "meter": {
+          "statements": 5,
+          "rowsRead": 6,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "returning",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 353,
+        "ok": true,
+        "meter": {
+          "statements": 7,
+          "rowsRead": 13,
+          "rowsWritten": 7
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 76,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "oldPassword",
+        "kind": "upgrade",
+        "status": 401,
+        "wallMs": 174,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 1,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 120,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "cleanup",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 528,
+        "ok": true,
+        "meter": {
+          "statements": 9,
+          "rowsRead": 29,
+          "rowsWritten": 23
+        }
+      }
+    ],
+    "cleanup": true,
+    "acceptancePassed": true
+  },
+  "repeat": {
+    "test": "isolated-synthetic-real-provider",
+    "at": "2026-10-17T03:44:43.965Z",
+    "productionChanged": false,
+    "emailsSent": false,
+    "checks": [
+      {
+        "step": "seed",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 268,
+        "ok": true,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 2
+        }
+      },
+      {
+        "step": "signup",
+        "kind": "new",
+        "status": 202,
+        "wallMs": 649,
+        "ok": true,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 2,
+          "rowsWritten": 6
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 401,
+        "wallMs": 122,
+        "ok": false,
+        "meter": {
+          "statements": 0,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "login",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 300,
+        "ok": true,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 8,
+          "rowsWritten": 5
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 101,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 118,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 111,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "context",
+        "kind": "new",
+        "status": 401,
+        "wallMs": 69,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "login",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 249,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 6,
+          "rowsWritten": 4
+        }
+      },
+      {
+        "step": "login",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 451,
+        "ok": true,
+        "meter": {
+          "statements": 8,
+          "rowsRead": 16,
+          "rowsWritten": 9
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 122,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 118,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "change",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 763,
+        "ok": true,
+        "meter": {
+          "statements": 7,
+          "rowsRead": 16,
+          "rowsWritten": 7
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 100,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 401,
+        "wallMs": 58,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "oldPassword",
+        "kind": "legacy",
+        "status": 401,
+        "wallMs": 182,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 1,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "returning",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 208,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 10,
+          "rowsWritten": 4
+        }
+      },
+      {
+        "step": "context",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 133,
+        "ok": true,
+        "meter": {
+          "statements": 3,
+          "rowsRead": 4,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "legacy",
+        "status": 200,
+        "wallMs": 118,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "seed",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 80,
+        "ok": true,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 0,
+          "rowsWritten": 2
+        }
+      },
+      {
+        "step": "login",
+        "kind": "upgrade",
+        "status": 409,
+        "wallMs": 186,
+        "ok": false,
+        "meter": {
+          "statements": 4,
+          "rowsRead": 4,
+          "rowsWritten": 3
+        }
+      },
+      {
+        "step": "upgradeLogin",
+        "kind": "upgrade",
+        "status": 202,
+        "wallMs": 305,
+        "ok": true,
+        "meter": {
+          "statements": 5,
+          "rowsRead": 6,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "returning",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 314,
+        "ok": true,
+        "meter": {
+          "statements": 7,
+          "rowsRead": 13,
+          "rowsWritten": 7
+        }
+      },
+      {
+        "step": "inspect",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 92,
+        "ok": true,
+        "legacyHashRetired": true,
+        "identityReady": true,
+        "legacyFeedPreserved": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 2,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "oldPassword",
+        "kind": "upgrade",
+        "status": 401,
+        "wallMs": 185,
+        "ok": false,
+        "meter": {
+          "statements": 1,
+          "rowsRead": 1,
+          "rowsWritten": 0
+        }
+      },
+      {
+        "step": "logout",
+        "kind": "upgrade",
+        "status": 200,
+        "wallMs": 102,
+        "ok": true,
+        "meter": {
+          "statements": 2,
+          "rowsRead": 3,
+          "rowsWritten": 1
+        }
+      },
+      {
+        "step": "cleanup",
+        "kind": "new",
+        "status": 200,
+        "wallMs": 561,
+        "ok": true,
+        "meter": {
+          "statements": 9,
+          "rowsRead": 29,
+          "rowsWritten": 23
+        }
+      }
+    ],
+    "cleanup": true,
+    "acceptancePassed": true
+  },
+  "coldCpu": {
+    "at": "2026-10-17T03:40:28.486Z",
+    "from": "2026-10-17T03:39:22.165Z",
+    "until": "2026-10-17T03:40:27.703Z",
+    "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+    "credential": "existing-read-only-analytics",
+    "syntheticOnly": true,
+    "stages": [
+      {
+        "stage": "cleanup",
+        "requests": 1,
+        "medianCpuMs": 9,
+        "p95CpuMs": 9,
+        "maxCpuMs": 9
+      },
+      {
+        "stage": "upgradeLogin",
+        "requests": 1,
+        "medianCpuMs": 4,
+        "p95CpuMs": 4,
+        "maxCpuMs": 4
+      },
+      {
+        "stage": "change",
+        "requests": 1,
+        "medianCpuMs": 8,
+        "p95CpuMs": 8,
+        "maxCpuMs": 8
+      },
+      {
+        "stage": "returning",
+        "requests": 2,
+        "medianCpuMs": 3,
+        "p95CpuMs": 5,
+        "maxCpuMs": 5
+      },
+      {
+        "stage": "context",
+        "requests": 6,
+        "medianCpuMs": 2,
+        "p95CpuMs": 6,
+        "maxCpuMs": 6
+      },
+      {
+        "stage": "logout",
+        "requests": 3,
+        "medianCpuMs": 2,
+        "p95CpuMs": 2,
+        "maxCpuMs": 2
+      },
+      {
+        "stage": "inspect",
+        "requests": 4,
+        "medianCpuMs": 1,
+        "p95CpuMs": 1,
+        "maxCpuMs": 1
+      },
+      {
+        "stage": "oldPassword",
+        "requests": 2,
+        "medianCpuMs": 2,
+        "p95CpuMs": 2,
+        "maxCpuMs": 2
+      },
+      {
+        "stage": "signup",
+        "requests": 1,
+        "medianCpuMs": 8,
+        "p95CpuMs": 8,
+        "maxCpuMs": 8
+      },
+      {
+        "stage": "login",
+        "requests": 4,
+        "medianCpuMs": 4,
+        "p95CpuMs": 8,
+        "maxCpuMs": 8
+      }
+    ]
+  },
+  "repeatCpu": {
+    "at": "2026-10-17T03:46:54.754Z",
+    "from": "2026-10-17T03:44:43.965Z",
+    "until": "2026-10-17T03:46:54.080Z",
+    "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+    "credential": "existing-read-only-analytics",
+    "syntheticOnly": true,
+    "stages": [
+      {
+        "stage": "cleanup",
+        "requests": 1,
+        "medianCpuMs": 13,
+        "p95CpuMs": 13,
+        "maxCpuMs": 13
+      },
+      {
+        "stage": "upgradeLogin",
+        "requests": 1,
+        "medianCpuMs": 6,
+        "p95CpuMs": 6,
+        "maxCpuMs": 6
+      },
+      {
+        "stage": "change",
+        "requests": 1,
+        "medianCpuMs": 7,
+        "p95CpuMs": 7,
+        "maxCpuMs": 7
+      },
+      {
+        "stage": "returning",
+        "requests": 2,
+        "medianCpuMs": 3,
+        "p95CpuMs": 4,
+        "maxCpuMs": 4
+      },
+      {
+        "stage": "context",
+        "requests": 5,
+        "medianCpuMs": 2,
+        "p95CpuMs": 3,
+        "maxCpuMs": 3
+      },
+      {
+        "stage": "logout",
+        "requests": 3,
+        "medianCpuMs": 2,
+        "p95CpuMs": 2,
+        "maxCpuMs": 2
+      },
+      {
+        "stage": "inspect",
+        "requests": 4,
+        "medianCpuMs": 1,
+        "p95CpuMs": 1,
+        "maxCpuMs": 1
+      },
+      {
+        "stage": "oldPassword",
+        "requests": 2,
+        "medianCpuMs": 2,
+        "p95CpuMs": 3,
+        "maxCpuMs": 3
+      },
+      {
+        "stage": "signup",
+        "requests": 1,
+        "medianCpuMs": 4,
+        "p95CpuMs": 4,
+        "maxCpuMs": 4
+      },
+      {
+        "stage": "login",
+        "requests": 4,
+        "medianCpuMs": 3,
+        "p95CpuMs": 6,
+        "maxCpuMs": 6
+      }
+    ]
+  },
+  "limitations": [
+    "CPU telemetry captured 20 app requests in the cold run and 19 in the repeat; one repeat context sample was absent. Test-only seed/inspect/cleanup routes are not app routes.",
+    "Synthetic admission adapter; native admission service was tested independently. Real-device and real-roster canary acceptance is still required."
+  ],
+  "cleanup": {
+    "providerFixturesRemoved": true,
+    "workersDeleted": [
+      "roster-auth-live-acceptance-20261017",
+      "roster-session-native-validation"
+    ],
+    "databasesDeleted": [
+      "387e37d7-f4d3-4db6-80ff-f140f8fb4bc6",
+      "5c3d71d4-52c1-4eb0-9b32-0a5f2c3d9f02"
+    ]
+  }
+}

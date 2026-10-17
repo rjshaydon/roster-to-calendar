@@ -2,24 +2,26 @@ import {applyCredentialChange,beginCredentialChange,credentialProof,verifyAndCom
 import {requirePasswordMigrationAdmission} from './authentication-rollout.js';
 import { normalizeEmail } from './email.js';
 import { AuthenticationError, supabaseAuthenticationConfig, signInWithSupabasePassword, createSupabaseMigrationUser, getSupabaseMigrationUser, preconfirmProvisionedAccount,validateNewPassword,setSupabasePasswordAfterApprovedProof } from './supabase-auth.js';
-import { loadAuthenticationLink, reserveAuthenticationMigration, finishAuthenticationMigration, finishNewAccountAuthentication } from './authentication-migration.js';
+import { loadAuthenticationStatus, reserveAuthenticationMigration, finishAuthenticationMigration, finishNewAccountAuthentication } from './authentication-migration.js';
 
 function denied() { return new AuthenticationError('invalid-credentials', 'Sign-in could not be completed.', 401); }
 
 // Existing accounts only. This never creates a local account, claims a roster or
 // changes roster ownership. Provider preconfirmation preserves existing account
 // trust; it does not establish mailbox ownership.
-export async function authenticateExistingAccount(env, input) {
+export async function authenticateExistingAccount(env, input,{deferProvisioned=false}={}) {
   const config = supabaseAuthenticationConfig(env), db = env.ROSTER_DB;
   const email = normalizeEmail(input.email), password = input.password;
   if (!email || email.length > 254 || typeof password !== 'string' || !password || new TextEncoder().encode(password).length > 1024) throw denied();
-  if(await db.prepare("SELECT 1 FROM account_auth_deletions WHERE email=? AND phase='queued' LIMIT 1").bind(email).first())throw denied();
-  const link = await loadAuthenticationLink(db, email);
+  const status=await loadAuthenticationStatus(db,email);if(status.deletionQueued)throw denied();
+  const link = status.link;
   if(link?.credential_operation_id)return verifyAndCompleteCredentialChange(env,link,input.newPassword||password,{resume:true});
   if (link?.phase === 'ready') return credentialProof(await signInWithSupabasePassword(env, { email, password, expectedSubject: link.provider_subject }),link);
   if (link?.phase === 'pending' && link.credential_revision === 'new-account') {
-    await preconfirmProvisionedAccount(env,{email,subject:link.provider_subject});
-    const proof=credentialProof(await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject}),link);
+    let verified;
+    try{verified=await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject});}
+    catch(error){if(error.code!=='email-verification-required')throw error;await preconfirmProvisionedAccount(env,{email,subject:link.provider_subject});verified=await signInWithSupabasePassword(env,{email,password,expectedSubject:link.provider_subject});}
+    const proof=credentialProof(verified,link);
     await finishNewAccountAuthentication(db,{link,proof});return proof;
   }
   // Admission does not apply to ready provider accounts or new signup. Pausing
@@ -34,16 +36,20 @@ export async function authenticateExistingAccount(env, input) {
   const upgradeRequired=()=>new AuthenticationError('auth-password-upgrade-required','Your current password needs an upgrade. Enter a new password of at least 12 characters to continue.',409);
   if(input.newPassword){
     validateNewPassword(input.newPassword);
-    const existing=await getSupabaseMigrationUser(env,{subject:reservation.provider_subject,email,allowMissing:true});
+    const existing=reservation.newlyReserved?null:await getSupabaseMigrationUser(env,{subject:reservation.provider_subject,email,allowMissing:true});
     if(!existing)await createSupabaseMigrationUser(env,{subject:reservation.provider_subject,email,password:input.newPassword,preconfirm:true});
     if(existing&&!existing.emailVerified)await preconfirmProvisionedAccount(env,{email,subject:reservation.provider_subject});
     const operation=await beginCredentialChange(env,reservation,input.newPassword);
+    if(!existing){
+      if(deferProvisioned)return{prepared:true};
+      return verifyAndCompleteCredentialChange(env,operation,input.newPassword);
+    }
     return applyCredentialChange(env,operation,input.newPassword,()=>setSupabasePasswordAfterApprovedProof(env,{email,subject:reservation.provider_subject,password:input.newPassword}));
   }
   if(new TextEncoder().encode(password).length>72)throw upgradeRequired();
   // A retry first looks up its reserved UUID. It never searches by email then
   // resets somebody else's provider password to resolve a conflict.
-  let provider = await getSupabaseMigrationUser(env, { subject: reservation.provider_subject, email, allowMissing: true });
+  let provider = reservation.newlyReserved?null:await getSupabaseMigrationUser(env, { subject: reservation.provider_subject, email, allowMissing: true });
   if (!provider){try{provider = await createSupabaseMigrationUser(env, { subject: reservation.provider_subject, email, password, preconfirm: true });}
     catch(error){if(error.code==='auth-password-policy')throw upgradeRequired();throw error;}}
   if (provider.disabled) throw new AuthenticationError('auth-account-unavailable', 'This account is unavailable. Contact the administrator.', 403);

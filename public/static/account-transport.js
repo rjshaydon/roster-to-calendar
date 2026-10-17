@@ -4,7 +4,7 @@ export const AUTH_NOTICE = 'roster-auth-notice';
 const RENEW_INTERVAL = 6 * 3600000;
 export function createAccountTransport({ fetchImpl = (...args) => fetch(...args), persistentStorage, tabStorage, onAuthenticated = () => {}, onExpired = () => {}, now = () => Date.now() } = {}) {
   function readHint() { try { const x=JSON.parse(tabStorage?.getItem(COOKIE_AUTH_HINT)||persistentStorage?.getItem(COOKIE_AUTH_HINT)||'null');return x&&typeof x.email==='string'&&x.email.length<=254?x:null; } catch { return null; } }
-  let hint=readHint(),validated=false,generation=0,authIntent=0,activityPromise=null,lastActivity=0,upgradeAvailable=Boolean(readHint()),optionsPromise;
+  let hint=readHint(),validated=false,generation=0,authIntent=0,activityPromise=null,lastActivity=0,upgradeAvailable=Boolean(readHint()),cohortRollout=false,optionsPromise;
   const responseLeases=new WeakMap();
   function removeHints(){try{persistentStorage?.removeItem(COOKIE_AUTH_HINT);}catch{}try{tabStorage?.removeItem(COOKIE_AUTH_HINT);}catch{}}
   function notify(email){try{persistentStorage?.setItem(AUTH_NOTICE,JSON.stringify({email,at:now(),nonce:Math.random()}));}catch{}}
@@ -44,9 +44,18 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   }
   async function explicitAuth(body,persistent){
     const intent=++authIntent,lease=++generation;
-    const response=await auth(body);
+    let response=await auth(body);
+    if(['signup','login'].includes(body.action)&&response.status===202){
+      if(intent!==authIntent||lease!==generation)return changedResponse();
+      const prepared=await response.clone().json().catch(()=>null);
+      if(prepared?.code!=='auth-account-prepared')return Response.json({error:'Sign-up could not be confirmed. Please try again.',code:'auth-unavailable'},{status:503});
+      if(intent!==authIntent||lease!==generation)return changedResponse();
+      // One bounded continuation. The password stays in this pending call;
+      // no cookie/hint is accepted until the provider verifies it on login.
+      response=await auth({action:'login',email:body.email,password:body.newPassword||body.password,remember:body.remember===true});
+    }
     if(intent!==authIntent||lease!==generation)return discardAuthenticationResponse(response);
-    if(response.ok){const data=await response.clone().json();if(intent!==authIntent||lease!==generation)return discardAuthenticationResponse(response);accept(data.email,persistent,true);}
+    if(response.ok){const data=await response.clone().json();if(intent!==authIntent||lease!==generation)return discardAuthenticationResponse(response);if(response.status!==200||data?.ok!==true||typeof data.email!=='string'||!data.email)return Response.json({error:'Sign-in could not be confirmed.',code:'auth-unavailable'},{status:503});accept(data.email,persistent,true);}
     responseLeases.set(response,generation);return response;
   }
   const login=(email,password,remember,newPassword)=>explicitAuth({action:'login',email,password,remember:remember===true,...(newPassword?{newPassword}:{})},remember);
@@ -57,7 +66,9 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     let lease=generation;
     if(upgradeAvailable&&body.action==='acceptInvite')return auth({action:'acceptInvite',inviteToken:body.inviteToken,newPassword:body.newPassword});
     if((hint||upgradeAvailable)&&body.action==='login'&&body.password&&body.mode==='create'){const r=await signup(body);if(!r.ok)return r;body={...body,mode:'login'};delete body.password;lease=generation;}
-    if((hint||upgradeAvailable)&&body.action==='login'&&body.password&&body.mode!=='create'){
+    // During a named canary, let the state route retain non-cohort legacy
+    // sign-in. Its closed 409 bridge upgrades only eligible/retired accounts.
+    if((hint||upgradeAvailable&&!cohortRollout)&&body.action==='login'&&body.password&&body.mode!=='create'){
       const response=await login(body.email,body.password,body.remember===true,body.newPassword);
       if(!response.ok)return response;lease=generation;
     }
@@ -87,7 +98,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     fetch:accountFetch,
     forget(){authIntent++;generation++;hint=null;validated=false;removeHints();},
     responseCurrent:response=>!responseLeases.has(response)||responseLeases.get(response)===generation,
-    options:()=>optionsPromise||=(async()=>{try{const r=await fetchImpl('/api/auth/session?options=1',{credentials:'same-origin'});const data=await r.json();upgradeAvailable=data.enabled===true;return data;}catch{return{enabled:false};}})(),
+    options:()=>optionsPromise||=(async()=>{try{const r=await fetchImpl('/api/auth/session?options=1',{credentials:'same-origin'});const data=await r.json();upgradeAvailable=data.enabled===true;cohortRollout=data.cohortRollout===true;return data;}catch{return{enabled:false};}})(),
     requestRecovery:email=>auth({action:'requestRecovery',email}),
     completeEmail:body=>auth({action:'completeEmail',...body}),
     changePassword:(currentPassword,newPassword)=>explicitAuth({action:'changePassword',currentPassword,newPassword},hint?.persistent===true),

@@ -3,12 +3,20 @@ import {AuthenticationError,supabaseAuthenticationConfig,signInWithSupabasePassw
 import {finishAuthenticationMigration,finishNewAccountAuthentication,loadAuthenticationLink} from './authentication-migration.js';
 
 const pending=()=>new AuthenticationError('auth-password-pending','The password update has not been confirmed. Try signing in with your new password; contact the administrator if it still fails.',409);
+// Reuse a non-extractable signing key within this environment, never a password
+// or proof result. Rotation replaces it; discarded environments are collectible.
+const signingKeys=new WeakMap();
+async function signingKey(env,secret){
+  let entry=signingKeys.get(env);
+  if(!entry||entry.secret!==secret){entry={secret,promise:crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])};signingKeys.set(env,entry);}
+  try{return await entry.promise;}catch(error){if(signingKeys.get(env)===entry)signingKeys.delete(env);throw error;}
+}
 function version(link){const v=link?.credential_version;return Number.isSafeInteger(v)&&v>=0?v:0;}
 export function credentialProof(proof,link){return{...proof,credentialVersion:version(link),credentialOperationId:link.credential_operation_id||''};}
 async function targetDigest(env,link,id,password){
   if(typeof password!=='string'||!password||new TextEncoder().encode(password).length>1024)throw pending();
   const config=supabaseAuthenticationConfig(env);
-  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(config.secretKey),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const key=await signingKey(env,config.secretKey);
   const value=JSON.stringify(['roster-password-operation-v1',normalizeEmail(link.email),link.provider_subject,id,password]);
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(value))),b=>b.toString(16).padStart(2,'0')).join('');
 }
@@ -45,10 +53,17 @@ export async function cancelRejectedCredentialChange(env,operation,error){
 // Call only for a freshly admitted operation. If the target already works,
 // never submit a redundant password write: a late identical write could undo a
 // later password change. Each operation has at most ONE actual provider write.
-export async function applyCredentialChange(env,operation,password,mutate){
+export async function applyCredentialChange(env,operation,password,mutate,{differentCurrentProof}={}){
   if(!operation?.credential_operation_id||!equalDigest(operation.credential_target_digest,await targetDigest(env,operation,operation.credential_operation_id,password)))throw pending();
-  let needsMutation=false;
-  try{await signInWithSupabasePassword(env,{email:operation.email,password,expectedSubject:operation.provider_subject});}
+  // Only the password-change route may supply its freshly verified, different
+  // current password proof. Same-password changes and all other paths retain
+  // the preflight. Interrupted operations never call this mutation function.
+  if(differentCurrentProof&&(differentCurrentProof.subject!==operation.provider_subject
+    ||normalizeEmail(differentCurrentProof.email)!==normalizeEmail(operation.email)
+    ||differentCurrentProof.credentialVersion!==version(operation)-1
+    ||differentCurrentProof.credentialOperationId||differentCurrentProof.emailVerified!==true||differentCurrentProof.disabled===true))throw pending();
+  let needsMutation=Boolean(differentCurrentProof),verified;
+  if(!needsMutation)try{verified=await signInWithSupabasePassword(env,{email:operation.email,password,expectedSubject:operation.provider_subject});}
   catch(error){
     if(['invalid-credentials','email-verification-required'].includes(error?.code))needsMutation=true;
     else{await cancelRejectedCredentialChange(env,operation,{credentialChangeNotApplied:true});error.credentialChangeNotApplied=true;throw error;}
@@ -57,7 +72,9 @@ export async function applyCredentialChange(env,operation,password,mutate){
     try{await mutate();}
     catch(error){await cancelRejectedCredentialChange(env,operation,error);throw error;}
   }
-  return verifyAndCompleteCredentialChange(env,operation,password);
+  // This exact immutable password has already passed the target HMAC check in
+  // this invocation. Keep actual provider proof below; avoid repeating the MAC.
+  return completeAfterTargetVerified(env,operation,password,{verified});
 }
 
 // A lost response can be completed only when the intended new password already
@@ -65,9 +82,12 @@ export async function applyCredentialChange(env,operation,password,mutate){
 // write could otherwise overwrite a subsequent, completed password change.
 export async function verifyAndCompleteCredentialChange(env,operation,password,{resume=false}={}){
   if(!operation?.credential_operation_id||!equalDigest(operation.credential_target_digest,await targetDigest(env,operation,operation.credential_operation_id,password)))throw pending();
+  return completeAfterTargetVerified(env,operation,password,{resume});
+}
+
+async function completeAfterTargetVerified(env,operation,password,{resume=false,verified}={}){
   const db=env.ROSTER_DB;
-  let verified;
-  try{verified=await signInWithSupabasePassword(env,{email:operation.email,password,expectedSubject:operation.provider_subject});}
+  if(!verified)try{verified=await signInWithSupabasePassword(env,{email:operation.email,password,expectedSubject:operation.provider_subject});}
   catch(error){if(resume&&['invalid-credentials','email-verification-required'].includes(error?.code))throw pending();throw error;}
   const proof=credentialProof(verified,operation);
   if(operation.phase==='pending'){
@@ -77,10 +97,11 @@ export async function verifyAndCompleteCredentialChange(env,operation,password,{
       await finishAuthenticationMigration(db,{reservation:operation,record:{email:record?.email,passwordHash:record?.password_hash,passwordSalt:record?.password_salt},proof});
     }
   }
-  await db.prepare(`UPDATE account_authentication_links SET credential_version=credential_version+1,
+  const finished=await db.prepare(`UPDATE account_authentication_links SET credential_version=credential_version+1,
     credential_operation_id='',credential_target_digest='',credential_operation_started_at='',updated_at=?
     WHERE email=? AND provider_subject=? AND credential_version=? AND credential_operation_id=? AND phase='ready'`)
     .bind(new Date().toISOString(),operation.email,operation.provider_subject,version(operation),operation.credential_operation_id).run();
+  if(Number(finished.meta?.changes)>0)return credentialProof(proof,{...operation,phase:'ready',credential_version:version(operation)+1,credential_operation_id:''});
   const current=await loadAuthenticationLink(db,operation.email);
   if(current?.provider_subject!==operation.provider_subject||current.phase!=='ready'||current.credential_operation_id||version(current)!==version(operation)+1)throw pending();
   return credentialProof(proof,current);

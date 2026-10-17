@@ -18,20 +18,28 @@ async function step(path,kind='new',cookie=''){
 function accepted(r){assert.equal(r.response.status,200);assert.equal(r.result.ok,true);}
 try{
  accepted(await step('seed','legacy'));
- const signup=await step('signup');accepted(signup);assert.equal(signup.result.legacyHashRetired,true);assert.equal(signup.result.identityReady,true);
+ const preparedSignup=await step('signup');assert.equal(preparedSignup.response.status,202);assert.equal(preparedSignup.result.code,'auth-account-prepared');assert.equal(preparedSignup.cookie,'');
+ assert.equal((await step('context')).response.status,401,'pending registration grants no calendar access');
+ const signup=await step('login');accepted(signup);const signupProof=await step('inspect');accepted(signupProof);assert.equal(signupProof.result.legacyHashRetired,true);assert.equal(signupProof.result.identityReady,true);
  assert.match(signup.response.headers.get('Set-Cookie'),/^__Host-roster_session=[a-f0-9]{64}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
  const context=await step('context','new',signup.cookie);accepted(context);assert.equal(context.result.meter.rowsWritten,0);
  accepted(await step('logout','new',signup.cookie));
  assert.equal((await step('context','new',signup.cookie)).response.status,401);
  accepted(await step('login'));
- const legacy=await step('login','legacy');accepted(legacy);assert.equal(legacy.result.legacyHashRetired,true);assert.equal(legacy.result.legacyFeedPreserved,true);
+ const legacy=await step('login','legacy');accepted(legacy);const legacyProof=await step('inspect','legacy');accepted(legacyProof);assert.equal(legacyProof.result.legacyHashRetired,true);assert.equal(legacyProof.result.legacyFeedPreserved,true);
  const legacyContext=await step('context','legacy',legacy.cookie);accepted(legacyContext);assert.equal(legacyContext.result.meter.rowsWritten,0);
- const changed=await step('change','legacy',legacy.cookie);accepted(changed);assert.equal(changed.result.identityReady,true);
+ const changed=await step('change','legacy',legacy.cookie);accepted(changed);const changeProof=await step('inspect','legacy');accepted(changeProof);assert.equal(changeProof.result.identityReady,true);
  assert.equal((await step('context','legacy',legacy.cookie)).response.status,401);
  assert.equal((await step('oldPassword','legacy')).response.status,401);
  const returning=await step('returning','legacy');accepted(returning);
  accepted(await step('context','legacy',returning.cookie));
  accepted(await step('logout','legacy',returning.cookie));
+ accepted(await step('seed','upgrade'));
+ const requiredUpgrade=await step('login','upgrade');assert.equal(requiredUpgrade.response.status,409);assert.equal(requiredUpgrade.result.code,'auth-password-upgrade-required');
+ const preparedUpgrade=await step('upgradeLogin','upgrade');assert.equal(preparedUpgrade.response.status,202);assert.equal(preparedUpgrade.cookie,'');
+ const upgraded=await step('returning','upgrade');accepted(upgraded);const upgradedProof=await step('inspect','upgrade');accepted(upgradedProof);assert.equal(upgradedProof.result.legacyHashRetired,true);assert.equal(upgradedProof.result.legacyFeedPreserved,true);assert.equal(upgradedProof.result.identityReady,true);
+ assert.equal((await step('oldPassword','upgrade')).response.status,401);
+ accepted(await step('logout','upgrade',upgraded.cookie));
  evidence.acceptancePassed=true;
 }catch{evidence.acceptancePassed=false;}
 finally{
