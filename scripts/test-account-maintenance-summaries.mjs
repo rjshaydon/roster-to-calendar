@@ -74,3 +74,7 @@ assert.deepEqual(verifiedSyntheticTestCosts({...lagged,interval:syntheticSample.
 assert.throws(()=>verifiedSyntheticTestCosts({...lagged,databases:[...syntheticSample.databases,{databaseId:retiredId,rowsRead:5000,rowsWritten:30001}]},'2026-10-18'),/reviewed evidence bound/);
 const laggedSummary=await accountMaintenanceSummaries({...context,data:{d1Meter:createD1Meter(raw,4,{firstViaAll:true})}},lagged,primary,'2026-10-18','2026-10-17');assert.deepEqual(laggedSummary.outstanding,primary.outstanding);assert.deepEqual(laggedSummary.settled,{reads:34974,writes:22873});
 assert.deepEqual(lagged.totals,syntheticSample.totals,'later settled test buckets never refund actual usage');
+const finalId='d5578ba0-337b-411e-b097-f0782404ef3b',finalSample={...lagged,interval:{...lagged.interval,observedUntil:'2026-10-18T11:40:00.000Z'},databases:[...lagged.databases,{databaseId:finalId,rowsRead:3000,rowsWritten:2000}]};
+assert.deepEqual(verifiedSyntheticTestCosts(finalSample,'2026-10-18'),{reads:37874,writes:21873});
+assert.throws(()=>verifiedSyntheticTestCosts({...finalSample,databases:[...lagged.databases,{databaseId:finalId,rowsRead:3000,rowsWritten:10001}]},'2026-10-18'),/reviewed evidence bound/);
+assert.deepEqual(verifiedSyntheticTestCosts(finalSample,'2026-10-19'),{reads:0,writes:0});

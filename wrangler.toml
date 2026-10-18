@@ -11,7 +11,7 @@ dataset = "roster_api_invocations"
 
 [vars]
 # Credentials remain encrypted; general migration occurs only after successful login.
-ROSTER_AUTH_ROLLOUT = '{"enabled":true,"sessionsEnabled":true,"migrationEnabled":true,"signupEnabled":true,"passkeysEnabled":true,"requestsEnabled":true,"requestsAdminOnly":true,"requestTransfersEnabled":false,"emailDeliveryReady":false,"legacyStateUntil":"2026-10-20T00:00:00.000Z"}'
+ROSTER_AUTH_ROLLOUT = '{"enabled":true,"sessionsEnabled":true,"migrationEnabled":true,"signupEnabled":true,"passkeysEnabled":true,"requestsEnabled":true,"requestsAdminOnly":true,"requestTransfersEnabled":true,"emailDeliveryReady":false,"legacyStateUntil":"2026-10-20T00:00:00.000Z"}'
 ROSTER_COMPARISON_ENABLED = "true"
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"
 FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "true"

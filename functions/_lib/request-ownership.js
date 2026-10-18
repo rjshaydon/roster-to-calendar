@@ -103,7 +103,8 @@ export async function prepareOwnershipReversal(db,input,reviewedPreview=null){
  const reason=String(input.reason||'').trim();if(!reason||reason.length>1000)throw conflict('Explain the reversal.');
  const id=crypto.randomUUID(),now=new Date().toISOString(),statements=ownershipGuards(db,preview.before,preview.targetEmail),original=preview.after;
  statements.push(guard(db,"NOT EXISTS(SELECT 1 FROM json_each(?) x LEFT JOIN account_profiles p ON p.email=json_extract(x.value,'$.email') WHERE p.email IS NULL)",[JSON.stringify(original.profiles)]),
-  guard(db,"NOT EXISTS(SELECT 1 FROM json_each(?) x JOIN account_people p ON p.email=json_extract(x.value,'$.email') WHERE p.person_id<>?)",[JSON.stringify(original.profiles),original.people[0].person_id]),
+  guard(db,`NOT EXISTS(SELECT 1 FROM json_each(?) x JOIN account_people p ON p.email=json_extract(x.value,'$.email') WHERE p.person_id<>?)
+   AND NOT EXISTS(SELECT 1 FROM json_each(?) x CROSS JOIN account_claims c WHERE c.email=json_extract(x.value,'$.email') AND c.email<>? AND NOT (${aliasSelection()}))`,[JSON.stringify(original.profiles),original.people[0].person_id,JSON.stringify(original.profiles),preview.targetEmail,JSON.stringify(original.aliases)]),
   db.prepare(`DELETE FROM account_claims WHERE ${aliasSelection()}`).bind(JSON.stringify(original.aliases)),
   db.prepare('DELETE FROM account_people WHERE person_id=?').bind(original.people[0].person_id),
   db.prepare(`INSERT INTO account_people(email,person_id,created_at,updated_at)

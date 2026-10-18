@@ -11,7 +11,8 @@ const proofs=Object.freeze([
  // callers were synthetic. Classify only the portion already in settled
  // account analytics, including later-arriving buckets; no future caller or
  // primary-account reservation is exempted. Reviewed upper bounds fail closed.
- {databaseId:'f0f9d3cc-8f51-4c59-b1f9-7f3a8e794816',utcDay:'2026-10-18',observedUntil:'2026-10-18T11:05:00.000Z',settledDatabase:true,maxReads:100000,maxWrites:30000}
+ {databaseId:'f0f9d3cc-8f51-4c59-b1f9-7f3a8e794816',utcDay:'2026-10-18',observedUntil:'2026-10-18T11:05:00.000Z',settledDatabase:true,maxReads:100000,maxWrites:30000},
+ {databaseId:'d5578ba0-337b-411e-b097-f0782404ef3b',utcDay:'2026-10-18',observedUntil:'2026-10-18T11:25:04.000Z',settledDatabase:true,maxReads:30000,maxWrites:10000}
 ]);
 export function verifiedSyntheticTestCosts(analytics,day){
  const total={reads:0,writes:0},seen=new Set();

@@ -1,5 +1,5 @@
 import {groupIdentityTerms} from './identity-editor-model.js?v=20261006-terms2';
-import {mountIdentityReview} from './identity-review-ui.js?v=20261018-requests4';
+import {mountIdentityReview} from './identity-review-ui.js?v=20261018-requests5';
 
 // Private, per-authenticated-account memory only. Never persist messages/drafts.
 
@@ -76,7 +76,13 @@ export function installRequestUI({transport,email,readResponse,escapeHtml:esc,id
   if(name==='refresh'){notice='';await refreshVisible();}
   if(name==='more')await loadList(true);
   if(name==='open')await openCase(target.dataset.id);
-  if(name==='editPreview'){view=preview.returnView;render();}
+  if(name==='editPreview'){
+   if(preview.action==='commitResolution'&&preview.returnView==='decision'){
+    const {kind,reason}=decision;await openCase(selected,detail?.channel.channelId||'',true);
+    if(kind!=='reverse'&&detail.case.status!=='open'){notice='This request has changed. Review its current state before another decision.';patchNotice();return;}
+    await startDecision(kind);decision.reason=reason;render();
+   }else{view=preview.returnView;render();}
+  }
   if(name==='sendPreview')await sendPreview();
   if(name==='cancelDecision'||name==='cancelIdentity')await openCase(selected,'',true);
   if(name==='resolve')await startDecision();

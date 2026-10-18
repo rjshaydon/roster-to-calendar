@@ -2,7 +2,7 @@
 export default {
   "accountId": "653047f50279c40888ef9715aa7c4c5f",
   "complete": true,
-  "verifiedAt": "2026-10-18T11:26:57.883272+00:00",
+  "verifiedAt": "2026-10-18T11:33:51.367650+00:00",
   "evidence": "Wrangler D1 inventory and creation results on 5 October 2026; isolated Batch 2 Preview added without production data bindings. Exact synthetic-only authentication/session test databases created and deleted on 17 October 2026 are retained for current-day analytics attribution; no active caller remains. Verified 18 October synthetic passkey and request test database IDs are retained for same-day analytics attribution; their reads/writes remain included in account totals.",
   "databases": [
     {
@@ -80,9 +80,9 @@ export default {
     {
       "id": "d5578ba0-337b-411e-b097-f0782404ef3b",
       "name": "roster-requests-final-20261018",
-      "environment": "temporary",
+      "environment": "temporary-deleted",
       "knownCallers": [
-        "Small gated synthetic request boundary probe only; no production/provider/mail bindings; remove after final response-size check"
+        "Small gated synthetic request boundary test only; Worker/database deleted after passing CPU checks on 18 October 2026; no production/provider/mail bindings"
       ]
     }
   ]

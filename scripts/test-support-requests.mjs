@@ -67,6 +67,9 @@ beforeBatch=()=>sqlite.prepare("INSERT INTO account_people(email,person_id) VALU
 assert.equal((await call('admin',mutation({action:'commitResolution',caseId,version:detail.case.version,kind:'reverse',previewToken:reverse.previewToken,reason:'Reject obsolete legacy ownership'}))).r.status,409,'a formerly legacy-only owner linked elsewhere cannot regain claims through reversal');
 assert.equal(sqlite.prepare('SELECT email FROM account_people WHERE person_id=?').get('person:fixture-doctor').email,fixtureEmails.user,'failed reversal keeps current access intact');
 sqlite.prepare('DELETE FROM account_people WHERE email=?').run(fixtureEmails.stranger);
+beforeBatch=()=>sqlite.prepare("INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES(?,'ddh','UNRELATED NEW','Unrelated new claim')").run(fixtureEmails.stranger);
+assert.equal((await call('admin',mutation({action:'commitResolution',caseId,version:detail.case.version,kind:'reverse',previewToken:reverse.previewToken,reason:'Reject later unrelated legacy identity'}))).r.status,409,'a former holder with another legacy identity needs review before access is restored');
+sqlite.prepare("DELETE FROM account_claims WHERE doctor_key='UNRELATED NEW'").run();
 ok(await call('admin',mutation({action:'commitResolution',caseId,version:detail.case.version,kind:'reverse',previewToken:reverse.previewToken,reason:'Reviewed reversal'})));
 assert.equal((await accountIdentityAliases(db,fixtureEmails.holder,[])).length,2);assert.equal((await accountIdentityAliases(db,fixtureEmails.user,[])).length,0);
 assert.equal(ok(await call('user',{action:'detail',caseId})).case.status,'open');

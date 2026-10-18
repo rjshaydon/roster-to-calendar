@@ -1,0 +1,343 @@
+{
+  "scope": "Synthetic-only native review; production owner-only send/reply/resolve/reopen independently passed. No staff accounts/messages/claims changed.",
+  "telemetryCaveat": "Observability counts log/telemetry events, not HTTP calls; HTTP counts come from driver evidence. Some aggregate top-group responses omit stages, so individual stage filters were also read.",
+  "retiredDatabaseId": "f0f9d3cc-8f51-4c59-b1f9-7f3a8e794816",
+  "retirementVerifiedAt": "2026-10-18T11:25:04.000Z",
+  "forecastProof": "All callers were gated synthetic fixtures. Only already-settled per-database usage on 18 October leaves the recurring forecast, under max 100000 reads/30000 writes; actual usage/reservations/caps unchanged.",
+  "phases": {
+    "beforeBulk": {
+      "httpRequests": 66,
+      "allHttp200": true,
+      "evidenceSha256": "be02147dfe172cdbbc59f49eefd340cde3b4f61407e35def99bc7a998e49ea27",
+      "cpu": {
+        "at": "2026-10-18T11:09:47.063Z",
+        "from": "2026-10-18T11:08:50.000Z",
+        "until": "2026-10-18T11:09:46.511Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "create-identity",
+            "requests": 5,
+            "medianCpuMs": 9,
+            "p95CpuMs": 11,
+            "maxCpuMs": 11
+          },
+          {
+            "stage": "other",
+            "requests": 1,
+            "medianCpuMs": 3,
+            "p95CpuMs": 3,
+            "maxCpuMs": 3
+          },
+          {
+            "stage": "read",
+            "requests": 5,
+            "medianCpuMs": 3,
+            "p95CpuMs": 3,
+            "maxCpuMs": 3
+          },
+          {
+            "stage": "summary",
+            "requests": 5,
+            "medianCpuMs": 2,
+            "p95CpuMs": 2,
+            "maxCpuMs": 2
+          },
+          {
+            "stage": "create",
+            "requests": 1,
+            "medianCpuMs": 16,
+            "p95CpuMs": 16,
+            "maxCpuMs": 16
+          },
+          {
+            "stage": "transfer-commit",
+            "requests": 5,
+            "medianCpuMs": 9,
+            "p95CpuMs": 11,
+            "maxCpuMs": 11
+          },
+          {
+            "stage": "reverse-commit",
+            "requests": 5,
+            "medianCpuMs": 9,
+            "p95CpuMs": 11,
+            "maxCpuMs": 11
+          },
+          {
+            "stage": "reply",
+            "requests": 5,
+            "medianCpuMs": 7,
+            "p95CpuMs": 9,
+            "maxCpuMs": 9
+          }
+        ]
+      }
+    },
+    "afterBulk": {
+      "httpRequests": 67,
+      "allHttp200": true,
+      "evidenceSha256": "f9918e4df05dc58791ee4a5e856de4a425d9928b0f62b1c26f133cc8d38e94d9",
+      "cpu": {
+        "at": "2026-10-18T11:18:02.078Z",
+        "from": "2026-10-18T11:16:22.000Z",
+        "until": "2026-10-18T11:18:01.334Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "create-identity",
+            "requests": 17,
+            "medianCpuMs": 6,
+            "p95CpuMs": 6,
+            "maxCpuMs": 6
+          },
+          {
+            "stage": "other",
+            "requests": 1,
+            "medianCpuMs": 4,
+            "p95CpuMs": 4,
+            "maxCpuMs": 4
+          },
+          {
+            "stage": "create-support",
+            "requests": 5,
+            "medianCpuMs": 5,
+            "p95CpuMs": 11,
+            "maxCpuMs": 11
+          },
+          {
+            "stage": "read",
+            "requests": 4,
+            "medianCpuMs": 5,
+            "p95CpuMs": 6,
+            "maxCpuMs": 6
+          },
+          {
+            "stage": "summary",
+            "requests": 5,
+            "medianCpuMs": 1,
+            "p95CpuMs": 2,
+            "maxCpuMs": 2
+          },
+          {
+            "stage": "create",
+            "requests": 1,
+            "medianCpuMs": 10,
+            "p95CpuMs": 10,
+            "maxCpuMs": 10
+          },
+          {
+            "stage": "transfer-commit",
+            "requests": 4,
+            "medianCpuMs": 8,
+            "p95CpuMs": 10,
+            "maxCpuMs": 10
+          },
+          {
+            "stage": "reverse-commit",
+            "requests": 5,
+            "medianCpuMs": 9,
+            "p95CpuMs": 9,
+            "maxCpuMs": 9
+          }
+        ]
+      }
+    },
+    "normalUiCreation": {
+      "httpRequests": 13,
+      "allHttp200": true,
+      "evidenceSha256": "0c858d1e4fe0e1d33dd5ef71eb113aea99a46783e180a43231c30c1d27dfc00b",
+      "cpu": {
+        "at": "2026-10-18T11:21:42.579Z",
+        "from": "2026-10-18T11:20:23.000Z",
+        "until": "2026-10-18T11:21:41.888Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "create-identity",
+            "requests": 13,
+            "medianCpuMs": 6,
+            "p95CpuMs": 6,
+            "maxCpuMs": 6
+          },
+          {
+            "stage": "create-support",
+            "requests": 13,
+            "medianCpuMs": 5,
+            "p95CpuMs": 10,
+            "maxCpuMs": 10
+          },
+          {
+            "stage": "list",
+            "requests": 1,
+            "medianCpuMs": 3,
+            "p95CpuMs": 3,
+            "maxCpuMs": 3
+          },
+          {
+            "stage": "seed",
+            "requests": 1,
+            "medianCpuMs": 11,
+            "p95CpuMs": 11,
+            "maxCpuMs": 11
+          }
+        ]
+      }
+    }
+  },
+  "individualGroups": [
+    {
+      "at": "2026-10-18T11:24:58.961Z",
+      "from": "2026-10-18T11:16:22.000Z",
+      "until": "2026-10-18T11:19:00.000Z",
+      "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+      "credential": "existing-read-only-analytics",
+      "syntheticOnly": true,
+      "stages": [
+        {
+          "stage": "transfer-preview",
+          "requests": 5,
+          "medianCpuMs": 8,
+          "p95CpuMs": 11,
+          "maxCpuMs": 11
+        }
+      ]
+    },
+    {
+      "at": "2026-10-18T11:25:02.410Z",
+      "from": "2026-10-18T11:16:22.000Z",
+      "until": "2026-10-18T11:19:00.000Z",
+      "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+      "credential": "existing-read-only-analytics",
+      "syntheticOnly": true,
+      "stages": [
+        {
+          "stage": "reverse-preview",
+          "requests": 4,
+          "medianCpuMs": 9,
+          "p95CpuMs": 10,
+          "maxCpuMs": 10
+        }
+      ]
+    },
+    {
+      "at": "2026-10-18T11:25:02.624Z",
+      "from": "2026-10-18T11:16:22.000Z",
+      "until": "2026-10-18T11:19:00.000Z",
+      "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+      "credential": "existing-read-only-analytics",
+      "syntheticOnly": true,
+      "stages": [
+        {
+          "stage": "detail",
+          "requests": 13,
+          "medianCpuMs": 4,
+          "p95CpuMs": 6,
+          "maxCpuMs": 6
+        }
+      ]
+    },
+    {
+      "at": "2026-10-18T11:25:00.519Z",
+      "from": "2026-10-18T11:16:22.000Z",
+      "until": "2026-10-18T11:19:00.000Z",
+      "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+      "credential": "existing-read-only-analytics",
+      "syntheticOnly": true,
+      "stages": [
+        {
+          "stage": "list",
+          "requests": 5,
+          "medianCpuMs": 2,
+          "p95CpuMs": 2,
+          "maxCpuMs": 2
+        }
+      ]
+    }
+  ],
+  "finalBoundary": {
+    "workerVersion": "a3043d38-fc27-4aa5-9dd8-092a7fb8a3df",
+    "databaseId": "d5578ba0-337b-411e-b097-f0782404ef3b",
+    "httpRequests": 27,
+    "allHttp200": true,
+    "evidenceSha256": "f83a3fde2a76119def72d8c5857f310695a9e568f46e5c271c1c80a553e67997",
+    "notes": "Eight private channels and 64 claims with eight and sixteen aliases, including full guards, request-body parsing, session authority and daily accounting. The prior 500-account run established indexed independence from directory size. Full server snapshots are not returned to the client.",
+    "individualGroups": [
+      {
+        "at": "2026-10-18T11:32:15.041Z",
+        "from": "2026-10-18T11:31:05.000Z",
+        "until": "2026-10-18T11:32:00.000Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "transfer-preview",
+            "requests": 2,
+            "medianCpuMs": 6,
+            "p95CpuMs": 8,
+            "maxCpuMs": 8
+          }
+        ]
+      },
+      {
+        "at": "2026-10-18T11:32:16.311Z",
+        "from": "2026-10-18T11:31:05.000Z",
+        "until": "2026-10-18T11:32:00.000Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "reverse-preview",
+            "requests": 2,
+            "medianCpuMs": 8,
+            "p95CpuMs": 9,
+            "maxCpuMs": 9
+          }
+        ]
+      },
+      {
+        "at": "2026-10-18T11:32:18.122Z",
+        "from": "2026-10-18T11:31:05.000Z",
+        "until": "2026-10-18T11:32:00.000Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "transfer-commit",
+            "requests": 2,
+            "medianCpuMs": 7,
+            "p95CpuMs": 7,
+            "maxCpuMs": 7
+          }
+        ]
+      },
+      {
+        "at": "2026-10-18T11:32:17.729Z",
+        "from": "2026-10-18T11:31:05.000Z",
+        "until": "2026-10-18T11:32:00.000Z",
+        "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+        "credential": "existing-read-only-analytics",
+        "syntheticOnly": true,
+        "stages": [
+          {
+            "stage": "reverse-commit",
+            "requests": 2,
+            "medianCpuMs": 8,
+            "p95CpuMs": 9,
+            "maxCpuMs": 9
+          }
+        ]
+      }
+    ],
+    "retirementVerifiedAt": "2026-10-18T11:33:51.369668+00:00"
+  }
+}
