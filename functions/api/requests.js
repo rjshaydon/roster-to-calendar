@@ -1,3 +1,4 @@
+import {guardedFetch} from '../_lib/outbound-network.js';
 import {reserveRosterMaintenanceBudget} from '../_lib/roster-maintenance-budget.js';
 import {requestIdentityPublication} from '../_lib/identity-publication-dispatch.js';
 import {authenticationSettings} from '../_lib/authentication-settings.js';
@@ -18,6 +19,21 @@ export async function onRequestPost(context){
   requireExpectedAccount(session,input.expectedAccount);
   if(settings.requestsAdminOnly===true&&!requestAdmin(session))throw new AuthenticationError('requests-disabled','Messages and requests are not enabled for this account.',403);
   const action=input.action;
+  if(action==='prepare'){
+   if(env.ROSTER_ACCOUNT_BUDGET_ENABLED!=='true')return reply({ok:true,preparedUntil:Date.now()+30000});
+   await admit(env,session.email,'support');
+   const now=new Date(),until=Date.now()+30000;
+   const grant=await db.prepare("SELECT valid_until FROM roster_account_budget WHERE utc_day=? AND valid_until>? AND stop_reason=''").bind(now.toISOString().slice(0,10),new Date(until).toISOString()).first();
+   if(grant)return reply({ok:true,preparedUntil:until});
+   // A quiet roster needs no maintenance grant. Refresh one only for an
+   // explicit message review, on the existing separate admission endpoint.
+   const token=String(env.ROSTER_AUTOMATION_TOKEN||'');
+   if(!token)return reply({code:'requests-budget',error:'The daily database check is unavailable. Your draft is preserved.'},503);
+   const response=await guardedFetch(env,new URL('/api/automation/account-budget',request.url),{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(15000)},{label:'Request daily admission'});
+   const admission=await response.json().catch(()=>null);
+   if(!response.ok||admission?.ok!==true||admission.deferred)return reply({code:'requests-budget',error:'The daily database safeguard has deferred sending. Your draft is preserved; try again later.'},503);
+   return reply({ok:true,preparedUntil:Date.now()+30000});
+  }
   if(action==='summary')return reply({ok:true,summary:await requestSummary(db,session.email),admin:requestAdmin(session),transfersEnabled:settings.requestTransfersEnabled===true});
   if(action==='list')return reply(await listSupportRequests(db,session,input));
   if(action==='detail')return reply(await readSupportRequest(db,session,input));

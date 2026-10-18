@@ -71,6 +71,17 @@ beforeBatch=()=>sqlite.prepare("INSERT INTO account_claims(email,source_type,doc
 assert.equal((await call('admin',mutation({action:'commitResolution',caseId,version:detail.case.version,kind:'transfer',previewToken:concurrent.previewToken,reason:'Concurrent claim test'}))).r.status,409);
 assert.equal(sqlite.prepare('SELECT email FROM account_people').get().email,fixtureEmails.holder);
 sqlite.prepare('DELETE FROM account_claims WHERE email=?').run(fixtureEmails.stranger);
+// Sending can prepare a grant on a quiet roster day without provider/mail or
+// mutating the case. The actual write still reserves against the daily cap.
+const day=new Date().toISOString().slice(0,10);
+sqlite.prepare("INSERT INTO roster_account_budget(utc_day,valid_until,maximum_reads,maximum_writes) VALUES(?,?,4000000,80000)").run(day,new Date(Date.now()+60000).toISOString());
+const budgetEnv={...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'};
+assert.ok(ok(await call('user',{action:'prepare'},budgetEnv)).preparedUntil>Date.now());
+sqlite.prepare('UPDATE roster_account_budget SET valid_until=? WHERE utc_day=?').run('',day);
+assert.equal((await call('user',{action:'prepare'},budgetEnv)).r.status,503,'missing internal admission cannot silently skip the cap');
+const originalFetch=globalThis.fetch;let admissions=0;
+globalThis.fetch=async(url,init)=>{assert.equal(String(url),'https://fixture.test/api/automation/account-budget');assert.equal(init.headers.Authorization,'Bearer synthetic-only');assert.deepEqual(JSON.parse(init.body),{reuseCurrentGrant:true});admissions++;return Response.json({ok:true,deferred:true,reason:'private analytics detail'});};
+try{const paused=await call('user',{action:'prepare'},{...budgetEnv,ROSTER_AUTOMATION_TOKEN:'synthetic-only'});assert.equal(paused.r.status,503);assert.equal(JSON.stringify(paused.data).includes('private analytics detail'),false);assert.equal(admissions,1);}finally{globalThis.fetch=originalFetch;}
 // An unrelated identity operation cannot close this request.
 assert.equal((await call('admin',{action:'previewResolution',caseId,version:detail.case.version,kind:'identity',operation:{kind:'account-link',personIds:['person:fixture-doctor'],accountEmail:fixtureEmails.user}})).r.status,409);
 const legacy=[{id:'identity:fixture',message:'Unknown historic roster context',firstSeenAt:'2026-01-01T00:00:00.000Z'},{id:'parser:fixture',message:'Leave parser issues alone'}];
