@@ -1,3 +1,4 @@
+import {boundedBody} from './_lib/authentication-request.js';
 import {readSubscriptionBuildInput} from './_lib/subscription-wire.js';
 import { beginMaintenanceAccounting, finishMaintenanceAccounting } from "./_lib/roster-maintenance-budget.js";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -71,11 +72,16 @@ export async function onRequest(context) {
     context.data ||= {};context.data.subscriptionBuildInput=await readSubscriptionBuildInput(context.request);
     context.data.d1OperationPhase=String(context.data.subscriptionBuildInput?.mode||'').slice(0,48);
   }
-  const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput, derivedInput);
+  let supportInput;
+  if(url.pathname==='/api/requests'){
+    try{supportInput=await boundedBody(context.request,16384);}catch(error){return Response.json({code:error.code||'auth-request',error:error.message},{status:error.status||400,headers:{'Cache-Control':'no-store'}});}
+    context.data ||= {};context.data.supportRequestInput=supportInput;
+  }
+  const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput, derivedInput, supportInput);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && ["identity","loadCalendarEvents"].includes(action) || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/requests" || url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && ["identity","loadCalendarEvents"].includes(action) || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -86,7 +92,7 @@ export async function onRequest(context) {
     context.data ||= {};context.data.d1Meter=d1;
     sharedEnv.ROSTER_DB = d1.binding;
     beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true",
-      {deadlineAt,statementLimit:limit,purpose:['/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname)?'identity':'roster'});
+      {deadlineAt,statementLimit:limit,purpose:['/api/requests','/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname)?'identity':'roster'});
   }
 
   const work = (async () => {
@@ -141,8 +147,11 @@ export async function onRequest(context) {
   return await work;
 }
 
-async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput, derivedInput) {
+async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput, derivedInput, supportInput) {
   if(pathname==='/api/auth/passkeys')return 8;
+  if(pathname==='/api/requests'){
+    return supportInput?.action==='commitResolution'?512:64;
+  }
   if(pathname==='/api/automation/identity-audit'||pathname==='/api/automation/subscription-build') return 96;
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
     if (identityMaintenanceInput === null) return 64;

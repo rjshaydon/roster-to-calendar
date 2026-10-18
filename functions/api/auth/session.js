@@ -1,3 +1,4 @@
+import {requestSummary} from '../../_lib/request-summary.js';
 import {boundedBody,admit} from '../../_lib/authentication-request.js';
 import {authenticationSettings} from '../../_lib/authentication-settings.js';
 import {applyCredentialChange,beginCredentialChange} from '../../_lib/account-credential-change.js';
@@ -139,7 +140,10 @@ export async function onRequestPost(context) {
         FROM account_profiles a`).first();
       return reply({ok:true,total:Number(counts.total),migrated:Number(counts.migrated)});
     }
-    if (action === 'status') return reply({ ok: true, email: session.email, role: session.role });
+    if (action === 'status') {
+      const config=authenticationSettings(context.env),allowed=config.requestsEnabled===true&&(config.requestsAdminOnly!==true||session.email==='rhaydon@gmail.com'&&['creator','owner'].includes(session.role));
+      return reply({ok:true,email:session.email,role:session.role,...(allowed?{requests:{summary:await requestSummary(db,session.email),admin:session.email==='rhaydon@gmail.com'&&['creator','owner'].includes(session.role),transfersEnabled:config.requestTransfersEnabled===true}}:{})});
+    }
     if (action === 'activity') {
       const renewed = await renewAccountSession(db, context.request, session);
       return reply({ ok: true }, 200, renewed.setCookie);
@@ -160,7 +164,7 @@ export async function onRequestPost(context) {
 export function onRequestGet(context) {
   if(new URL(context.request.url).searchParams.get('options')==='1'){
     let config;try{config=authenticationSettings(context.env);}catch{config={};}
-    const enabled=accountSessionsEnabled(context.env);return reply({enabled,cohortRollout:enabled&&Array.isArray(config.migrationEmails),passkeys:enabled&&config.passkeysEnabled===true&&new URL(context.request.url).origin==='https://rtc.curiousmind.app',recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
+    const enabled=accountSessionsEnabled(context.env);return reply({enabled,requests:enabled&&config.requestsEnabled===true,requestsAdminOnly:config.requestsAdminOnly===true,cohortRollout:enabled&&Array.isArray(config.migrationEmails),passkeys:enabled&&config.passkeysEnabled===true&&new URL(context.request.url).origin==='https://rtc.curiousmind.app',recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
   }
   return reply({ error: 'Use POST for account requests.' }, 405);
 }

@@ -2,7 +2,7 @@
 export const COOKIE_AUTH_HINT = 'roster-cookie-auth';
 export const AUTH_NOTICE = 'roster-auth-notice';
 const RENEW_INTERVAL = 6 * 3600000;
-export function createAccountTransport({ fetchImpl = (...args) => fetch(...args), persistentStorage, tabStorage, onAuthenticated = () => {}, onExpired = () => {}, now = () => Date.now() } = {}) {
+export function createAccountTransport({ fetchImpl = (...args) => fetch(...args), persistentStorage, tabStorage, onAuthenticated = () => {}, onExpired = () => {}, onSessionStatus = () => {}, now = () => Date.now() } = {}) {
   function readHint() { try { const x=JSON.parse(tabStorage?.getItem(COOKIE_AUTH_HINT)||persistentStorage?.getItem(COOKIE_AUTH_HINT)||'null');return x&&typeof x.email==='string'&&x.email.length<=254?x:null; } catch { return null; } }
   let hint=readHint(),validated=false,generation=0,authIntent=0,activityPromise=null,lastActivity=0,upgradeAvailable=Boolean(readHint()),cohortRollout=false,optionsPromise,logoutPromise=null,statusPromise=null,lastStatus=0,authenticationPending=0,resumeGeneration=null;
   const responseLeases=new WeakMap();
@@ -21,8 +21,8 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   async function auth(body,options={}){
     const lease=generation;
     const payload={...body};
-    if(hint&&(options.passkeys||['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary','migrationAccounts'].includes(body.action)))payload.expectedAccount=hint.email;
-    const response=await fetchImpl(options.passkeys?'/api/auth/passkeys':'/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
+    if(hint&&(options.passkeys||options.requests||['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary','migrationAccounts'].includes(body.action)))payload.expectedAccount=hint.email;
+    const response=await fetchImpl(options.requests?'/api/requests':options.passkeys?'/api/auth/passkeys':'/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
     responseLeases.set(response,lease);
     if(lease===generation&&hint&&[401,403].includes(response.status)){
       const data=await response.clone().json().catch(()=>null);
@@ -107,6 +107,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     if(!resume&&now()-lastStatus<15000)return;
     const lease=generation;lastStatus=now();
     statusPromise=auth({action:'status'},{signal:AbortSignal.timeout(10000)})
+      .then(async response=>{if(response.ok&&lease===generation){const data=await response.clone().json();if(lease===generation)onSessionStatus(data);}return response;})
       .catch(()=>{if(lease===generation)lastStatus=0;})
       .finally(()=>{
         statusPromise=null;
@@ -120,6 +121,7 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     forget(){authIntent++;generation++;authenticationPending=0;hint=null;validated=false;removeHints();},
     responseCurrent:response=>!responseLeases.has(response)||responseLeases.get(response)===generation,
     options:()=>optionsPromise||=(async()=>{try{const r=await fetchImpl('/api/auth/session?options=1',{credentials:'same-origin'});const data=await r.json();upgradeAvailable=data.enabled===true;cohortRollout=data.cohortRollout===true;return data;}catch{return{enabled:false};}})(),
+    requests:(action,fields={})=>auth({...fields,action},{requests:true,signal:AbortSignal.timeout(20000)}),
     passkeyAccount:(action,fields={})=>auth({...fields,action},{passkeys:true}),
     passkeySignIn:(runCeremony,remember)=>explicitAuth({action:'passkey'},remember,async current=>{
       const start=await auth({action:'startSignIn',remember:remember===true},{passkeys:true});

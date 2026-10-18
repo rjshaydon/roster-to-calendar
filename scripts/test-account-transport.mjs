@@ -198,3 +198,17 @@ console.log('Home Screen session regressions passed single expiry, old-response/
  releaseStatus(Response.json({ok:true}));await beforeBackground;assert.equal(checks,2);assert.equal(expired,1);assert.equal(transport.expected(),false);
 }
 console.log('Suspended pre-background checks receive one fresh, coalesced resume validation.');
+// Requests share the authenticated generation and existing foreground check.
+{
+ const calls=[],summaries=[];let release,signal;const transport=createAccountTransport({persistentStorage:store(),tabStorage:store(),onSessionStatus:data=>summaries.push(data),fetchImpl:async(url,init)=>{
+  const body=JSON.parse(init.body);calls.push({url,body});
+  if(body.action==='heldRequest')return new Promise(r=>release=r);
+  if(body.action==='status')return Response.json({ok:true,requests:{summary:{version:2,unread:1}}});
+  return Response.json({ok:true,email:'requester@example.test'},{headers:{'X-Roster-Authentication':'cookie'}});
+ }});
+ await transport.fetch('/api/state',{method:'POST',body:JSON.stringify({action:'login',email:'requester@example.test',password:'synthetic'})});
+ await transport.requests('summary',{expectedAccount:'other@example.test'});assert.equal(calls.at(-1).url,'/api/requests');assert.equal(calls.at(-1).body.expectedAccount,'requester@example.test');assert.equal(calls.at(-1).body.password,undefined);
+ const before=calls.length;await Promise.all([transport.checkSession({resume:true}),transport.checkSession()]);assert.equal(calls.length,before+1);assert.equal(summaries[0].requests.summary.unread,1);
+ const held=transport.requests('heldRequest');await Promise.resolve();await transport.logout();release(Response.json({ok:true,body:'private old request'}));assert.equal(transport.responseCurrent(await held),false);
+ console.log('Requests transport passed fixed endpoint/actor binding, password-free calls, one coalesced foreground summary and stale private-response rejection.');
+}

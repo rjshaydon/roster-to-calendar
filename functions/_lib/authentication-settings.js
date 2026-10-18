@@ -1,6 +1,6 @@
 // Credentials remain in the encrypted configuration. Rollout changes can use a
 // separate, non-secret JSON binding without copying privileged keys again.
-const booleans=new Set(['enabled','sessionsEnabled','migrationEnabled','migrationPaused','signupEnabled','emailDeliveryReady','passkeysEnabled']);
+const booleans=new Set(['enabled','sessionsEnabled','migrationEnabled','migrationPaused','signupEnabled','emailDeliveryReady','passkeysEnabled','requestsEnabled','requestTransfersEnabled','requestsAdminOnly']);
 const dates=new Set(['legacyStateUntil','legacyMigrationUntil']);
 export function authenticationSettings(env={}){
  const config=JSON.parse(env.ROSTER_AUTH_CONFIG||'{}');

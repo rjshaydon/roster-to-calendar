@@ -23,7 +23,7 @@ export async function boundedBody(request, maximumBytes = 8192) {
 
 
 export async function admit(env,identity,mode='login') {
-  if(!['login','passkey'].includes(mode))throw new AuthenticationError('auth-request','Invalid sign-in request.',400);
+  if(!['login','passkey','support'].includes(mode))throw new AuthenticationError('auth-request','Invalid sign-in request.',400);
   if (!env.AUTH_LOGIN_LIMITER?.limit && !env.AUTH_LOGIN_LIMITER?.fetch) throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity));
   const key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');

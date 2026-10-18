@@ -1,3 +1,4 @@
+import {requestIdentityPublication} from '../_lib/identity-publication-dispatch.js';
 import {allowLegacyStateDuringRollout,requireLegacyCredentialNotPending} from '../_lib/authentication-rollout.js';
 import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
 import { registerAccount } from '../_lib/account-registration.js';
@@ -2780,9 +2781,6 @@ async function handleAccountStateRequest(context) {
   }
 }
 
-async function requestIdentityPublication(context,operationId) {
-  return guardedFetch(context.env,new URL('/api/automation/identity-maintenance',context.request.url),{method:'POST',headers:{Authorization:`Bearer ${String(context.env.IDENTITY_MAINTENANCE_TOKEN||context.env.ROSTER_AUTOMATION_TOKEN||'')}`,'Content-Type':'application/json'},body:JSON.stringify({mode:'publish',operationId})},{label:'Identity publication maintenance'});
-}
 
 async function resolveEffectiveFacilityIdentityAccess(env,record,options) {
   const claims=env.IDENTITY_REVIEW_ENABLED==='true'?await accountIdentityAliases(env.ROSTER_DB,record.email,sanitizeClaims(record.claims)):record.claims;

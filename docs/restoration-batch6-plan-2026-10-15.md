@@ -4,6 +4,8 @@ Consolidated plan: 18 October 2026, Melbourne. Replaces the earlier mixed propos
 
 ## Current status and agreed scope
 
+**18 October implementation checkpoint:** the request feature is built and tested for an owner-only preview. See [the request checkpoint](restoration-batch6-requests-2026-10-18.md). Staff rollout and ownership changes remain gated pending interface acceptance, focused High review, rare-write CPU headroom and connected publication/feed checks.
+
 **Security implementation and rollout are complete.** Supabase password signup/migration, opaque cookie sessions, password changes, deletion coordination, sign-out/other-device revocation, migration reporting and optional passkeys are deployed. The user reported that the passkey flow works after the requested device test. This records the user's acceptance, not testing of every Android/Citrix/device combination.
 
 General migration upgrades each existing account on its next successful password login; unmigrated accounts are expected during rollout. Do not treat migration of every dormant user as an unfinished coding requirement. Dated legacy routine-auth compatibility closes on 20 October at 11 am Melbourne; retain the tested fresh sign-in/update path and secure session verification. Normal production observation continues.

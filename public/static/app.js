@@ -1,6 +1,7 @@
+import {requestSectionMarkup} from './request-section.js?v=20261018-requests';
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
 import { installPasswordAutofillSubmit } from './password-autofill-submit.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261018-passkeys';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261018-requests';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -8,7 +9,7 @@ import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-
 const rosterComparisonCache = createRosterComparisonCache();
 import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
-import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261012-external-audit';
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261018-requests';
 let currentIdentityReviewEnabled = false;
 let currentAdvancedRosterRecoveryEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
@@ -331,6 +332,7 @@ let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
 const accountTransport = createAccountTransport({ persistentStorage: localStorage, tabStorage: sessionStorage,
   onAuthenticated: clearBrowserPasswordsAfterCookieAuthentication,
+  onSessionStatus: data => { if(data.requests)void requestUI.receive(data.requests); },
   onExpired: () => { void logoutCurrentUser({ expired: true }); },
 });
 let passkeyController=null,passkeyControllerPromise=null;
@@ -350,6 +352,34 @@ const passkeyUI={
   afterLogin(){const actor=accountTransport.email();void this.controller().then(controller=>{if(actor===accountTransport.email()&&accountTransport.validated())controller?.afterLogin();}).catch(()=>{});},
   reset(){passkeyController?.reset();},
 };
+let requestController=null,requestControllerPromise=null,requestUnread=0,requestsExpanded=false;
+const requestUI={
+ async receive(data){const actor=accountTransport.email();try{const controller=await this.controller();if(actor===accountTransport.email())controller?.receive(data);}catch{}},
+ async controller(){
+  if(!accountTransport.validated())return null;
+  const actor=accountTransport.email(),options=await accountTransport.options();
+  if(options.requests!==true||options.requestsAdminOnly===true&&actor!==OWNER_EMAIL)return null;
+  return requestControllerPromise||=(import('./request-ui.js?v=20261018-requests').then(({installRequestUI})=>{
+   requestController=installRequestUI({transport:accountTransport,email:()=>accountTransport.validated()?accountTransport.email():'',readResponse:readJsonResponse,escapeHtml,
+    onBadge:count=>{requestUnread=count;syncRequestBadge();},
+    reauthenticate:async()=>{const password=await showAppDialog({title:'Confirm identity decision',message:'Confirm your password before changing roster account access.',confirmLabel:'Confirm',requirePassword:true,email:actor});if(!password)throw new Error('Identity change was not applied.');await readJsonResponse(await accountTransport.reauthenticate(password),'Could not confirm your sign-in.');},
+    identityRequest:async(operation,input)=>{const response=await accountFetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input})});return readJsonResponse(response,'Identity review unavailable.');},
+   });return requestController;
+  }));
+ },
+ async mount(){if(!accountsBody.querySelector('[data-request-section]'))return;try{await(await this.controller())?.mount();}catch{}},
+ afterLogin(){void this.controller().then(controller=>controller?.afterLogin()).catch(()=>{});},
+ reset(){requestController?.reset();requestController=null;requestControllerPromise=null;requestUnread=0;requestsExpanded=false;},
+ async compose(input){const controller=await this.controller();if(!controller){setStatus('Please contact the admin to review this roster identity.',true);return;}if(isViewingCreatorAccount())currentAdminTab='users';await openAccountsSurface();await controller.compose(input);},
+};
+function syncRequestBadge(){
+ for(const target of [accountsButton,mobileAccountButton,mobileAccountAccessButton]){
+  if(!target)continue;let badge=target.querySelector('[data-request-badge]');
+  if(!requestUnread){badge?.remove();continue;}
+  if(!badge){badge=document.createElement('span');badge.className='notification-badge';badge.dataset.requestBadge='true';target.append(badge);}badge.textContent=String(requestUnread);badge.title='Unread requests and replies';
+ }
+}
+
 function accountFetch(...args) { return accountTransport.fetch(...args); }
 function hasAccountAuthentication(password = currentUserPassword) { return Boolean(password || accountTransport.expected()); }
 function clearBrowserPasswordsAfterCookieAuthentication(email) {
@@ -1655,7 +1685,7 @@ accountsBody.addEventListener("input", (event) => {
 accountsBody.addEventListener("toggle", (event) => {
   const section = event.target;
   if (!(section instanceof HTMLDetailsElement)) return;
-  const userSections = '[data-identity-section], [data-create-user-account-section], [data-other-users-section]';
+  const userSections = '[data-identity-section], [data-create-user-account-section], [data-other-users-section], [data-request-section]';
   if (section.open && section.matches(userSections)) {
     for (const other of accountsBody.querySelectorAll(userSections)) {
       if (other !== section) other.open = false;
@@ -1663,8 +1693,10 @@ accountsBody.addEventListener("toggle", (event) => {
     identityReviewExpanded = section.matches('[data-identity-section]');
     createUserAccountExpanded = section.matches('[data-create-user-account-section]');
     otherUsersExpanded = section.matches('[data-other-users-section]');
+    requestsExpanded = section.matches('[data-request-section]');
     if (!otherUsersExpanded) otherUsersExpandedBySearch = false;
   }
+  if(section.matches('[data-request-section]')){requestsExpanded=section.open;if(section.open)void requestUI.mount();}
   if (section.matches("[data-identity-section]")) {
     identityReviewExpanded = section.open;
     if (section.open) mountAdminIdentityReview();
@@ -3286,6 +3318,7 @@ function syncMobileAccountButtons() {
     mobileAccountAccessButton.textContent = label;
     mobileAccountAccessButton.setAttribute("aria-label", label);
   }
+  syncRequestBadge();
 }
 
 function syncMobileSettingsControls() {
@@ -4047,7 +4080,7 @@ async function claimSelectedRosterName(candidateOverride = null) {
     return;
   }
   if (candidate.claimedBy && normalizeEmail(candidate.claimedBy) !== currentUserEmail) {
-    setStatus(`${candidate.displayName} is already claimed. Conflict notification is still to be added.`, true);
+    await requestUI.compose({kind:'identity',subject:'Please review my roster name',alias:{sourceType:candidate.sourceType,key:candidate.key||candidate.doctorKey,displayName:candidate.displayName},body:`I believe ${candidate.displayName} is my roster name. Please review the existing account link.`});
     return;
   }
 
@@ -12608,6 +12641,7 @@ function syncAccountsButton() {
   accountsButton.innerHTML = ownerView
     ? `Admin${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}`
     : "Account";
+  syncRequestBadge();
   syncFacilityOverviewAccess();
 }
 
@@ -12727,6 +12761,7 @@ function renderAccountsModal(options = {}) {
       </form>
       `}
       ${accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? '<details class="review-card create-user-card" data-passkey-settings hidden><summary class="review-top"><div><strong>Passkeys</strong><span>Optional Face ID, fingerprint or device sign-in.</span></div><span class="collapsible-chevron" aria-hidden="true">⌄</span></summary><div class="review-body" data-passkey-settings-body></div></details>' : ''}
+      ${!ownerView && accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? requestSectionMarkup(false,requestsExpanded) : ''}
       ${renderAccountHospitalLocationsCard({ directorPreference: currentNonClinical && currentDirectorViewEnabled && !doctorProfileView })}
       ${currentNonClinical && currentDirectorViewEnabled ? "" : linkedNames}
       ${ownerView || (currentNonClinical && currentDirectorViewEnabled) ? "" : renderFilesMarkup({
@@ -12776,6 +12811,7 @@ function renderAccountsModal(options = {}) {
         </form>
       </details>
       ${currentIdentityReviewEnabled ? identityReviewMarkup(identityReviewExpanded) : ""}
+      ${requestSectionMarkup(true,requestsExpanded)}
       <article class="review-card creator-qr-card" aria-labelledby="creator-qr-title">
         <img class="creator-qr-code" src="/static/rtc-curiousmind-qr.svg" alt="QR code that opens rtc.curiousmind.app">
         <div class="creator-qr-copy">
@@ -12889,8 +12925,18 @@ function renderAccountsModal(options = {}) {
       return;
     }
   }
+  // Directory/performance completions must not replace a live private draft.
+  const requestSurface=accountsBody.querySelector('[data-requests-root]');
+  const requestFocus=requestSurface?.contains(document.activeElement)?document.activeElement:null;
+  const requestSelection=requestFocus&&'selectionStart' in requestFocus?[requestFocus.selectionStart,requestFocus.selectionEnd]:null;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+  const requestPlaceholder=accountsBody.querySelector('[data-requests-root]');
+  if(requestSurface&&requestPlaceholder&&requestSurface.dataset.requestActor===authenticatedAccountEmail()){
+    requestPlaceholder.replaceWith(requestSurface);
+    if(requestFocus){requestFocus.focus({preventScroll:true});if(requestSelection)requestFocus.setSelectionRange(...requestSelection);}
+  }
   void passkeyUI.mount();
+  void requestUI.mount();
   if (ownerView && currentAdminTab === "users") { filterAdminUserCards(); syncAdminPermissionControls(); }
   if (ownerView && currentAdminTab === "users" && identityReviewExpanded) mountAdminIdentityReview();
   if (ownerView && currentAdminTab === "users") {
@@ -14985,6 +15031,7 @@ async function removeRosterClaim(marker, claimEmail = "") {
 async function reportRosterIdentityIssue(message = "Roster name match needs review.", email = currentUserEmail) {
   if (!cloudAvailable && !isCreatorAuthenticated()) return;
   const targetEmail = normalizeEmail(email || currentUserEmail);
+  if(targetEmail===authenticatedAccountEmail()&&accountTransport.validated()&&await requestUI.controller()){await requestUI.compose({kind:'identity',body:message});return;}
   const creatorAction = isCreatorAuthenticated() && targetEmail && targetEmail !== currentUserEmail;
   try {
     const response = await accountFetch("/api/state", {
@@ -17299,6 +17346,7 @@ function closeLoginModal() {
 
 async function logoutCurrentUser(options = {}) {
   passkeyUI.reset();
+  requestUI.reset();
   rosterComparisonCache.clear();
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
@@ -17614,6 +17662,7 @@ async function loginWithEmail(email, password, options = {}) {
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
     if(!options.passkey)passkeyUI.afterLogin();
+    requestUI.afterLogin();
     if (creatorStartupContainmentActive()) {
       finishContainedCreatorStartup({ transition, cachedSnapshot: cachedBeforeAuthentication }, loginStartedAt);
       return;

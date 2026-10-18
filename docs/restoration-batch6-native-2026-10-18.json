@@ -1,0 +1,262 @@
+{
+  "syntheticOnly": true,
+  "productionStaffChanged": false,
+  "scope": "Disposable D1 + complete requests route/middleware/daily admission; fake private rate admission; no publication fetch/provider/mail. Full publication/device acceptance is not established by this probe.",
+  "rowCosts": {
+    "500": {
+      "create": {
+        "samples": 1,
+        "maxReads": 14,
+        "maxWrites": 12,
+        "maxStatements": 15
+      },
+      "summary": {
+        "samples": 5,
+        "maxReads": 3,
+        "maxWrites": 0,
+        "maxStatements": 2
+      },
+      "list": {
+        "samples": 5,
+        "maxReads": 5,
+        "maxWrites": 0,
+        "maxStatements": 2
+      },
+      "detail": {
+        "samples": 15,
+        "maxReads": 47,
+        "maxWrites": 0,
+        "maxStatements": 6
+      },
+      "transfer-preview": {
+        "samples": 5,
+        "maxReads": 20,
+        "maxWrites": 0,
+        "maxStatements": 11
+      },
+      "transfer-commit": {
+        "samples": 5,
+        "maxReads": 87,
+        "maxWrites": 68,
+        "maxStatements": 45
+      },
+      "reverse-preview": {
+        "samples": 5,
+        "maxReads": 22,
+        "maxWrites": 0,
+        "maxStatements": 13
+      },
+      "reverse-commit": {
+        "samples": 5,
+        "maxReads": 95,
+        "maxWrites": 70,
+        "maxStatements": 51
+      },
+      "reply": {
+        "samples": 5,
+        "maxReads": 22,
+        "maxWrites": 27,
+        "maxStatements": 19
+      },
+      "read": {
+        "samples": 5,
+        "maxReads": 11,
+        "maxWrites": 6,
+        "maxStatements": 6
+      }
+    },
+    "expanded": {
+      "create": {
+        "samples": 1,
+        "maxReads": 14,
+        "maxWrites": 12,
+        "maxStatements": 15
+      },
+      "summary": {
+        "samples": 5,
+        "maxReads": 3,
+        "maxWrites": 0,
+        "maxStatements": 2
+      },
+      "list": {
+        "samples": 5,
+        "maxReads": 5,
+        "maxWrites": 0,
+        "maxStatements": 2
+      },
+      "detail": {
+        "samples": 15,
+        "maxReads": 47,
+        "maxWrites": 0,
+        "maxStatements": 6
+      },
+      "transfer-preview": {
+        "samples": 5,
+        "maxReads": 42,
+        "maxWrites": 0,
+        "maxStatements": 11
+      },
+      "transfer-commit": {
+        "samples": 5,
+        "maxReads": 172,
+        "maxWrites": 83,
+        "maxStatements": 42
+      },
+      "reverse-preview": {
+        "samples": 5,
+        "maxReads": 34,
+        "maxWrites": 0,
+        "maxStatements": 13
+      },
+      "reverse-commit": {
+        "samples": 5,
+        "maxReads": 165,
+        "maxWrites": 99,
+        "maxStatements": 47
+      },
+      "reply": {
+        "samples": 5,
+        "maxReads": 22,
+        "maxWrites": 27,
+        "maxStatements": 19
+      },
+      "read": {
+        "samples": 5,
+        "maxReads": 11,
+        "maxWrites": 6,
+        "maxStatements": 6
+      }
+    },
+    "creation": {
+      "create-support": {
+        "samples": 5,
+        "maxReads": 15,
+        "maxWrites": 36,
+        "maxStatements": 15
+      },
+      "create-identity": {
+        "samples": 5,
+        "maxReads": 15,
+        "maxWrites": 36,
+        "maxStatements": 15
+      }
+    }
+  },
+  "cpuCreation": {
+    "at": "2026-10-18T06:02:31.152Z",
+    "from": "2026-10-18T06:02:05Z",
+    "until": "2026-10-18T06:02:11.000Z",
+    "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+    "credential": "existing-read-only-analytics",
+    "syntheticOnly": true,
+    "stages": [
+      {
+        "stage": "create-identity",
+        "requests": 5,
+        "medianCpuMs": 5,
+        "p95CpuMs": 6,
+        "maxCpuMs": 6
+      },
+      {
+        "stage": "create-support",
+        "requests": 5,
+        "medianCpuMs": 4,
+        "p95CpuMs": 5,
+        "maxCpuMs": 5
+      },
+      {
+        "stage": "seed",
+        "requests": 1,
+        "medianCpuMs": 7,
+        "p95CpuMs": 7,
+        "maxCpuMs": 7
+      }
+    ]
+  },
+  "cpuFourSite": {
+    "at": "2026-10-18T06:02:28.984Z",
+    "from": "2026-10-18T06:01:38Z",
+    "until": "2026-10-18T06:01:56.000Z",
+    "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+    "credential": "existing-read-only-analytics",
+    "syntheticOnly": true,
+    "stages": [
+      {
+        "stage": "read",
+        "requests": 5,
+        "medianCpuMs": 4,
+        "p95CpuMs": 5,
+        "maxCpuMs": 5
+      },
+      {
+        "stage": "summary",
+        "requests": 5,
+        "medianCpuMs": 2,
+        "p95CpuMs": 7,
+        "maxCpuMs": 7
+      },
+      {
+        "stage": "other",
+        "requests": 1,
+        "medianCpuMs": 2,
+        "p95CpuMs": 2,
+        "maxCpuMs": 2
+      },
+      {
+        "stage": "create",
+        "requests": 1,
+        "medianCpuMs": 12,
+        "p95CpuMs": 12,
+        "maxCpuMs": 12
+      },
+      {
+        "stage": "transfer-commit",
+        "requests": 4,
+        "medianCpuMs": 10,
+        "p95CpuMs": 14,
+        "maxCpuMs": 14
+      },
+      {
+        "stage": "reverse-commit",
+        "requests": 14,
+        "medianCpuMs": 12,
+        "p95CpuMs": 12,
+        "maxCpuMs": 12
+      },
+      {
+        "stage": "reply",
+        "requests": 5,
+        "medianCpuMs": 8,
+        "p95CpuMs": 8,
+        "maxCpuMs": 8
+      },
+      {
+        "stage": "reverse-preview",
+        "requests": 5,
+        "medianCpuMs": 6,
+        "p95CpuMs": 7,
+        "maxCpuMs": 7
+      },
+      {
+        "stage": "list",
+        "requests": 4,
+        "medianCpuMs": 2,
+        "p95CpuMs": 3,
+        "maxCpuMs": 3
+      },
+      {
+        "stage": "transfer-preview",
+        "requests": 4,
+        "medianCpuMs": 5,
+        "p95CpuMs": 7,
+        "maxCpuMs": 7
+      }
+    ]
+  },
+  "limitations": [
+    "CPU aggregates varied by run; four-site and duplicate-identity writes remain above the 10 ms target in some observations. Transfers stay disabled.",
+    "The early 500-case duplicate lookup exceeded its reservation and safely stopped only the disposable grant. An explicit open-identity index and unfinished-receipt partial index fixed the row scan; repeated bounded test passed.",
+    "Telemetry counts are returned event aggregates; row-cost sample counts come from completed HTTP test calls.",
+    "Automatic creation of private decision channels for displaced holders and generic case-bound token refinements were added afterward and tested locally; complete final ownership-boundary CPU/publication tests remain gated."
+  ]
+}

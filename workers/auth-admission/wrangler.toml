@@ -17,3 +17,10 @@ namespace_id = "2026101801"
 [ratelimits.simple]
 limit = 60
 period = 60
+
+[[ratelimits]]
+name = "SUPPORT_RATE"
+namespace_id = "2026101802"
+[ratelimits.simple]
+limit = 10
+period = 60

@@ -1,0 +1,36 @@
+# Batch 6 requests — owner preview checkpoint
+
+18 October 2026, Melbourne. Security/password migration/passkeys remain as previously deployed. This checkpoint implements the remaining private request workflow, but does **not** declare Batch 6 complete.
+
+## Implemented and tested
+
+- Account **Messages and requests** and Admin → Users → **Requests**, with mutually exclusive admin accordions and one-column list/detail/review. Only the owner's admin preview is enabled in this release; ordinary staff do not gain the new panel yet.
+- Preview before sending; private channel per participant; explicit reply audience; open/resolved and unread/waiting filters; 20-item cursor pages; private drafts/caches in account-bound memory, cleared on logout/account change. Escaped plain text, no attachments, email or group disclosure.
+- Missing-name requests can receive explicitly reviewed canonical context. Known occupied-name requests carry a server-verified site/alias. Relevant roster identity, terms and historical grades are shown through the existing bounded evidence readers.
+- Separate private question to an existing linked holder; private decision notices to displaced holders even when no prior question was needed; reply, resolve, reopen, collapsed history; explicit conversion of identified earlier identity reports. Conversion preserves provenance and never treats the old hard-coded MMC label as verified site/ownership evidence. Parser reports remain separate. The old reporting path is retained for staff while the new feature is gated.
+- Reviewed ownership assignment/reassignment and reversal are implemented behind an off flag. Canonical links and scoped legacy claims, exact guards, identity history/job, case outcome, decision messages and unread state share one D1 transaction. Generic corrections are bound to case ID/version as well as identity preview; generic account-link edits cannot bypass reassignment from this workspace.
+- Old/new account cache invalidation is in the ownership transaction; existing scoped identity publication is dispatched afterward. Private events, settings, passwords and feed tokens are not merged. Account deletion clears private channels/drafts/free-text case notes while retaining minimal operation references.
+- Separate private support admission bucket, 10 writes/account/minute; password and passkey buckets unchanged. Existing account-wide daily admission, protected roster headroom and caps remain in force. No continuous polling; an existing foreground session check carries a compact indexed unread summary. Ordinary roster/contact reads gain no preflight.
+
+## Verification and cost
+
+`test:support-requests`, `test:support-ui`, account-browser/session/authentication, identity operations, maintenance-budget, admin-user and cold-route tests pass. Browser integration exercises real SQLite API logic in an isolated 390-pixel fixture with all external traffic blocked. Covers review-before-write, private holder conversations, missing-name attachment, isolated editor, transfer, draft preservation, mobile width and logout privacy. Local tests also cover replay, rollback, concurrent session/claim changes, cross-case preview rejection, deletion and indexed 500-account/case pagination.
+
+Native evidence: `restoration-batch6-native-2026-10-18.json`. Complete middleware and budget accounting included, with synthetic D1/accounts only; no provider/mail/production roster binding. At 500 accounts: summary 3 row reads, list 5, recent detail at most 47, all zero writes. Genuine new support/identity requests measured max 5/6 ms CPU. Four-site/multiple-holder and duplicate identity-request writes still produced samples above the 10 ms target (up to 14/12 ms in the final aggregate); transfers therefore stay off. These measurements do not establish full publication/feed acceptance. The later automatic affected-holder notice and case-bound generic-token refinements have local transaction/browser coverage; their complete boundary CPU test remains part of the gated review.
+
+The scale test caught an unsafe planner choice in the duplicate-open-request lookup and a growing unfinished-receipt check. An explicit partial index on open canonical requests and a partial index on unfinished maintenance receipts made both bounded. The disposable grant safely stopped on the early scan; repeated corrected scale tests passed. No production safeguard was relaxed or cleared.
+
+One broader quota test (`test:d1-quota`) has an existing stale source-text assertion expecting `rosterWritesExplicitlyPaused` in advanced repository repair; HEAD already uses `advancedRosterMaintenanceEnabled`. It fails unchanged on that baseline expectation. Its preceding disabled-automation checks passed. This batch does not change that repair path.
+
+## Release gates and remaining work
+
+Rollout JSON: `requestsEnabled:true`, `requestsAdminOnly:true`, `requestTransfersEnabled:false`. No credentials/extra Pages variable added. Migration 0051 is additive; no roster/history backfill or existing claim changes. Read-only production budget review identified today's two disposable databases missing from the verified inventory. Their exact IDs are now included so actual usage is counted; caps and forecasts are unchanged. Disposable request Worker/database removed after testing.
+
+Before general activation:
+
+1. Owner checks the interface on desktop and iPhone: Requests → Contact admin → review/send a harmless own-account request → reply → resolve/reopen; verify the accordion, draft and mobile behavior. Do not invite staff or convert their reports merely for testing.
+2. Focused High review of cross-user privacy, atomic ownership/reversal/legacy claims, current authorization, case-bound previews and former-owner cached/feed access. Review the recent-auth path and scoped publication/retry behavior. The current Medium implementation is not a substitute for that planned focused review.
+3. Finish CPU headroom for rare duplicate/large ownership commits; measure supported boundaries and cold/warm complete paths. Consider one narrow prepared transaction stage rather than rerunning broad audits. Keep the off flag until this passes; do not remove guards/accounting to reach the target.
+4. Synthetic connected publication/feed acceptance for changed ownership and reversal, then controlled general messaging/ownership rollout and ordinary production observation. Verify the requests gate is visible only to intended accounts. Preserve the current password/passkey rollout.
+
+Rollback: disable the three request rollout flags (or restore the previous Pages deployment). Keep additive tables and already accepted messages; do not drop private histories. The small rate-bucket addition is independent of existing login/passkey admission.

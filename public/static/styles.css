@@ -5379,3 +5379,15 @@ body[data-skin="console"] .panel {
 .passkey-list { padding-left:0; list-style:none; margin:0; }
 .passkey-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:8px 0; }
 [data-passkey-settings][hidden] { display:none; }
+
+/* Requests stay in one column, including narrow phone screens. */
+.request-card { margin-top: 1rem; }
+.request-workspace { display: block; min-width: 0; }
+.request-workspace form, .request-workspace .issues-list, .request-messages { display: grid; gap: 1rem; min-width: 0; }
+.request-workspace textarea { width: 100%; min-height: 7rem; resize: vertical; font: inherit; padding: .75rem; border: 1px solid var(--border, #d6dce6); border-radius: .75rem; box-sizing: border-box; }
+.request-workspace .review-card { min-width: 0; overflow-wrap: anywhere; }
+.request-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.request-messages small { display: block; color: var(--muted, #667085); }
+.request-filters { display: flex; flex-wrap: wrap; gap: 1rem; margin-block: 1rem; }
+.request-workspace .modal-actions { flex-wrap: wrap; }
+.request-workspace [data-request-evidence] { margin-block: 1.5rem; }

@@ -104,7 +104,7 @@ export async function previewIdentityOperation(db,input) {
  }
  const accountEmails=bounded([...new Set([...after.accounts.map(a=>a.email),...before.claimOwners.map(a=>a.email)])].sort(),MAX_ACCOUNTS);
  const revision=(await db.prepare('SELECT revision FROM roster_identity_revision WHERE id=1').first()).revision;
- const value={kind,target,before,after,revision,accountEmails,requiresAccountConfirmation:accountEmails.length>1,reason:String(input.reason||'').trim()};
+ const value={kind,target,before,after,revision,accountEmails,requiresAccountConfirmation:accountEmails.length>1,reason:String(input.reason||'').trim(),...(input.requestContext?{requestContext:input.requestContext}:{})};
  value.previewToken=await token(value);
  return value;
 }
@@ -124,7 +124,7 @@ function changes(db,before,after) {
 function affected(before,after) {
  return {personIds:[...new Set([...before.people,...after.people].map(p=>p.person_id))],accountEmails:[...new Set([...before.accounts,...after.accounts,...before.claimOwners,...after.claimOwners].map(a=>a.email))],aliases:[...new Map([...before.aliases,...after.aliases].map(a=>[marker('aliases',a),{sourceType:a.source_type,key:a.doctor_key}])).values()]};
 }
-export async function commitIdentityOperation(db,input) {
+export async function prepareIdentityCommit(db,input) {
  const preview=await previewIdentityOperation(db,input);
  if(input.previewToken!==preview.previewToken) throw error('The preview is stale. Review the identity changes again.');
  if(!preview.reason || preview.reason.length>1000) throw error('Enter a reason for this change.','IDENTITY_INPUT');
@@ -154,16 +154,21 @@ export async function commitIdentityOperation(db,input) {
  statements.push(db.prepare('INSERT INTO roster_identity_jobs(operation_id,affected_json,created_at) VALUES(?,?,?)').bind(id,JSON.stringify(affectedPeople),now));
  for(const personId of affectedPeople.personIds) statements.push(db.prepare('INSERT INTO roster_identity_operation_people(person_id,operation_id,created_at) VALUES(?,?,?)').bind(personId,id,now));
  if(statements.length>400) throw error('Operation exceeds the transaction budget.','IDENTITY_SCOPE');
- try { await db.batch(statements); } catch(e) { if(/malformed JSON/i.test(e.message)) throw error('Identity links changed; reload the preview.'); throw e; }
- return {operationId:id,affected:affectedPeople,status:'committed'};
+ return {statements,result:{operationId:id,affected:affectedPeople,status:'committed'}};
+}
+export async function commitIdentityOperation(db,input) {
+ const prepared=await prepareIdentityCommit(db,input);
+ try { await db.batch(prepared.statements); } catch(e) { if(/malformed JSON/i.test(e.message)) throw error('Identity links changed; reload the preview.'); throw e; }
+ return prepared.result;
 }
 
 function sameRows(left,right,type) {
  const order=list=>list.map(row=>{ const comparable={...row}; if(type==='people') { delete comparable.version; delete comparable.updated_at; } return [marker(type,row),canonical(comparable)]; }).sort((a,b)=>a[0].localeCompare(b[0]));
  return JSON.stringify(order(left))===JSON.stringify(order(right));
 }
-export async function previewIdentityReversal(db,operationId) {
+export async function previewIdentityReversal(db,operationId,requestContext=null) {
  const op=await db.prepare('SELECT * FROM roster_identity_operations WHERE operation_id=?').bind(operationId).first();
+ if(op?.kind==='account-transfer') throw error('Review this ownership change from its request.','IDENTITY_REQUEST_TRANSFER');
  if(!op || op.status!=='committed' || op.kind==='reverse') throw error('This operation cannot be reversed.');
  const expected=JSON.parse(op.after_json), original=JSON.parse(op.before_json);
  const current=await scope(db,expected.people.map(p=>p.person_id));
@@ -177,11 +182,12 @@ export async function previewIdentityReversal(db,operationId) {
  const revision=(await db.prepare('SELECT revision FROM roster_identity_revision WHERE id=1').first()).revision;
  const accountEmails=bounded([...new Set([...current.accounts,...current.claimOwners].map(a=>a.email))].sort(),MAX_ACCOUNTS);
  const preview={operationId,revision,before:current,after:restored,affected:JSON.parse(op.affected_json),accountEmails,requiresAccountConfirmation:accountEmails.length>1};
+ if(requestContext)preview.requestContext=requestContext;
  preview.previewToken=await token(preview);
  return preview;
 }
-export async function reverseIdentityOperation(db,input) {
- const preview=await previewIdentityReversal(db,input.operationId);
+export async function prepareIdentityReversal(db,input) {
+ const preview=await previewIdentityReversal(db,input.operationId,input.requestContext);
  if(input.previewToken!==preview.previewToken) throw error('The reversal preview is stale.');
  if(preview.requiresAccountConfirmation && JSON.stringify([...(input.confirmAccountEmails||[])].sort())!==JSON.stringify(preview.accountEmails)) throw error('Explicitly confirm the named accounts before reversal.','IDENTITY_ACCOUNT_CONFIRMATION');
  const reason=String(input.reason||'').trim(); if(!reason || reason.length>1000) throw error('Enter a reversal reason.','IDENTITY_INPUT');
@@ -209,8 +215,12 @@ export async function reverseIdentityOperation(db,input) {
  statements.push(db.prepare('INSERT INTO roster_identity_jobs(operation_id,affected_json,created_at) VALUES(?,?,?)').bind(id,JSON.stringify(preview.affected),now));
  for(const personId of preview.affected.personIds) statements.push(db.prepare('INSERT INTO roster_identity_operation_people(person_id,operation_id,created_at) VALUES(?,?,?)').bind(personId,id,now));
  if(statements.length>400) throw error('Reversal exceeds the transaction budget.','IDENTITY_SCOPE');
- try { await db.batch(statements); } catch(e) { if(/malformed JSON/i.test(e.message)) throw error('Identity changed; reload the reversal preview.'); throw e; }
- return {operationId:id,status:'committed',affected:preview.affected};
+ return {statements,result:{operationId:id,status:'committed',affected:preview.affected}};
+}
+export async function reverseIdentityOperation(db,input) {
+ const prepared=await prepareIdentityReversal(db,input);
+ try { await db.batch(prepared.statements); } catch(e) { if(/malformed JSON/i.test(e.message)) throw error('Identity changed; reload the reversal preview.'); throw e; }
+ return prepared.result;
 }
 
 export async function queryIdentityPeople(db,{after='',limit=25,search='',searchType='name',sourceType=''}={}) {
