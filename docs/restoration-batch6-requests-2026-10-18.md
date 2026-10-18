@@ -72,3 +72,13 @@ Remaining before Batch 6 is complete:
 1. Owner iPhone acceptance of Requests → review/send/reply/resolve/reopen; no real staff reassignment is needed merely to test.
 2. After acceptance, disable `requestsAdminOnly` for the controlled general messaging release, verify the ordinary Account panel and private scope, then observe normal traffic. This is a small rollout/configuration step, suitable for Medium.
 3. Keep the existing daily limits and gates in place; a genuine lack of protected headroom must still defer new writes. All actual test usage remains counted. The standalone CLI projection does not apply verified maintenance classifications and is not the runtime grant decision; its independent STOP must not be silently relabelled GO.
+
+## Staff release after iPhone acceptance
+
+The owner reported “Tested seems to work”, satisfying the iPhone acceptance gate. General staff activation now sets `requestsAdminOnly:false`; Requests and reviewed owner decisions remain enabled. Staff use Account → Messages and requests. Ownership previews/commits remain server-enforced owner-only, with recent authentication and transaction guards unchanged.
+
+Focused API/connected calendar tests and the isolated mobile browser suite passed again. Explicit staff attempts to preview or commit an owner decision return 403; private conversation isolation remains covered. No real staff account was impersonated or messaged for release testing.
+
+Pre-release settled analytics through 11:44 UTC on 18 October: account 351,869 reads / 48,569 writes, including disposable test costs; production 296,149 reads / 8,431 writes. The runtime grant has no stop reason and remains valid; read-only verification returned 3,633,639 / 48,782 maximum reads/writes with 151,475 / 19,214 allocated. The independent CLI forecast still reports STOP because it does not classify verified one-off maintenance. No daily cap, reserve, outstanding receipt or actual usage was relaxed.
+
+Batch 6 implementation and acceptance gates are complete for this release. Normal staff use remains the observation stage; genuine daily safeguard deferrals stay active. General unattended background retries remain in the later resilience batch.

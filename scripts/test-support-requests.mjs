@@ -38,6 +38,8 @@ assert.equal(JSON.stringify(ok(await call('holder',{action:'detail',caseId}))).i
 detail=ok(await call('admin',{action:'detail',caseId}));
 sqlite.prepare("INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES(?,'mmc','SYNTHETIC DOCTOR','Synthetic Doctor')").run(fixtureEmails.stranger);
 const transfer={action:'previewResolution',caseId,version:detail.case.version,kind:'transfer'},preview=ok(await call('admin',transfer)).preview;
+assert.equal((await call('user',transfer)).r.status,403,'general messaging access never grants ownership review authority');
+assert.equal((await call('user',mutation({action:'commitResolution',caseId,version:detail.case.version,kind:'transfer',previewToken:preview.previewToken,reason:'Staff cannot decide ownership'}))).r.status,403);
 assert.match(preview.previewToken,/^prepared:/);
 const previewId=preview.previewToken.slice(9),expiry=sqlite.prepare('SELECT expires_at FROM support_ownership_previews WHERE preview_id=?').get(previewId).expires_at;
 sqlite.prepare('UPDATE support_ownership_previews SET expires_at=0 WHERE preview_id=?').run(previewId);
