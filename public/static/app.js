@@ -9,7 +9,7 @@ import { comparisonWorkingEvent, comparisonIntervalMatches } from './comparison-
 const rosterComparisonCache = createRosterComparisonCache();
 import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
-import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261018-requests';
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261018-requests3';
 let currentIdentityReviewEnabled = false;
 let currentAdvancedRosterRecoveryEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
@@ -359,7 +359,7 @@ const requestUI={
   if(!accountTransport.validated())return null;
   const actor=accountTransport.email(),options=await accountTransport.options();
   if(options.requests!==true||options.requestsAdminOnly===true&&actor!==OWNER_EMAIL)return null;
-  return requestControllerPromise||=(import('./request-ui.js?v=20261018-requests2').then(({installRequestUI})=>{
+  return requestControllerPromise||=(import('./request-ui.js?v=20261018-requests3').then(({installRequestUI})=>{
    requestController=installRequestUI({transport:accountTransport,email:()=>accountTransport.validated()?accountTransport.email():'',readResponse:readJsonResponse,escapeHtml,
     onBadge:count=>{requestUnread=count;syncRequestBadge();},
     reauthenticate:async()=>{const password=await showAppDialog({title:'Confirm identity decision',message:'Confirm your password before changing roster account access.',confirmLabel:'Confirm',requirePassword:true,email:actor});if(!password)throw new Error('Identity change was not applied.');await readJsonResponse(await accountTransport.reauthenticate(password),'Could not confirm your sign-in.');},

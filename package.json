@@ -79,7 +79,7 @@
     "test:doctor-calendar-artifacts": "node --no-warnings scripts/test-doctor-calendar-artifacts.mjs",
     "test:authentication-journey": "node --no-warnings scripts/test-authentication-journey.mjs",
     "test:passkeys": "node --no-warnings scripts/test-account-passkeys.mjs",
-    "test:support-requests": "node --no-warnings scripts/test-support-requests.mjs",
+    "test:support-requests": "node --no-warnings scripts/test-support-requests.mjs && node --no-warnings scripts/test-request-calendar-ownership.mjs",
     "test:support-ui": "node --no-warnings scripts/test-support-ui-browser.mjs"
   },
   "devDependencies": {

@@ -42,7 +42,12 @@ export async function onRequestPost(context){
   if(action==='terms'){
    const evidence=await supportIdentityEvidence(db,session,input);return reply({ok:true,...(evidence.identity?await identityTermHistory(env.ROSTER_FILES,evidence.identity.aliases,melbourneDateKey(),input.after||0):{terms:[],next:null})});
   }
-  if(action==='previewResolution')return reply(await previewSupportResolution(db,session,input));
+  if(action==='previewResolution'){
+   if(!requestAdmin(session))throw new AuthenticationError('requests-forbidden','Admin access is required.',403);
+   await admit(env,session.email,'support');
+   if(env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'&&!await reserveRosterMaintenanceBudget(db,128,512))return reply({code:'requests-budget',error:'Identity review is temporarily paused by the daily database safeguard.'},503);
+   return reply(await previewSupportResolution(db,session,input));
+  }
   if(action==='legacy')return reply(await legacySupportReports(db,session,input));
   const mutations={attachIdentity:attachSupportIdentity,create:createSupportRequest,reply:replySupportRequest,status:setSupportStatus,inviteHolder:inviteSupportHolder,convertLegacy:convertLegacyReport,commitResolution:commitSupportResolution};
   if(!mutations[action])throw new AuthenticationError('requests-input','Unknown request action.',400);

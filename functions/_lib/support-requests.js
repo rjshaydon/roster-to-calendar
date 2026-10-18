@@ -163,13 +163,29 @@ function reviewedRecipient(c,input){
  const target=normalizeEmail(input.targetEmail||c.requester_email);
  if(!c.requester_email||target!==c.requester_email)throw fail('This request can assign access only to its requester. Review a separate request for another receiving account.');return target;
 }
+async function saveOwnershipPreview(db,session,c,preview){
+ const previewId=crypto.randomUUID(),now=Date.now(),payload=JSON.stringify(preview);
+ if(new TextEncoder().encode(payload).length>196608)throw fail('This ownership review exceeds its safe evidence bound.');
+ await db.batch([requestAuthority(db,session,true),
+  db.prepare('INSERT INTO support_ownership_previews(preview_id,actor_email,case_id,case_version,expires_at,payload_json) VALUES(?,?,?,?,?,?)').bind(previewId,session.email,c.case_id,c.version,now+300000,payload),
+  db.prepare('DELETE FROM support_ownership_previews WHERE preview_id IN (SELECT preview_id FROM support_ownership_previews WHERE actor_email=? AND expires_at<=? ORDER BY expires_at,preview_id LIMIT 10)').bind(session.email,now)]);
+ return {...preview,previewToken:'prepared:'+previewId};
+}
+async function loadOwnershipPreview(db,session,c,input,kind){
+ const previewId=id(String(input.previewToken||'').replace(/^prepared:/,''));
+ const saved=await db.prepare('SELECT payload_json FROM support_ownership_previews WHERE preview_id=? AND actor_email=? AND case_id=? AND case_version=? AND expires_at>?').bind(previewId,session.email,c.case_id,c.version,Date.now()).first();
+ if(!saved)throw fail('This review expired or changed. Review the ownership decision again.');
+ const preview=JSON.parse(saved.payload_json);
+ if(preview.kind!==kind||preview.caseId!==c.case_id||preview.caseVersion!==c.version||kind==='account-transfer'&&preview.targetEmail!==reviewedRecipient(c,input)||kind==='transfer-reversal'&&preview.operationId!==c.resolution_operation_id)throw fail();
+ return {preview,previewId};
+}
 export async function previewSupportResolution(db,session,input){
  admin(session);if(!['identity','transfer','reverse'].includes(input.kind))throw fail('Choose a supported identity decision.',400);const c=await loadCase(db,session,input.caseId);if(c.version!==input.version)throw fail();
- if(input.kind==='transfer')return {ok:true,preview:await previewOwnershipTransfer(db,{personId:c.person_id,targetEmail:reviewedRecipient(c,input),caseId:c.case_id,caseVersion:c.version})};
+ if(input.kind==='transfer')return {ok:true,preview:await saveOwnershipPreview(db,session,c,await previewOwnershipTransfer(db,{personId:c.person_id,targetEmail:reviewedRecipient(c,input),caseId:c.case_id,caseVersion:c.version}))};
  if(input.kind==='reverse'){
   const op=await db.prepare('SELECT kind FROM roster_identity_operations WHERE operation_id=?').bind(c.resolution_operation_id).first();
   if(!op)throw fail('There is no identity operation to reverse.');
-  return {ok:true,preview:op.kind==='account-transfer'?await previewOwnershipReversal(db,{operationId:c.resolution_operation_id,caseId:c.case_id,caseVersion:c.version}):await previewIdentityReversal(db,c.resolution_operation_id,{caseId:c.case_id,version:c.version})};
+  return {ok:true,preview:op.kind==='account-transfer'?await saveOwnershipPreview(db,session,c,await previewOwnershipReversal(db,{operationId:c.resolution_operation_id,caseId:c.case_id,caseVersion:c.version})):await previewIdentityReversal(db,c.resolution_operation_id,{caseId:c.case_id,version:c.version})};
  }
  await reviewedOperation(db,c,input);
  return {ok:true,preview:await previewIdentityOperation(db,{...input.operation,actor:session.email,requestContext:{caseId:c.case_id,version:c.version}})};
@@ -177,11 +193,17 @@ export async function previewSupportResolution(db,session,input){
 export async function commitSupportResolution(db,session,input){
  admin(session);if(!['identity','transfer','reverse'].includes(input.kind))throw fail('Choose a supported identity decision.',400);const c=await loadCase(db,session,input.caseId),prepared=await mutation(db,session,input);if(prepared.replay)return prepared.replay;
  if(c.version!==input.version||input.kind!=='reverse'&&c.status!=='open')throw fail();
- const reason=text(input.reason,1000),options={...input.operation,previewToken:input.previewToken,reason,actor:session.email,confirmAccountEmails:input.confirmAccountEmails,requestContext:{caseId:c.case_id,version:c.version}};let identity;
- if(input.kind==='transfer')identity=await prepareOwnershipTransfer(db,{...options,personId:c.person_id,targetEmail:reviewedRecipient(c,input),caseId:c.case_id,caseVersion:c.version});
+ const reason=text(input.reason,1000),options={...input.operation,previewToken:input.previewToken,reason,actor:session.email,confirmAccountEmails:input.confirmAccountEmails,requestContext:{caseId:c.case_id,version:c.version}};let identity,ownership;
+ if(input.kind==='transfer'){
+  ownership=await loadOwnershipPreview(db,session,c,input,'account-transfer');
+  identity=await prepareOwnershipTransfer(db,{...options,previewToken:ownership.preview.previewToken,personId:c.person_id,targetEmail:reviewedRecipient(c,input),caseId:c.case_id,caseVersion:c.version},ownership.preview);
+ }
  else if(input.kind==='reverse'){
   const op=await db.prepare('SELECT kind FROM roster_identity_operations WHERE operation_id=?').bind(c.resolution_operation_id).first();
-  identity=op?.kind==='account-transfer'?await prepareOwnershipReversal(db,{...options,operationId:c.resolution_operation_id,caseId:c.case_id,caseVersion:c.version}):await prepareIdentityReversal(db,{...options,operationId:c.resolution_operation_id});
+  if(op?.kind==='account-transfer'){
+   ownership=await loadOwnershipPreview(db,session,c,input,'transfer-reversal');
+   identity=await prepareOwnershipReversal(db,{...options,previewToken:ownership.preview.previewToken,operationId:c.resolution_operation_id,caseId:c.case_id,caseVersion:c.version},ownership.preview);
+  }else identity=await prepareIdentityReversal(db,{...options,operationId:c.resolution_operation_id});
  }else{await reviewedOperation(db,c,input);identity=await prepareIdentityCommit(db,options);}
  const channels=await all(db,'SELECT * FROM support_channels WHERE case_id=? ORDER BY channel_id LIMIT 9',[c.case_id]);if(channels.length>8)throw fail('Too many private channels.');
  const additions=[];
@@ -194,6 +216,7 @@ export async function commitSupportResolution(db,session,input){
   additions.push(db.prepare("INSERT INTO support_channels(channel_id,case_id,participant_email,waiting,updated_at) VALUES(?,?,?,'none',?)").bind(h.channel_id,c.case_id,recipient,new Date().toISOString()));
  }
  const statements=[...identity.statements,...additions,...decisionStatements(db,c,session,channels,{status:input.kind==='reverse'?'open':'resolved',body:reason,operationId:identity.result.operationId,kind:input.kind==='reverse'?'reversed':'identity-resolved'})];
+ if(ownership)statements.unshift(assertion(db,'EXISTS(SELECT 1 FROM support_ownership_previews WHERE preview_id=? AND actor_email=? AND case_id=? AND case_version=? AND expires_at>?)',[ownership.previewId,session.email,c.case_id,c.version,Date.now()]),db.prepare('DELETE FROM support_ownership_previews WHERE preview_id=?').bind(ownership.previewId));
  if(statements.length>440)throw fail('Narrow this identity change before applying it.');
  return commit(db,session,input,prepared,statements,{ok:true,caseId:c.case_id,...identity.result},true);
 }

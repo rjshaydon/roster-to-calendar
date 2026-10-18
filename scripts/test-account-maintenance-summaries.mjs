@@ -49,3 +49,22 @@ assert.deepEqual(proofSummary.outstanding,primary.outstanding,'native CLI proof 
 assert.deepEqual(proofSample.totals,{rowsRead:40000,rowsWritten:40000},'native CLI proof never changes measured usage');
 await assert.rejects(()=>accountMaintenanceSummaries(proofContext,{...proofSample,databases:[{databaseId:previewId,rowsRead:9189,rowsWritten:17199}]},primary,'2026-10-12','2026-10-11'),/not reconciled/);
 console.log('Verified native CLI test costs passed day/database/cutoff isolation, unchanged totals/reservations and per-database reconciliation.');
+const {verifiedSyntheticTestCosts}=await import('../functions/_lib/verified-synthetic-test-costs.js');
+const syntheticSample={complete:true,interval:{start:'2026-10-18T00:00:00.000Z',observedUntil:'2026-10-18T10:39:09.104Z',end:'2026-10-19T00:00:00.000Z'},totals:{rowsRead:308169,rowsWritten:27072},databases:[
+ {databaseId:'7b87d1be-2602-4a3e-8841-f6d525ad323d',rowsRead:25654,rowsWritten:18518},
+ {databaseId:'a19cebcf-1ccd-43d5-84cd-cd105333cbdb',rowsRead:4220,rowsWritten:355}
+]};
+const originalSynthetic=JSON.stringify(syntheticSample);
+assert.deepEqual(verifiedSyntheticTestCosts(syntheticSample,'2026-10-18'),{reads:29874,writes:18873});
+assert.deepEqual(verifiedSyntheticTestCosts(syntheticSample,'2026-10-19'),{reads:0,writes:0});
+assert.deepEqual(verifiedSyntheticTestCosts({...syntheticSample,interval:{...syntheticSample.interval,observedUntil:'2026-10-18T10:38:00.000Z'}},'2026-10-18'),{reads:0,writes:0});
+assert.throws(()=>verifiedSyntheticTestCosts({...syntheticSample,databases:syntheticSample.databases.slice(1)},'2026-10-18'),/not reconciled/);
+assert.throws(()=>verifiedSyntheticTestCosts({...syntheticSample,databases:syntheticSample.databases.map(d=>({...d,rowsWritten:d.rowsWritten-1}))},'2026-10-18'),/not reconciled/);
+const retiredSummary=await accountMaintenanceSummaries(context,syntheticSample,primary,'2026-10-18','2026-10-17');
+assert.deepEqual(retiredSummary.settled,{reads:29974,writes:21873});assert.deepEqual(retiredSummary.outstanding,primary.outstanding);
+assert.equal(JSON.stringify(syntheticSample),originalSynthetic,'classification never changes actual usage or analytics');
+const withTests=accountMaintenanceHeadroom(syntheticSample,primary.outstanding,'2026-10-18T10:54:00Z',retiredSummary.settled);
+const withoutTests=accountMaintenanceHeadroom(syntheticSample,primary.outstanding,'2026-10-18T10:54:00Z',primary.settled);
+assert(withTests.forecastWrites<withoutTests.forecastWrites);assert(withTests.writes<80000-syntheticSample.totals.rowsWritten,'actual synthetic writes still consume the cap');
+await assert.rejects(()=>accountMaintenanceSummaries(context,{...syntheticSample,totals:{rowsRead:1,rowsWritten:1}},primary,'2026-10-18','2026-10-17'),/not reconciled/);
+console.log('Retired synthetic costs passed exact database/day/cutoff bounds, fail-closed reconciliation, unchanged real totals/reservations and preserved caps.');

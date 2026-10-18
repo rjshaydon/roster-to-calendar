@@ -1,0 +1,36 @@
+{
+  "generatedAt": "2026-10-18T10:54:09.104Z",
+  "scope": "Completed and deleted synthetic-only tests. No production, provider or mail bindings. Only the fixed settled costs below leave the recurring forecast. Actual account totals, unknown reservations, protected roster headroom and daily ceilings are unchanged.",
+  "verification": "Both databases absent from Wrangler live inventory during focused review on 18 October; already deleted at the previous 06:16 UTC checkpoint. Test sources and native evidence are committed separately.",
+  "sourceReportSha256": "f87bb98cc3a371a559e9b8ea6f90b38ea3148b2560804204e2c09a62a2cd3021",
+  "interval": {
+    "start": "2026-10-18T00:00:00.000Z",
+    "observedUntil": "2026-10-18T10:39:09.104Z",
+    "end": "2026-10-19T00:00:00.000Z",
+    "date": "2026-10-18",
+    "settled": true
+  },
+  "accountActualTotals": {
+    "databaseId": "account",
+    "rowsRead": 308169,
+    "rowsWritten": 27072,
+    "readQueries": 13445,
+    "writeQueries": 6987
+  },
+  "syntheticDatabases": [
+    {
+      "databaseId": "7b87d1be-2602-4a3e-8841-f6d525ad323d",
+      "rowsRead": 25654,
+      "rowsWritten": 18518,
+      "readQueries": 4724,
+      "writeQueries": 3972
+    },
+    {
+      "databaseId": "a19cebcf-1ccd-43d5-84cd-cd105333cbdb",
+      "rowsRead": 4220,
+      "rowsWritten": 355,
+      "readQueries": 36,
+      "writeQueries": 9
+    }
+  ]
+}

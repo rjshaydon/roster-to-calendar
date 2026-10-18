@@ -62,8 +62,8 @@ function invalidate(db,emails,operationId,now){
  return [guard(db,`NOT EXISTS(SELECT owner_id FROM snapshot_registry WHERE ${scope} GROUP BY owner_id HAVING count(*)>16)`,[json]),
  db.prepare(`UPDATE snapshot_registry SET status='stale',requested_revision=?,updated_at=? WHERE ${scope}`).bind('identity:'+operationId,now,json)];
 }
-export async function prepareOwnershipTransfer(db,input){
- const preview=await previewOwnershipTransfer(db,input);
+export async function prepareOwnershipTransfer(db,input,reviewedPreview=null){
+ const preview=reviewedPreview||await previewOwnershipTransfer(db,input);
  if(preview.previewToken!==input.previewToken)throw conflict();
  const reason=String(input.reason||'').trim();if(!reason||reason.length>1000)throw conflict('Explain the reviewed ownership decision.');
  const {before,targetEmail,personId}=preview,now=new Date().toISOString(),id=crypto.randomUUID();
@@ -98,12 +98,12 @@ export async function previewOwnershipReversal(db,{operationId,caseId,caseVersio
  const preview={kind:'transfer-reversal',operationId,caseId,caseVersion,before:current,after:original,affected:JSON.parse(op.affected_json),targetEmail};
  return {...preview,previewToken:await hash(preview)};
 }
-export async function prepareOwnershipReversal(db,input){
- const preview=await previewOwnershipReversal(db,input);if(preview.previewToken!==input.previewToken)throw conflict();
+export async function prepareOwnershipReversal(db,input,reviewedPreview=null){
+ const preview=reviewedPreview||await previewOwnershipReversal(db,input);if(preview.previewToken!==input.previewToken)throw conflict();
  const reason=String(input.reason||'').trim();if(!reason||reason.length>1000)throw conflict('Explain the reversal.');
  const id=crypto.randomUUID(),now=new Date().toISOString(),statements=ownershipGuards(db,preview.before,preview.targetEmail),original=preview.after;
  statements.push(guard(db,"NOT EXISTS(SELECT 1 FROM json_each(?) x LEFT JOIN account_profiles p ON p.email=json_extract(x.value,'$.email') WHERE p.email IS NULL)",[JSON.stringify(original.profiles)]),
-  guard(db,"NOT EXISTS(SELECT 1 FROM json_each(?) x JOIN account_people p ON p.email=json_extract(x.value,'$.email') WHERE p.person_id<>?)",[JSON.stringify(original.accounts),original.people[0].person_id]),
+  guard(db,"NOT EXISTS(SELECT 1 FROM json_each(?) x JOIN account_people p ON p.email=json_extract(x.value,'$.email') WHERE p.person_id<>?)",[JSON.stringify(original.profiles),original.people[0].person_id]),
   db.prepare(`DELETE FROM account_claims WHERE ${aliasSelection()}`).bind(JSON.stringify(original.aliases)),
   db.prepare('DELETE FROM account_people WHERE person_id=?').bind(original.people[0].person_id),
   db.prepare(`INSERT INTO account_people(email,person_id,created_at,updated_at)

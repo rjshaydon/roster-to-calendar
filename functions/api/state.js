@@ -4668,7 +4668,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
   };
 }
 
-async function loadFastAccountSnapshotPayload(context, params = {}) {
+export async function loadFastAccountSnapshotPayload(context, params = {}) {
   if (String(context.env.BOUNDED_MANUAL_ROSTER_ENABLED || "").toLowerCase() !== "true") return loadLegacyFastAccountSnapshotPayload(context, params);
   const session = params.prepared?.state?.session || params.targetRecord?.state?.session || {};
   const claims = sanitizeClaims(params.prepared?.claims || params.targetRecord?.claims);
@@ -4686,6 +4686,10 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
   const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
   const option = cached.selectedDoctor || (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
   let aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
+  // A cached selection is a display preference, not authority for an ordinary
+  // account. In particular, a reassigned account must not recover old access
+  // from a ready legacy cache when its current links have been removed.
+  if(context.env.IDENTITY_REVIEW_ENABLED==='true'&&!['creator','owner'].includes(params.prepared?.role||params.targetRecord.role))aliases=claims.map(claim=>({sourceType:claim.sourceType,key:claim.key}));
   if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await calendarIdentityAliases(context.env.ROSTER_DB,{role:params.prepared?.role||params.targetRecord.role,email:params.targetRecord.email,doctorKey,aliases});
   const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
   if (!sourceTypes.length && context.env.IDENTITY_REVIEW_ENABLED!=='true') return cached;

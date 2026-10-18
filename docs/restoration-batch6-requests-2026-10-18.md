@@ -34,3 +34,17 @@ Before general activation:
 4. Synthetic connected publication/feed acceptance for changed ownership and reversal, then controlled general messaging/ownership rollout and ordinary production observation. Verify the requests gate is visible only to intended accounts. Preserve the current password/passkey rollout.
 
 Rollback: disable the three request rollout flags (or restore the previous Pages deployment). Keep additive tables and already accepted messages; do not drop private histories. The small rate-bucket addition is independent of existing login/passkey admission.
+
+## Focused High review follow-up
+
+The send deferral was the protected optional-write headroom, rather than an exhausted D1 limit or an unresolved receipt. Both retired synthetic databases are now classified by exact verified ID/day/settled-cutoff costs for the recurring forecast only. Actual account usage, unknown reservations, daily ceilings and protected roster headroom are unchanged. Aggregate evidence is in `restoration-batch6-safeguard-review-2026-10-18.json`; no general exemption for previews or deleted databases exists.
+
+Review corrections:
+
+- Retain the reviewed identity form, its confirmations and original mutation ID when the response is uncertain. Block navigation to another action until retry acknowledges that exact saved result. Browser integration loses the response **after** a real SQLite commit for both request creation and an identity correction, then verifies exactly one durable result.
+- Reversal fences all former holders, including legacy-only claimants, against a later canonical link to another person. A concurrent-link regression test verifies rollback and preserved current ownership.
+- Ordinary calendar authority comes from current canonical links/claims, never a cached doctor selection. The real account calendar reader is tested against a ready old cache after transfer, including interrupted publication. Creator troubleshooting selection remains separate.
+- Connected synthetic acceptance covers four sites, subscription artifact and dynamic fallback, former-owner revocation, publication failure/retry, reversal and unchanged historical grades/private events. Also covers the 64-claim bounds with eight and sixteen aliases.
+- Migration 0052 adds a private, five-minute, actor/case/version-bound ownership preview. Commit reads it once instead of reconstructing the reviewed ownership snapshot. Existing exact SQL guards, current authorization, recent-auth, case/version checks and daily accounting still apply; consumption shares the atomic decision transaction and rolls back on failure. Durable mutation replay works after consumption. Expired previews reject; indexed cleanup removes at most ten expired previews on another explicit review. Preview preparation now has its own daily reservation and existing support admission.
+
+All local request/browser, identity, subscription, account/session, maintenance-budget and restoration mutation checks pass. Owner-only messaging and disabled transfers remain the deployment gates pending focused native CPU measurements and a successful live owner send/reply test. The new disposable CPU database is inventoried **before** test writes so it cannot cause unknown-database maintenance pauses.

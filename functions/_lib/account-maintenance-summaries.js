@@ -1,6 +1,7 @@
 import {verifiedOneOffMaintenanceCosts} from './verified-one-off-maintenance.js';
 import {maintenanceReceiptSummary} from './maintenance-receipt-summary.js';
 import inventory from './d1-account-inventory.js';
+import {verifiedSyntheticTestCosts} from './verified-synthetic-test-costs.js';
 // Receipt costs are lower bounds after removing the conservative settlement
 // allowance. Only confirmed costs settled before the same analytics cutoff
 // are excluded from recurring forecasts. Actual account usage is never reduced.
@@ -17,6 +18,11 @@ export async function accountMaintenanceSummaries(context,analytics,primary,day,
  for(const [key,field]of [['reads','rowsRead'],['writes','rowsWritten']]){
   if(summary.settled[key]+verified[key]>Number(measured[field]))throw Error('Preview maintenance costs have not reconciled with account analytics.');
   result.settled[key]+=summary.settled[key]+verified[key];result.outstanding[key]+=summary.outstanding[key];
+ }
+ const synthetic=verifiedSyntheticTestCosts(analytics,day);
+ for(const [key,field]of [['reads','rowsRead'],['writes','rowsWritten']]){
+  result.settled[key]+=synthetic[key];
+  if(result.settled[key]>Number(analytics.totals[field]))throw Error('Account maintenance costs have not reconciled with account analytics.');
  }
  return result;
 }

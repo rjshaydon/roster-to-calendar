@@ -1,5 +1,5 @@
 import {groupIdentityTerms} from './identity-editor-model.js?v=20261006-terms2';
-import {mountIdentityReview} from './identity-review-ui.js?v=20261018-requests';
+import {mountIdentityReview} from './identity-review-ui.js?v=20261018-requests3';
 
 // Private, per-authenticated-account memory only. Never persist messages/drafts.
 
@@ -55,19 +55,20 @@ export function installRequestUI({transport,email,readResponse,escapeHtml:esc,id
   try{return await work;}finally{if(prepareWork===work)prepareWork=null;}
  }
  async function mutate(action,payload){await prepareSend();const fingerprint=JSON.stringify({action,payload});if(pending&&pending.fingerprint!==fingerprint)throw Error('Retry the pending action or reopen its request before starting a different change.');pending||={fingerprint,mutationId:crypto.randomUUID()};let result;try{result=await call(action,{...payload,mutationId:pending.mutationId});}catch(error){if(error.code==='requests-budget')preparedUntil=0;if(error.code&&error.code!=='requests-unavailable')pending=null;throw error;}pending=null;lists.clear();details.clear();return result;}
- async function sendPreview(){const p=preview;let result;try{result=await mutate(p.action,p.payload);}catch(error){if(error.code==='auth-reauthentication-required'&&reauthenticate){await reauthenticate();result=await mutate(p.action,p.payload);}else throw error;}preview=null;notice='Saved.';if(p.action==='create'){compose={};if(result.alreadyOpen){drafts.set(result.channelId,p.body);notice='An open request already exists. Your explanation is kept as an unsent reply below.';}}if(p.action==='reply')drafts.delete(p.payload.channelId);await openCase(result.caseId,p.payload.channelId||result.channelId||'',true);}
+ async function sendPreview(){const p=preview;let result;try{result=await mutate(p.action,p.payload);}catch(error){if(error.code==='auth-reauthentication-required'&&reauthenticate){await reauthenticate();result=await mutate(p.action,p.payload);}else throw error;}preview=null;notice='Saved.';if(p.action==='create'){compose={};if(result.alreadyOpen){drafts.set(result.channelId,p.body);notice='An open request already exists. Your explanation is kept as an unsent reply below.';}}if(p.action==='reply')drafts.delete(p.payload.channelId);view='list';render();await openCase(result.caseId,p.payload.channelId||result.channelId||'',true);}
  function beginPreview(label,body,action,payload,returnView){preview={label,body,action,payload,returnView};view='preview';render();void prepareSend().catch(error=>{notice=error.message;patchNotice();});}
- async function startDecision(kind=''){decision={kind,label:kind==='transfer'?'Review account reassignment':kind==='reverse'?'Review reversal':'Resolve request',audience:'Your decision explanation will be sent separately to every participant in this case.'};if(kind)decision.preview=(await call('previewResolution',{caseId:selected,version:detail.case.version,kind})).preview;view='decision';render();}
+ async function startDecision(kind=''){decision={kind,label:kind==='transfer'?'Review account reassignment':kind==='reverse'?'Review reversal':'Resolve request',audience:'Your decision explanation will be sent separately to every participant in this case.'};if(kind){await prepareSend();decision.preview=(await call('previewResolution',{caseId:selected,version:detail.case.version,kind})).preview;}view='decision';render();}
  async function showIdentity(){view='identity';render();const caseId=selected,version=detail.case.version;
   mountIdentityReview(root.querySelector('[data-request-identity]'),async(operation,input)=>{
-   if(operation==='preview')return call('previewResolution',{caseId,version,kind:'identity',operation:input});
+   if(operation==='preview'){await prepareSend();return call('previewResolution',{caseId,version,kind:'identity',operation:input});}
    if(operation==='commit'){if(!transfers)throw Error('Identity decisions await the final security review.');return mutate('commitResolution',{caseId,version,kind:'identity',operation:input,previewToken:input.previewToken,reason:input.reason,confirmAccountEmails:input.confirmAccountEmails});}
    if(['preview-reversal','reverse','retry-publication'].includes(operation))throw Error('Review that operation from its original request or the main identity history.');
    if(!['person','person-terms','list'].includes(operation))throw Error('Use the main identity directory for this action.');
    return identityRequest(operation,input);
-  },{isolated:true,allowAccountLink:false,allowSave:transfers,initialPersonId:detail.case.personId,onClose:()=>{void openCase(caseId,'',true);},onSaved:()=>{notice='Identity decision saved. Affected calendars will refresh.';void openCase(caseId,'',true);}});
+  },{isolated:true,allowAccountLink:false,allowSave:transfers,pendingMutation:()=>Boolean(pending),initialPersonId:detail.case.personId,onClose:()=>{void openCase(caseId,'',true).catch(error=>{notice=error.message;patchNotice();});},onSaved:()=>{notice='Identity decision saved. Affected calendars will refresh.';void openCase(caseId,'',true).catch(error=>{notice=error.message;patchNotice();});}});
  }
  async function action(name,target){
+  if(pending&&!['sendPreview','refresh'].includes(name))throw Error('That action may have been saved. Retry Send or Save to confirm its result before leaving this review.');
   saveDraft();notice='';
   if(name==='new'){compose={kind:'support',subject:'',body:''};view='compose';render();}
   if(name==='back'){if(pending)throw Error('That action may have been saved. Retry Send before leaving this review.');view='list';detail=null;preview=null;render();await loadList();}
