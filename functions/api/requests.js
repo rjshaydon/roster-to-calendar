@@ -5,8 +5,7 @@ import {authenticationSettings} from '../_lib/authentication-settings.js';
 import {AuthenticationError} from '../_lib/supabase-auth.js';
 import {boundedBody,admit} from '../_lib/authentication-request.js';
 import {accountSessionsEnabled,readAccountSession,requireSameOrigin,requireExpectedAccount,requireRecentAuthentication} from '../_lib/account-sessions.js';
-import {requestAdmin,requestSummary,createSupportRequest,listSupportRequests,readSupportRequest,markSupportRead,replySupportRequest,setSupportStatus,supportIdentityEvidence,previewSupportResolution,commitSupportResolution,inviteSupportHolder,legacySupportReports,convertLegacyReport,attachSupportIdentity} from '../_lib/support-requests.js';
-import {identityTermHistory} from '../_lib/identity-term-history.js';
+import {requestAdmin,requestSummary,inspectSupportCreation,supportMutationOutcome,createSupportRequest,listSupportRequests,readSupportRequest,markSupportRead,replySupportRequest,setSupportStatus,supportIdentityEvidence,previewSupportResolution,commitSupportResolution,inviteSupportHolder,legacySupportReports,convertLegacyReport,attachSupportIdentity} from '../_lib/support-requests.js';
 import {melbourneDateKey} from '../../public/static/roster-term-policy.js';
 
 function reply(body,status=200){return Response.json(body,{status,headers:{'Cache-Control':'no-store','Vary':'Cookie'}});}
@@ -35,11 +34,13 @@ export async function onRequestPost(context){
    return reply({ok:true,preparedUntil:Date.now()+30000});
   }
   if(action==='summary')return reply({ok:true,summary:await requestSummary(db,session.email),admin:requestAdmin(session),transfersEnabled:settings.requestTransfersEnabled===true});
+  if(action==='outcome')return reply(await supportMutationOutcome(db,session,input));
   if(action==='list')return reply(await listSupportRequests(db,session,input));
   if(action==='detail')return reply(await readSupportRequest(db,session,input));
-  if(action==='read')return reply({...await markSupportRead(db,session,input),summary:await requestSummary(db,session.email)});
+  if(action==='read')return reply({...await markSupportRead(db,session,input,{async admitWrite(){await admit(env,session.email,'support');return env.ROSTER_ACCOUNT_BUDGET_ENABLED!=='true'||await reserveRosterMaintenanceBudget(db,128,256);}}),summary:await requestSummary(db,session.email)});
   if(action==='evidence')return reply(await supportIdentityEvidence(db,session,input));
   if(action==='terms'){
+   const {identityTermHistory}=await import('../_lib/identity-term-history.js');
    const evidence=await supportIdentityEvidence(db,session,input);return reply({ok:true,...(evidence.identity?await identityTermHistory(env.ROSTER_FILES,evidence.identity.aliases,melbourneDateKey(),input.after||0):{terms:[],next:null})});
   }
   if(action==='previewResolution'){
@@ -57,8 +58,12 @@ export async function onRequestPost(context){
    requireRecentAuthentication(session);
   }
   await admit(env,session.email,'support');
+  const creation=action==='create'?await inspectSupportCreation(db,session,input):null;
+  // An existing open request is a lookup, not a new message. Keep the new
+  // explanation unsent in the browser; no write grant/receipt is necessary.
+  if(creation?.ok)return reply({...creation,summary:await requestSummary(db,session.email)});
   if(env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'&&!await reserveRosterMaintenanceBudget(db,action==='commitResolution'?2048:128,action==='commitResolution'?4096:256))return reply({code:'requests-budget',error:'Requests are temporarily paused by the daily database safeguard. Your calendar remains available.'},503);
-  const result=await mutations[action](db,session,input);
+  const result=action==='create'?await createSupportRequest(db,session,input,{review:creation}):await mutations[action](db,session,input);
   if(result.operationId&&context.waitUntil)context.waitUntil(requestIdentityPublication(context,result.operationId).then(r=>{if(!r.ok)console.warn('Request identity publication deferred');}).catch(()=>console.warn('Request identity publication deferred')));
   return reply({...result,summary:await requestSummary(db,session.email)});
  }catch(error){

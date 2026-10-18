@@ -1,10 +1,12 @@
 // Read-only aggregate telemetry for disposable tests. Never reads Wrangler's
 // broad OAuth token, invocation events, request headers or provider credentials.
 import fs from 'node:fs';import {execFileSync} from 'node:child_process';import crypto from 'node:crypto';
-const [worker,from,output,until]=process.argv.slice(2),start=Date.parse(from),end=until?Date.parse(until):Date.now();
+const [worker,from,output,until,stageFilter]=process.argv.slice(2),start=Date.parse(from),end=until?Date.parse(until):Date.now();
+if(stageFilter&&!['transfer-preview','reverse-preview','detail','list','reply','read','summary','create-support','create-identity','transfer-commit','reverse-commit'].includes(stageFilter))throw Error('Invalid aggregate stage filter.');
 if(!['roster-auth-live-acceptance-20261017','roster-session-native-validation','roster-passkey-native-20261018','roster-requests-native-20261018'].includes(worker)||!Number.isFinite(start)||!Number.isFinite(end)||end<start||end>Date.now()||start<Date.now()-86400000||!output?.startsWith('/'))throw Error('Provide a disposable Worker, recent ISO interval and absolute evidence path.');
 const token=execFileSync('/usr/bin/security',['find-generic-password','-s','roster-d1-account-analytics','-w'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();
 const body={queryId:crypto.randomUUID(),view:'calculations',calculationMode:'aggregate',ignoreSeries:true,dry:true,timeframe:{from:start,to:end},parameters:{filters:[{key:'$workers.scriptName',operation:'eq',type:'string',value:worker}],groupBys:[{type:'string',value:'$metadata.trigger'}],calculations:[{operator:'count',alias:'requests'},...['median','p95','max'].map(operator=>({key:'$workers.cpuTimeMs',keyType:'number',operator,alias:operator+'CpuMs'}))]}};
+if(stageFilter)body.parameters.filters.push({key:'$metadata.trigger',operation:'eq',type:'string',value:'POST /'+stageFilter});
 const response=await fetch('https://api.cloudflare.com/client/v4/accounts/653047f50279c40888ef9715aa7c4c5f/workers/observability/telemetry/query',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body)});
 const data=await response.json();if(!response.ok||data.success!==true)throw Error('Read-only aggregate telemetry unavailable.');
 const allowed=new Set(['seed','signup','login','upgradeLogin','context','change','oldPassword','returning','logout','cleanup','configuration','inspect','issue','state','forged','status','activity','registration','create','create-support','create-identity','detail','list','summary','reply','read','transfer-preview','transfer-commit','reverse-preview','reverse-commit']);

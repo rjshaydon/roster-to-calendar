@@ -65,7 +65,8 @@ assert.equal(JSON.stringify(sql.prepare('SELECT * FROM roster_events ORDER BY id
 for(const count of [8,16]){
  await boundSupportFixture(db,count);detail=await request('admin',{action:'detail',caseId:created.caseId});
  const p=await request('admin',{action:'previewResolution',caseId:created.caseId,version:detail.case.version,kind:'transfer'});
- assert.equal(p.preview.before.claimOwners.length,64);assert.equal(p.preview.before.aliases.length,count);
+ assert.equal(p.preview.before.claimOwners,undefined,'raw claim records stay in the private prepared snapshot');assert.equal(p.preview.before.aliases.length,count);
+ const stored=JSON.parse(sql.prepare('SELECT payload_json FROM support_ownership_previews WHERE preview_id=?').get(p.preview.previewToken.slice(9)).payload_json);assert.equal(stored.before.claimOwners.length,64);
  await mutate('admin',{action:'commitResolution',caseId:created.caseId,version:detail.case.version,kind:'transfer',previewToken:p.preview.previewToken,reason:'Synthetic full-bound transfer'});
  detail=await request('admin',{action:'detail',caseId:created.caseId});const undo=await request('admin',{action:'previewResolution',caseId:created.caseId,version:detail.case.version,kind:'reverse'});
  await mutate('admin',{action:'commitResolution',caseId:created.caseId,version:detail.case.version,kind:'reverse',previewToken:undo.preview.previewToken,reason:'Synthetic full-bound reversal'});

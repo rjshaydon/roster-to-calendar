@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite'
 import {seedSupportFixture,fixtureEmails} from './support-request-fixture.mjs';
 import {onRequestPost as route} from '../functions/api/requests.js';
 import {accountIdentityAliases} from '../functions/_lib/doctor-identity.js';
+import {markSupportRead} from '../functions/_lib/support-requests.js';
 const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');
 for(const n of(await readdir('migrations')).filter(x=>x.endsWith('.sql')).sort())sqlite.exec(await readFile('migrations/'+n,'utf8'));
 const statements=[];let beforeBatch,inject='';
@@ -21,6 +22,8 @@ assert.equal(ok(await call('user',createdInput)).caseId,caseId);assert.equal(sql
 assert.equal((await call('user',{...createdInput,body:'changed'})).r.status,409);
 assert.equal((await call('stranger',{action:'detail',caseId})).r.status,404);
 let detail=ok(await call('admin',{action:'detail',caseId}));assert.equal(detail.messages[0].body,'Private requester explanation');
+assert.equal((await markSupportRead(db,fixtures.admin,{caseId,channelId:detail.channel.channelId,sequence:1},{admitWrite:async()=>false})).readDeferred,true);
+assert.equal(ok(await call('admin',{action:'summary'})).summary.unread,1,'a read-budget deferral does not falsely acknowledge unread messages');
 await call('admin',{action:'read',caseId,channelId:detail.channel.channelId,sequence:1});assert.equal(ok(await call('admin',{action:'summary'})).summary.unread,0);
 const userReply=mutation({action:'reply',caseId,channelId:created.channelId,body:'A second explanation'});ok(await call('user',userReply));ok(await call('user',userReply));
 assert.equal(sqlite.prepare('SELECT count(*) n FROM support_messages').get().n,2);
@@ -49,6 +52,11 @@ assert.equal(JSON.stringify(sqlite.prepare('SELECT * FROM account_claims').all()
 assert.equal(sqlite.prepare('SELECT status FROM support_cases WHERE case_id=?').get(caseId).status,'open');
 const commitStart=statements.length,resolved=ok(await call('admin',resolution));assert.equal(sqlite.prepare('SELECT preview_id FROM support_ownership_previews WHERE preview_id=?').get(previewId),undefined,'successful transaction consumes the review');assert.equal(statements.slice(commitStart).some(s=>s.includes('SELECT * FROM roster_person_aliases WHERE person_id=')),false,'commit does not rebuild the reviewed snapshot');assert.equal(JSON.stringify(sqlite.prepare('SELECT email,password_hash,password_salt,subscription_token FROM account_profiles ORDER BY email').all()),privateBefore,'ownership leaves credentials and feed tokens intact');ok(await call('admin',resolution));
 assert.equal(sqlite.prepare('SELECT count(*) n FROM roster_identity_operations').get().n,1,'replay does not transfer twice');
+const outcomeStart=statements.length;
+assert.equal(ok(await call('admin',{action:'outcome',mutationId:resolution.mutationId})).result.operationId,resolved.operationId);
+assert.equal(statements.slice(outcomeStart).some(s=>/^\s*(INSERT|UPDATE|DELETE)/.test(s)),false,'acknowledgement recovery is read-only');
+assert.equal(ok(await call('admin',{action:'outcome',mutationId:resolution.mutationId},{...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'})).result.operationId,resolved.operationId,'an accepted result remains recoverable without a fresh write grant');
+assert.equal(ok(await call('holder',{action:'outcome',mutationId:resolution.mutationId})).found,false,'other accounts cannot recover an admin mutation');
 const automaticNotice=ok(await call('stranger',{action:'detail',caseId}));assert.equal(automaticNotice.messages[0].body,'Reviewed ownership correction');assert.equal(JSON.stringify(automaticNotice).includes('Private requester'),false);assert.equal(JSON.stringify(automaticNotice).includes(fixtureEmails.user),false);
 assert.equal((await accountIdentityAliases(db,fixtureEmails.user,[])).length,2);assert.equal((await accountIdentityAliases(db,fixtureEmails.holder,[])).length,0);
 assert.equal(sqlite.prepare("SELECT count(*) n FROM snapshot_registry WHERE status='stale'").get().n,2,'old and new cache invalidation is part of commit');
@@ -105,7 +113,8 @@ assert.equal(ok(await call('admin',{action:'detail',caseId:converted.caseId})).c
 const now=new Date().toISOString();sqlite.exec('BEGIN');
 for(let i=0;i<500;i++){const caseKey=crypto.randomUUID(),channelKey=crypto.randomUUID();sqlite.prepare("INSERT INTO account_profiles(email,real_name) VALUES(?,?)").run('scale'+i+'@example.test','Synthetic scale '+i);sqlite.prepare("INSERT INTO support_cases(case_id,requester_email,kind,subject,status,created_at,updated_at) VALUES(?,?,'support','Synthetic historic case','resolved',?,?)").run(caseKey,fixtureEmails.user,now,now);sqlite.prepare("INSERT INTO support_channels(channel_id,case_id,participant_email,case_status,updated_at) VALUES(?,?,?,'resolved',?)").run(channelKey,caseKey,fixtureEmails.user,now);}
 sqlite.exec('COMMIT');
-const duplicate=ok(await call('user',mutation({...createdInput})));assert.equal(duplicate.alreadyOpen,true);assert.equal(duplicate.caseId,caseId);
+const duplicateStart=statements.length,duplicate=ok(await call('user',mutation({...createdInput})));assert.equal(duplicate.alreadyOpen,true);assert.equal(duplicate.caseId,caseId);
+assert.equal(statements.slice(duplicateStart).some(s=>/^\s*(INSERT|UPDATE|DELETE)/.test(s)),false,'an already-open case lookup saves no new message or mutation receipt');
 const page1=ok(await call('user',{action:'list',status:'resolved'})),page2=ok(await call('user',{action:'list',status:'resolved',cursor:page1.nextCursor}));assert.equal(page1.items.length,20);assert.equal(page2.items.length,20);assert.equal(page1.items.some(a=>page2.items.some(b=>a.case_id===b.case_id)),false);
 const plans=[
  ["SELECT c.case_id,h.channel_id FROM support_cases c INDEXED BY idx_support_identity_open JOIN support_channels h ON h.case_id=c.case_id AND h.participant_email=c.requester_email WHERE c.requester_email=? AND c.person_id=? AND c.person_id<>'' AND c.kind='identity' AND c.status='open'",[fixtureEmails.user,'person:fixture-doctor']],

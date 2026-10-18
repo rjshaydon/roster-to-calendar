@@ -68,3 +68,9 @@ const withoutTests=accountMaintenanceHeadroom(syntheticSample,primary.outstandin
 assert(withTests.forecastWrites<withoutTests.forecastWrites);assert(withTests.writes<80000-syntheticSample.totals.rowsWritten,'actual synthetic writes still consume the cap');
 await assert.rejects(()=>accountMaintenanceSummaries(context,{...syntheticSample,totals:{rowsRead:1,rowsWritten:1}},primary,'2026-10-18','2026-10-17'),/not reconciled/);
 console.log('Retired synthetic costs passed exact database/day/cutoff bounds, fail-closed reconciliation, unchanged real totals/reservations and preserved caps.');
+const retiredId='f0f9d3cc-8f51-4c59-b1f9-7f3a8e794816',lagged={...syntheticSample,interval:{...syntheticSample.interval,observedUntil:'2026-10-18T11:15:00.000Z'},databases:[...syntheticSample.databases,{databaseId:retiredId,rowsRead:5000,rowsWritten:1000}]};
+assert.deepEqual(verifiedSyntheticTestCosts(lagged,'2026-10-18'),{reads:34874,writes:19873},'only observed settled buckets of the exact retired run are classified');
+assert.deepEqual(verifiedSyntheticTestCosts({...lagged,interval:syntheticSample.interval},'2026-10-18'),{reads:29874,writes:18873},'no attribution before the run began');
+assert.throws(()=>verifiedSyntheticTestCosts({...lagged,databases:[...syntheticSample.databases,{databaseId:retiredId,rowsRead:5000,rowsWritten:30001}]},'2026-10-18'),/reviewed evidence bound/);
+const laggedSummary=await accountMaintenanceSummaries({...context,data:{d1Meter:createD1Meter(raw,4,{firstViaAll:true})}},lagged,primary,'2026-10-18','2026-10-17');assert.deepEqual(laggedSummary.outstanding,primary.outstanding);assert.deepEqual(laggedSummary.settled,{reads:34974,writes:22873});
+assert.deepEqual(lagged.totals,syntheticSample.totals,'later settled test buckets never refund actual usage');

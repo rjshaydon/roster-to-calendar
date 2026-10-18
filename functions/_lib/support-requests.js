@@ -55,15 +55,20 @@ async function context(db,input){
  }else if(input.personId)personId=(await resolvePersonId(db,text(input.personId,160))).person_id;
  return {personId,alias};
 }
-export async function createSupportRequest(db,session,input,{legacy}={}){
+export async function inspectSupportCreation(db,session,input,{legacy}={}){
  const prepared=await mutation(db,session,input);if(prepared.replay)return prepared.replay;
  const kind=legacy?'identity':input.kind;if(!['identity','support'].includes(kind))throw fail('Choose a request type.',400);
  const subject=text(legacy?.subject||input.subject,120),body=text(legacy?.body||input.body,4000),details=legacy?{personId:'',alias:null}:await context(db,input);
  const participant=legacy?.email||session.email;if(legacy)admin(session);
  if(kind==='identity'&&details.personId){
   const existing=await db.prepare("SELECT c.case_id,h.channel_id FROM support_cases c INDEXED BY idx_support_identity_open JOIN support_channels h ON h.case_id=c.case_id AND h.participant_email=c.requester_email WHERE c.requester_email=? AND c.person_id=? AND c.person_id<>'' AND c.kind='identity' AND c.status='open'").bind(participant,details.personId).first();
-  if(existing)return commit(db,session,input,prepared,[],{ok:true,caseId:existing.case_id,channelId:existing.channel_id,alreadyOpen:true},Boolean(legacy));
+  if(existing)return {ok:true,caseId:existing.case_id,channelId:existing.channel_id,alreadyOpen:true};
  }
+ return {prepared,kind,subject,body,details,participant};
+}
+export async function createSupportRequest(db,session,input,{legacy,review}={}){
+ const creation=review||await inspectSupportCreation(db,session,input,{legacy});if(creation.ok)return creation;
+ const {prepared,kind,subject,body,details,participant}=creation;
  const caseId=crypto.randomUUID(),channelId=crypto.randomUUID(),now=new Date().toISOString(),isAdmin=requestAdmin(session)&&!legacy;
  const result={ok:true,caseId,channelId};
  const statements=[db.prepare(`INSERT INTO support_cases(case_id,requester_email,kind,subject,person_id,context_json,created_at,updated_at,legacy_reference) VALUES(?,?,?,?,?,?,?,?,?)`)
@@ -72,6 +77,12 @@ export async function createSupportRequest(db,session,input,{legacy}={}){
    .bind(channelId,caseId,participant,isAdmin||legacy?0:1,isAdmin?1:0,isAdmin?'participant':'admin',now),
   db.prepare('INSERT INTO support_messages(channel_id,sequence,author_type,body,created_at) VALUES(?,1,?,?,?)').bind(channelId,legacy?'system':isAdmin?'admin':'participant',body,now),event(db,caseId,session,legacy?'legacy-import':'created')];
  return commit(db,session,input,prepared,statements,result,Boolean(legacy));
+}
+export async function supportMutationOutcome(db,session,input){
+ const row=await db.prepare('SELECT result_json FROM support_mutations WHERE actor_email=? AND mutation_id=?').bind(session.email,id(input.mutationId)).first();
+ if(!row)return {ok:true,found:false};
+ const result=JSON.parse(row.result_json);if(result.operationId)admin(session);
+ return {ok:true,found:true,result};
 }
 function cursor(value){if(!value)return null;try{const pair=JSON.parse(value);if(!Array.isArray(pair)||pair.length!==2||!uuid.test(pair[1])||typeof pair[0]!=='string'||pair[0].length>40)throw Error();return pair;}catch{throw fail('Invalid page cursor.',400);}}
 export async function listSupportRequests(db,session,input={}){
@@ -103,10 +114,11 @@ export async function readSupportRequest(db,session,input){
  }
  return result;
 }
-export async function markSupportRead(db,session,input){
+export async function markSupportRead(db,session,input,{admitWrite}={}){
  const c=await loadCase(db,session,input.caseId),h=await channel(db,session,c.case_id,input.channelId);
  const sequence=Number(input.sequence);if(!Number.isSafeInteger(sequence)||sequence<0||sequence>h.last_seq)throw fail('Invalid read position.',400);
  const field=requestAdmin(session)?'admin_read_seq':'participant_read_seq';if(h[field]>=sequence)return {ok:true,unchanged:true};
+ if(admitWrite&&!await admitWrite())return {ok:true,readDeferred:true};
  await db.batch([requestAuthority(db,session,requestAdmin(session)),db.prepare(`UPDATE support_channels SET ${field}=max(${field},?),version=version+1 WHERE channel_id=? AND ${field}<? AND last_seq>=?`).bind(sequence,h.channel_id,sequence,sequence)]);
  return {ok:true};
 }
@@ -124,9 +136,12 @@ export async function replySupportRequest(db,session,input){
  return commit(db,session,input,prepared,[caseGuard(db,c),...appendMessage(db,h,body,requestAdmin(session)?'admin':'participant',now),db.prepare('UPDATE support_cases SET version=version+1,updated_at=? WHERE case_id=?').bind(now,c.case_id)],{ok:true,caseId:c.case_id});
 }
 function decisionStatements(db,c,session,channels,{status,body,operationId='',kind='resolved'}){
- const now=new Date().toISOString(),statements=[caseGuard(db,c)];
- for(const h of channels)statements.push(...appendMessage(db,h,body,'admin',now));
- statements.push(db.prepare("UPDATE support_channels SET case_status=?,waiting=?,version=version+1,updated_at=? WHERE case_id=?").bind(status,status==='resolved'?'none':'admin',now,c.case_id),
+ const now=new Date().toISOString(),scope=JSON.stringify(channels.map(h=>({id:h.channel_id,seq:h.last_seq,email:h.participant_email}))),statements=[caseGuard(db,c),
+  assertion(db,`(SELECT count(*) FROM support_channels WHERE case_id=?)=? AND NOT EXISTS(
+   SELECT 1 FROM json_each(?) x LEFT JOIN support_channels h ON h.channel_id=json_extract(x.value,'$.id')
+   WHERE h.channel_id IS NULL OR h.case_id<>? OR h.last_seq<>json_extract(x.value,'$.seq') OR h.participant_email<>json_extract(x.value,'$.email'))`,[c.case_id,channels.length,scope,c.case_id]),
+  db.prepare("INSERT INTO support_messages(channel_id,sequence,author_type,body,created_at) SELECT json_extract(value,'$.id'),json_extract(value,'$.seq')+1,'admin',?,? FROM json_each(?)").bind(body,now,scope)];
+ statements.push(db.prepare("UPDATE support_channels SET last_seq=last_seq+1,admin_read_seq=last_seq+1,case_status=?,waiting=?,version=version+1,updated_at=? WHERE case_id=?").bind(status,status==='resolved'?'none':'admin',now,c.case_id),
   db.prepare('UPDATE support_cases SET status=?,version=version+1,updated_at=?,resolution_operation_id=? WHERE case_id=?').bind(status,now,operationId||c.resolution_operation_id,c.case_id),event(db,c.case_id,session,kind,body,operationId));
  return statements;
 }
@@ -169,7 +184,10 @@ async function saveOwnershipPreview(db,session,c,preview){
  await db.batch([requestAuthority(db,session,true),
   db.prepare('INSERT INTO support_ownership_previews(preview_id,actor_email,case_id,case_version,expires_at,payload_json) VALUES(?,?,?,?,?,?)').bind(previewId,session.email,c.case_id,c.version,now+300000,payload),
   db.prepare('DELETE FROM support_ownership_previews WHERE preview_id IN (SELECT preview_id FROM support_ownership_previews WHERE actor_email=? AND expires_at<=? ORDER BY expires_at,preview_id LIMIT 10)').bind(session.email,now)]);
- return {...preview,previewToken:'prepared:'+previewId};
+ // The commit snapshot stays private on the server. The review needs names,
+ // sites and the affected accounts, not every legacy claim and timestamp.
+ return {kind:preview.kind,personId:preview.personId||preview.before.people[0].person_id,targetEmail:preview.targetEmail,
+  ...(preview.owners?{owners:preview.owners}:{}),before:{people:preview.before.people.map(p=>({preferred_display_name:p.preferred_display_name})),aliases:preview.before.aliases.map(a=>({source_type:a.source_type,display_name:a.display_name||a.doctor_key}))},previewToken:'prepared:'+previewId};
 }
 async function loadOwnershipPreview(db,session,c,input,kind){
  const previewId=id(String(input.previewToken||'').replace(/^prepared:/,''));

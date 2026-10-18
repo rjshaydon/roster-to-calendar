@@ -31,13 +31,13 @@ export async function scaleSupportFixture(db,count=500){
  return {syntheticAccounts:count};
 }
 export async function boundSupportFixture(db,count){
- if(![8,16].includes(count))throw Error('Choose the eight- or sixteen-alias synthetic bound.');
+ if(![4,8,16].includes(count))throw Error('Choose a four-, eight- or sixteen-alias synthetic bound.');
+ await db.batch([db.prepare("DELETE FROM account_claims WHERE (source_type,doctor_key) IN (SELECT source_type,doctor_key FROM roster_person_aliases WHERE person_id='person:fixture-doctor')"),db.prepare("DELETE FROM account_people WHERE person_id='person:fixture-doctor'"),db.prepare("DELETE FROM roster_person_aliases WHERE person_id='person:fixture-doctor' AND doctor_key LIKE 'SYNTHETIC BOUND %'")]);
  const sites=['mmc','mch','ddh','vhh'];
  let aliases=(await db.prepare("SELECT source_type,doctor_key FROM roster_person_aliases WHERE person_id='person:fixture-doctor' ORDER BY source_type,doctor_key").all()).results;
  for(let i=aliases.length;i<count;i++)await db.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES(?,?,?,'person:fixture-doctor')").bind(sites[i%4],('SYNTHETIC BOUND '+i+' ').padEnd(190,'X'),'Synthetic bound doctor '+i).run();
  aliases=(await db.prepare("SELECT source_type,doctor_key FROM roster_person_aliases WHERE person_id='person:fixture-doctor' ORDER BY source_type,doctor_key").all()).results;
- const owners=[fixtureEmails.holder,fixtureEmails.stranger,...Array.from({length:5},(_,i)=>`bound${i}@example.test`)].slice(0,count===8?7:4);
- await db.batch([db.prepare("DELETE FROM account_claims WHERE (source_type,doctor_key) IN (SELECT source_type,doctor_key FROM roster_person_aliases WHERE person_id='person:fixture-doctor')"),db.prepare("DELETE FROM account_people WHERE person_id='person:fixture-doctor'")]);
+ const owners=[fixtureEmails.holder,fixtureEmails.stranger,...Array.from({length:5},(_,i)=>`bound${i}@example.test`)].slice(0,count===4?2:count===8?7:4);
  for(const email of owners){await db.batch([db.prepare('INSERT OR IGNORE INTO account_profiles(email,real_name) VALUES(?,?)').bind(email,'Synthetic bound holder'),db.prepare("INSERT INTO account_people(email,person_id) VALUES(?,'person:fixture-doctor')").bind(email),...aliases.map(a=>db.prepare('INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES(?,?,?,?)').bind(email,a.source_type,a.doctor_key,'Synthetic bound doctor'))]);}
  // Eight aliases x eight legacy owners = the 64-claim bound. The receiving
  // account has no canonical link yet. Sixteen aliases x four holders = 64.

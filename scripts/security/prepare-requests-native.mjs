@@ -1,6 +1,6 @@
 // Disposable synthetic DB only. No production/provider/mail bindings.
 import fs from 'node:fs';import crypto from 'node:crypto';
-const root=process.cwd(),out=process.argv[2],id=process.argv[3],databaseName=process.argv[4]||'roster-requests-native-20261018';if(!out?.startsWith('/tmp/')||!/^[a-f0-9-]{36}$/.test(id||'')||!/^roster-requests-(?:native|review)-20261018$/.test(databaseName))throw Error('Provide a /tmp directory and a NEW empty D1 UUID.');
+const root=process.cwd(),out=process.argv[2],id=process.argv[3],databaseName=process.argv[4]||'roster-requests-native-20261018';if(!out?.startsWith('/tmp/')||!/^[a-f0-9-]{36}$/.test(id||'')||!/^roster-requests-(?:native|review|final)-20261018$/.test(databaseName))throw Error('Provide a /tmp directory and a NEW empty D1 UUID.');
 fs.mkdirSync(out,{recursive:true,mode:0o700});const gate=fs.existsSync(out+'/gate')?fs.readFileSync(out+'/gate','utf8'):crypto.randomBytes(32).toString('hex');fs.writeFileSync(out+'/gate',gate,{mode:0o600});
 fs.writeFileSync(out+'/schema.sql',fs.readdirSync('migrations').filter(n=>n.endsWith('.sql')).sort().map(n=>fs.readFileSync('migrations/'+n,'utf8')).join('\n'));
 fs.writeFileSync(out+'/wrangler.toml',`name = "roster-requests-native-20261018"\nmain = "worker.mjs"\ncompatibility_date = "2026-04-22"\nworkers_dev = true\npreview_urls = false\n[observability]\nenabled = true\nhead_sampling_rate = 1\n[[d1_databases]]\nbinding = "TEST_DB"\ndatabase_name = "${databaseName}"\ndatabase_id = "${id}"\n`);
