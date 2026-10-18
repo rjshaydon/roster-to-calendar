@@ -1,6 +1,6 @@
 # Optional passkeys — 18 October 2026
 
-Status: implementation and isolated tests complete; production feature and Supabase provider remain disabled pending activation confirmation and connected acceptance. The additive production preference migration has been applied. The disposable native test Worker and D1 database were removed after evidence collection.
+Status: optional passkeys are active in production following explicit user approval. All 20 connected Supabase acceptance checks passed; the exact synthetic account and provider credentials were removed. Owner Safari/Home Screen Face ID acceptance remains. Password sign-in and general migration remain active. The additive reminder preference migration is applied; disposable native test resources are deleted.
 
 ## Approved behavior
 
@@ -40,9 +40,16 @@ Native Cloudflare probe (disposable empty D1, synthetic provider-proof bytes, no
 - Isolated complete-app mobile entrance smoke test passes with no startup errors; disabled passkeys do not download their lazy UI modules.
 - Disposable native Worker and database removed successfully; no synthetic provider account was needed for component tests.
 
-## Remaining activation checks
+## Approved activation and connected acceptance
 
-1. Confirm enabling Supabase passkeys with the exact RP values above, then save provider configuration. Browser-control policy requires action-time confirmation for a new security-sensitive sign-in method; the confirmation question is pending.
-2. Activate only the app passkey feature; run one bounded synthetic connected enrollment/sign-in/fallback/deletion journey. Remove its exact synthetic account and key. The connected acceptance script is prepared and refuses to create an account while the app flag is off.
-3. Ask the owner to enroll their own passkey and test actual Safari/Home Screen Face ID, optional dismissal and Account setup. Credential creation itself is a user action.
-4. Record connected/real-device acceptance. If provider checks fail, turn off only passkeys; preserve password authentication and migrated credentials.
+The user approved the exact provider settings, app activation and one disposable synthetic connected test. Supabase is enabled with RP name **Roster to Calendar**, RP ID `rtc.curiousmind.app`, sole origin `https://rtc.curiousmind.app`. Activation commit `32651324`, Pages deployment `c80d3a57`. Live options confirm production passkeys on, general password migration/session support on, no named cohort, email recovery off; the default Pages host still reports passkeys off.
+
+All **20 connected checks passed** on 18 October at 11:37 am Melbourne: no-email password signup/login, encrypted setup grant, reminder suppression/re-enable, setup without repeat password, exact RP, actual Supabase verification of a synthetic P-256 WebAuthn registration and signed assertion, passkey session/workspace, own-key removal, password fallback and full synthetic account/provider cleanup. This is genuine provider verification using a software-generated synthetic key; it is not a Face ID or Android hardware acceptance test. See `authentication-passkey-connected-2026-10-18.json`.
+
+After cleanup: **60 accounts, one migrated, zero synthetic accounts remaining, zero pending credential changes**. General migration is enabled for everyone; remaining accounts upgrade only on a future successful password login. No staff account, roster, claim or feed was altered by acceptance testing. No email was sent.
+
+### Owner device check remaining
+
+Reload once to receive the current options. In the owner app use **Admin → Account → Passkeys → Add a passkey**, or sign out and back in with a password to receive the optional setup prompt. The owner must complete the native credential/biometric prompt. After enrollment, sign out and choose **Sign in with a passkey**. Repeat from the iPhone Home Screen app. Password sign-in stays available throughout.
+
+If passkey provider acceptance regresses, set only `passkeysEnabled:false`; preserve password/session verification and migrated credentials. Native CPU evidence above is component evidence; connected acceptance does not independently measure whole-route CPU.

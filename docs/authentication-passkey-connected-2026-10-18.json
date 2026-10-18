@@ -1,0 +1,99 @@
+{
+  "at": "2026-10-18T00:37:16.634Z",
+  "syntheticOnly": true,
+  "staffAccountsTouched": false,
+  "realDeviceKeysUsed": false,
+  "emailsSent": false,
+  "cleaned": true,
+  "checks": [
+    {
+      "name": "password-signup",
+      "passed": true
+    },
+    {
+      "name": "password-login",
+      "passed": true
+    },
+    {
+      "name": "opaque-session-and-encrypted-setup-grant",
+      "passed": true
+    },
+    {
+      "name": "first-login-reminder",
+      "passed": true
+    },
+    {
+      "name": "disable-reminders",
+      "passed": true
+    },
+    {
+      "name": "suppressed-reminder",
+      "passed": true
+    },
+    {
+      "name": "re-enable-reminders",
+      "passed": true
+    },
+    {
+      "name": "registration-challenge-without-repeat-password",
+      "passed": true
+    },
+    {
+      "name": "exact-production-rp",
+      "passed": true
+    },
+    {
+      "name": "provider-verified-enrollment",
+      "passed": true
+    },
+    {
+      "name": "registered-key-and-no-reminder",
+      "passed": true
+    },
+    {
+      "name": "password-session-logout",
+      "passed": true
+    },
+    {
+      "name": "discoverable-signin-challenge",
+      "passed": true
+    },
+    {
+      "name": "provider-verified-passkey-signin",
+      "passed": true
+    },
+    {
+      "name": "ordinary-workspace-after-passkey",
+      "passed": true
+    },
+    {
+      "name": "remove-own-passkey",
+      "passed": true
+    },
+    {
+      "name": "provider-key-removed",
+      "passed": true
+    },
+    {
+      "name": "passkey-session-logout",
+      "passed": true
+    },
+    {
+      "name": "password-fallback-unchanged",
+      "passed": true
+    },
+    {
+      "name": "exact-synthetic-account-and-provider-cleanup",
+      "passed": true
+    }
+  ],
+  "deployment": "c80d3a57",
+  "activationCommit": "32651324",
+  "postCleanup": {
+    "totalAccounts": 60,
+    "migratedAccounts": 1,
+    "syntheticAccountsRemaining": 0,
+    "pendingCredentialChanges": 0
+  },
+  "realDeviceAcceptance": "Pending owner Safari/Home Screen Face ID test; no real biometric or device credential was created by the agent."
+}

@@ -1,7 +1,7 @@
 # Batch 6 — identity requests, admin support and account sessions
 
 Planning date: 15 October 2026, Melbourne.
-Status, updated 18 October: Supabase password migration and secure no-email signup are active for all accounts, with cookie sessions, migration counts/lists, immediate local sign-out and confirmed other-device revocation. Optional passkey implementation and isolated native/mobile tests are complete; provider activation and connected/real-device acceptance remain. See `authentication-rollout-2026-10-16.md` and `authentication-passkeys-2026-10-18.md`. Identity disputes and admin-support conversations remain implementation work.
+Status, updated 18 October: Supabase password migration and secure no-email signup are active for all accounts, with cookie sessions, migration counts/lists, immediate local sign-out and confirmed other-device revocation. Optional passkeys are active; isolated native/mobile and 20 connected Supabase checks pass. Owner Safari/Home Screen Face ID acceptance remains. See `authentication-rollout-2026-10-16.md` and `authentication-passkeys-2026-10-18.md`. Identity disputes and admin-support conversations remain implementation work.
 Messaging scope confirmed by user: identity requests and admin support, not clinician-to-clinician chat.
 Ownership confirmed by user: keep existing ownership unchanged while a dispute is reviewed.
 Session clarification: the work environment is a personal Citrix desktop secured by tap-on/tap-off, not a shared browser. The user approved 30-day inactivity expiry and a six-month outer reauthentication deadline, as well as implementation and native password testing. Security is first priority, CPU efficiency an immediate second; weakening password storage to meet Free CPU is not authorized.
@@ -169,4 +169,4 @@ The next passkey phase is not enabled. The live Sydney project has the BETA opti
 
 ### Passkey product decision, 18 October
 
-Optional setup after explicit login when no key exists, with an account-wide “Don’t remind me again” checkbox. The prompt explains that Account settings allow later setup. Account settings also restore reminders. Password sign-in remains available. Implementation is gated pending provider activation and connected/real-device acceptance; this does not alter the remaining messaging/request scope.
+Optional setup after explicit login when no key exists, with an account-wide “Don’t remind me again” checkbox. The prompt explains that Account settings allow later setup. Account settings also restore reminders. Password sign-in remains available. Provider activation and connected acceptance are complete; owner real-device acceptance remains; this does not alter the remaining messaging/request scope.
