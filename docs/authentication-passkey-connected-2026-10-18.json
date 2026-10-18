@@ -95,5 +95,5 @@
     "syntheticAccountsRemaining": 0,
     "pendingCredentialChanges": 0
   },
-  "realDeviceAcceptance": "Pending owner Safari/Home Screen Face ID test; no real biometric or device credential was created by the agent."
+  "realDeviceAcceptance": "After the requested Mac/iPhone passkey check, the owner reported \u201cThat works\u201d. User-reported acceptance; no claim of independent testing on every platform."
 }

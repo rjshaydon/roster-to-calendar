@@ -1,15 +1,15 @@
 # Remaining restoration and development batches — 4 October 2026
 
-Status: Batch 1 accepted; Batch 2 deployed and enabled. Historical registration
-and the actual scheduled weekly audit completed on 11 October (996 cached names
-registered; 545 audited; 47 candidate updates). Normal watchdog flags are restored.
-The user requires Cloudflare Free. The 12 October CPU batch moves roster
-comparison and compact metadata preparation to the external runner, adds atomic
-bounded corrections, and reduces routine accounting overhead. CPU acceptance is
-still open: confirm final activation/event staging and natural production delivery,
-then offload dense identity matching without reducing comparison coverage.
-See [the CPU batch record](restoration-cpu-batch-2026-10-12.md) and the acceptance
-record. Unknown maintenance reservations retain their recovery bounds.
+Status, consolidated 18 October: **Batches 1 and 2 are complete.** Subsequent
+MCH draft discovery and automatic publication faults are fixed and accepted.
+**Batch 6 security is complete**, including general password migration, secure
+sessions and optional passkeys with the user's successful device check. Its
+identity requests/private admin-support messaging and reviewed dispute resolution
+remain to implement. Batches 3, 4 and 7 have not been accepted as complete;
+Batch 5 has partial reliability foundations but its full resilience/diagnostics
+scope remains. Batch 8 remains later work. The dated checkpoints below are
+historical evidence, not a replacement for this current status.
+See [the consolidated Batch 6 plan](restoration-batch6-plan-2026-10-15.md).
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.

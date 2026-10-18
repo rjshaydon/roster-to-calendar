@@ -1,172 +1,124 @@
-# Batch 6 — identity requests, admin support and account sessions
+# Batch 6 — identity requests, admin support and secure accounts
 
-Planning date: 15 October 2026, Melbourne.
-Status, updated 18 October: Supabase password migration and secure no-email signup are active for all accounts, with cookie sessions, migration counts/lists, immediate local sign-out and confirmed other-device revocation. Optional passkeys are active; isolated native/mobile and 20 connected Supabase checks pass. Owner Safari/Home Screen Face ID acceptance remains. See `authentication-rollout-2026-10-16.md` and `authentication-passkeys-2026-10-18.md`. Identity disputes and admin-support conversations remain implementation work.
-Messaging scope confirmed by user: identity requests and admin support, not clinician-to-clinician chat.
-Ownership confirmed by user: keep existing ownership unchanged while a dispute is reviewed.
-Session clarification: the work environment is a personal Citrix desktop secured by tap-on/tap-off, not a shared browser. The user approved 30-day inactivity expiry and a six-month outer reauthentication deadline, as well as implementation and native password testing. Security is first priority, CPU efficiency an immediate second; weakening password storage to meet Free CPU is not authorized.
+Consolidated plan: 18 October 2026, Melbourne. Replaces the earlier mixed proposal/checkpoint text in this file; prior versions remain in Git.
 
-## Current evidence and scope
+## Current status and agreed scope
 
-- The 4 October batch plan contains an outline, not an implementation design.
-- The original PRD describes disputes, replies, transfers and temporary aliases as intended features. It is not evidence that those journeys were already implemented before lockdown. Its old site/access and Gmail assumptions are superseded by current production behavior.
-- `claimSelectedRosterName` currently stops with “Conflict notification is still to be added.” `reportRosterIdentityIssue` records an admin issue, including a hard-coded MMC source, rather than a structured dispute with participants and a reply thread.
-- Batch 2 supplies durable people/aliases, reviewed operations, account linking, reversal, historical evidence and affected-calendar publication. Reuse those mechanisms; do not build a second identity system.
-- The browser currently keeps a password in session/local storage and includes it in routine requests. Server verification uses salted SHA-256. These are separate issues: secure session cookies remove routine password handling, but do not alone modernize password storage.
-- Invitations already use Postmark. Do not introduce Gmail, another paid provider, email verification, password-reset email or external identity hosting without a separate decision.
-- Preserve current site/grade access rules, clear automatic signup matching, Creator account switching, shared/private calendar boundaries, historical grades, settings and subscription URLs.
+**Security implementation and rollout are complete.** Supabase password signup/migration, opaque cookie sessions, password changes, deletion coordination, sign-out/other-device revocation, migration reporting and optional passkeys are deployed. The user reported that the passkey flow works after the requested device test. This records the user's acceptance, not testing of every Android/Citrix/device combination.
 
-## Proposed user interface
+General migration upgrades each existing account on its next successful password login; unmigrated accounts are expected during rollout. Do not treat migration of every dormant user as an unfinished coding requirement. Dated legacy routine-auth compatibility closes on 20 October at 11 am Melbourne; retain the tested fresh sign-in/update path and secure session verification. Normal production observation continues.
 
-### Ordinary users
+Evidence and operational details:
+- `authentication-rollout-2026-10-16.md`
+- `authentication-security-review-2026-10-17.md`
+- `authentication-passkeys-2026-10-18.md`
+- `authentication-passkey-connected-2026-10-18.json`
 
-Keep the existing Account modal. Add a collapsible **Messages and requests** section and a small unread indicator on Account only when needed. Existing messages appear from local account-scoped cache immediately; refresh on opening, login and foreground return. Do not add another main navigation item or background polling loop.
+**Remaining Batch 6 scope:** private user/admin support conversations, requests about occupied or incorrect roster identities, the admin case queue, reviewed resolution/ownership reassignment and in-app unread/outcome notifications.
 
-When an otherwise eligible roster identity is occupied, show **Ask admin to review**. Explain that the request concerns a name already linked elsewhere without revealing the other account's email. The form contains the roster name/site, a short explanation and a preview before submitting. Never change ownership merely because a dispute was submitted.
+Confirmed choices: keep current ownership during review; communication is with the admin, not clinician-to-clinician chat; use the existing Account/Admin surfaces; keep Cloudflare Free and current D1 safeguards. Mandatory email confirmation is not part of signup or migration. Email recovery/invitations remain separately gated and are not prerequisites of this remaining release. Do not enable email delivery or a paid provider as a side effect. Temporary dual access remains excluded.
 
-Users can also choose **Contact admin** for app support. Each request has a single reply thread and a plain status: **Open**, **Waiting for you**, **Waiting for admin**, or **Resolved**. Closing a report and rejecting an identity request have explanatory text rather than conflating rejection with technical failure. Allow an explicit reopen or a new linked request when circumstances change.
+## Findings from the 18 October code audit
 
-### Creator
+- `claimSelectedRosterName` still stops at “Conflict notification is still to be added” for another account's claim. Replace this dead end with a durable request flow.
+- `reportRosterIdentityIssue` stores a generic admin issue with a hard-coded MMC source and no conversation, participants or case status. It is not the required support/dispute system.
+- There are no request/conversation/message persistence tables or complete inbox/reply/resolve APIs/UI yet.
+- Batch 2 already provides canonical people, site aliases, term/grade evidence, reviewed identity operations, version guards, history/reversal and publication jobs. Reuse these.
+- An `account-link` operation is not a complete contested-ownership transfer: existing canonical account links and legacy site/key claims must both be reconciled. Linking, removing a claim and closing a case in separate requests is not an acceptable transfer transaction.
+- Current identity commits build and submit their own D1 batch. Add composable, guarded commit preparation so request resolution and ownership/identity changes can commit together, while preserving existing standalone operation behavior/tests.
 
-Add **Requests** as a collapsible section in Admin → Users, following the existing mutually exclusive sections and single-column review layout. Keep parser errors in Parser and system diagnostics in System. Show an open/unread count only when nonzero.
+## Deliverable 1 — requests and private conversations
 
-Opening a request hides the list while showing its conversation, relevant accounts/roster aliases and existing site/term/grade evidence. History is collapsed. Actions: **Reply**, **Resolve**, **Review identity**, and an appropriate reviewed correction/transfer. Preserve request context when opening the existing identity review; provide **Back to request**.
+### User interface
 
-A transfer preview states exactly which person, aliases/accounts and calendar access will change. A correction of one wrong site alias must not transfer an entire unrelated person. User-specific custom events/settings are not copied from the previous owner. Do not expose another user's private settings in a support conversation.
+Add a collapsible **Messages and requests** section in Account. Include **Contact admin** for ordinary app support and **Ask admin to review** wherever a contested roster name currently leads to a dead end. Carry the selected site, roster spelling and canonical identity when known; allow “my name is missing/wrong” reports without requiring an invented roster link.
 
-## Ownership and dispute rules
+The user reviews the subject/explanation before submitting. On submission show the durable case and its replies/status. Users can reply, see outcomes and reopen a resolved case when necessary. Plain status labels are Open, Waiting for admin, Waiting for you and Resolved, presented for that user's conversation.
 
-1. Resolve requests against the current canonical person, not only a spelling. A different alias must not bypass an existing ownership conflict.
-2. Preserve automatic linking of clear, genuinely unoccupied identities. Ambiguous, occupied and duplicate-account cases go to review. A support message is not proof of identity.
-3. Bind server-side requester identity from the authenticated session. Clients cannot choose an author, recipient, owner role or approval state.
-4. Keep current ownership while a case is open. Notify the relevant existing claimant and Creator inside the app. A participant cannot see other cases or unrelated identities.
-5. Resolve using a reviewed Batch 2 operation with actor/reason, before/after versions, idempotency key and case linkage. Account/alias ownership checks, case status and version checks must be in the committing transaction, not only the preview.
-6. Concurrent admin edits, simultaneous claims, repeated submission and lost-response retries must not duplicate a case, transfer twice or overwrite a more recent resolution.
-7. Invalidate affected app/profile/feed artifacts and contact/access projections using current identity publication rules. Old access must stop at commit even while replacement artifacts are preparing; a pending rebuild is not permission to serve the former owner's private calendar.
-8. Notify participants after the durable decision. A message failure cannot undo a committed transfer; an uncertain outcome remains inspectable and resumable. Reversal is reviewed against intervening edits, not a blind snapshot overwrite.
+Use one-column list/detail presentation. Close/back returns to the list. A private cached open list/detail reappears immediately when unchanged, without replacing a live message draft. A failed request load stays within that section and never blanks the calendar/On shift.
 
-Temporary dual access is outside this batch: the user confirmed unchanged ownership during review. If requested later, design an explicit, expiring grant separate from the canonical alias mapping; do not merge different people or inherit SMS/Director privileges. Its permission and expiry tests become required before enabling it. This replaces the old PRD's ambiguous “duplicate alias” proposal.
+### Privacy model
 
-## Backend and data design
+A case may involve the requester and an existing linked account, but this does not create a shared conversation between them. Each has a separate private channel with the admin. The admin case view labels the audience for each channel/reply; a user cannot see another party's email, private explanation or messages. Contact an existing holder when admin review needs their input; send relevant participants a decision notice after resolution. A submitted allegation alone does not justify automatic ownership changes or broad peer notifications.
 
-Prefer the existing D1/R2 stack, without a new real-time service. Add migrated, indexed tables for requests, participants, message sequence/history, resolution references and compact recipient counters. Exact schema/indices are checked with realistic query plans before migration. No runtime DDL or global roster/event scans.
+Messages are bounded plain text (initial maximum 4,000 characters, subject 120), escaped on display, with no attachments/rich HTML. Submissions/replies are rate-limited by authenticated account using a separate bucket from password/passkey admission.
 
-- Requests identify their type, requester, canonical person/site alias where relevant, current state, version and resolution operation. Support cases need no forced roster identity.
-- Participants determine message visibility and maintain a monotonic last-read sequence. Mark read when a thread is opened; do not write a receipt per render or per message in a polling loop.
-- Messages are plain text with bounded lengths; initial release has no attachments, rich HTML or public user directory. Escape content and rate-limit submissions/replies.
-- Inbox and admin lists use cursor pagination, initially 20 records. Conversations use bounded pages. Update unread/open counters atomically with explicit actions; do not count every user's messages on each login.
-- Reuse existing login metadata for a compact unread summary where it can remain bounded. Message failures must not block calendar rendering. New replies appear on login, opening Account/Admin and foreground return; live delivery into a continuously open background-free view is not promised in this scope.
-- Keep old identity reports inspectable. Convert only clearly identified reports to support/request records; do not guess owners or transfer names from old free text. Parser issues stay where they are.
+## Deliverable 2 — admin queue and review workspace
 
-## Session design and alternatives
+Add **Requests** under Admin → Users, preserving existing mutually exclusive collapsible sections and the QR card below the sections. Show a count/badge only when nonzero. Keep parser issues in Parser and technical diagnostics in System.
 
-**Recommended:** opaque random session tokens in host-only `Secure`, `HttpOnly`, `SameSite=Lax` cookies, with only token hashes stored in D1. Check session expiry/revocation and current account authority through indexed lookups. Prefer joining the existing account lookup; if a separate query is needed, budget one indexed session lookup per authenticated application request. Public roster fingerprints and existing bounded contact-capability reads must not gain routine D1 authentication reads.
+The queue offers open/resolved and waiting/unread filters, bounded pages (initially 20), and one selected case at a time. A case shows its private conversation(s), relevant linked accounts, canonical person/site names and existing site/term/historical-grade evidence. History is collapsed. Actions are Reply, Resolve, Reopen and Review identity; the correction flow returns to the case through Back to request.
 
-This is preferred over self-contained long-lived JWTs: immediate revocation and current account privileges are simpler to enforce. Signed short-lived access cookies can reduce reads, but still need a revocation/role-change strategy; do not silently accept stale privileges to save a row read. A new managed authentication provider is an alternative only if the password feasibility gate cannot meet the current constraints and the user approves it.
+Admin inspection keeps the authenticated admin as actor; the viewed user's account is never authorization. A support request need not force an identity operation. Unsubstantiated or withdrawn requests can be closed with an explanation and no roster-link change.
 
-Preserve the original authenticated Creator as actor during account inspection. A target-account field never becomes an authorization credential. Migrate state, identity, calendar, comparisons, settings and admin APIs through a common verifier/request helper. Automation bearer tokens and external subscription tokens retain their separate authentication paths.
+## Deliverable 3 — safe identity/ownership resolution
 
-Cookie authentication adds exact same-origin validation and CSRF defenses for browser mutations. No wildcard credentialed CORS. Rotate session identity after authentication and privilege/risk changes. Invalidate sessions on logout, account deletion and password reset/change as appropriate. Add **Sign out other devices** after reauthentication. Do not expose session tokens to JavaScript, URLs or logs.
+Supported outcomes:
+1. Keep the current link, explaining the decision.
+2. Correct spelling/identity or separate a wrong site alias using Batch 2 operations.
+3. Reassign the reviewed roster identity/access to the correct existing account.
+4. Identify duplicate accounts and review the intended linkage without merging their private events/settings or resetting credentials.
 
-Approved UX: retain **Keep me signed in on this device**, default off, with the same option for a personal device and the user's personal Citrix desktop. Remove the blanket 16-hour work-computer rule. Tap-off secures the desktop but does not revoke an application session; explicit app logout still revokes it. Browser close alone is not reliable logout because browsers can restore session cookies. Offer a nonpersistent choice for genuinely shared or temporary browsers.
+Before a change, show exactly which person, aliases and account access will change. Preserve historical grades, raw rosters, unrelated identities/claims, personal settings, custom events, authentication credentials and existing feed token identities.
 
-Distinguish inactivity expiry from a fixed reauthentication deadline. Approved remembered-device policy: expire after 30 days without meaningful use, extending the inactivity deadline as the person uses the app; retain an outer limit of 180 days from the last password/passkey authentication. Thus daily users are not asked to sign in every 30 days. These figures are product choices, not OWASP-prescribed durations. Sensitive account/ownership/admin actions require appropriately recent authentication. Silent session-token rotation does not reset the outer authentication deadline. A no-fixed-deadline alternative permits a stolen, continually used credential to remain valid until revoked and was not chosen.
+For reassignment, include canonical `account_people` links and relevant legacy `account_claims` in one bounded scope. Do not assume one spelling identifies the whole person, one case has only one current holder, or an account-link edit alone removes older access. Over-large/ambiguous scopes stop for a narrower review rather than widening a scan.
 
-Implement remembered-device persistence separately from the lifetime of individual rotated session tokens. Define renewal and server-side inactivity enforcement precisely, preserve the whole-shift On shift workflow, and do not let automatic contact/roster polling alone keep a remembered device alive forever. No per-request or per-keystroke activity writes.
+**Atomic commit:** current case/version/participant guards, exact old owner and alias/version guards, reviewed identity/link/claim changes, operation history, case outcome, publication job and decision-message/unread bookkeeping must commit in one transaction. Reuse/refactor the existing identity statement builder rather than wrapping several independently committed API calls. Retain all current guards in existing standalone identity operations.
 
-Session renewal should be coalesced across requests/tabs and never write last-seen on every request. Choose a tested rotation/grace protocol that handles parallel requests and response loss without unlimited token reuse. Bound expired-session cleanup with an expiry index; never enumerate every account at login.
+Every submitted mutation has a client idempotency key scoped to the actor/action. A repeated request or lost reply retrieves the same outcome; it must not submit a second case/message/transfer. Stale previews must be re-reviewed. Reversal is also reviewed against intervening changes, linked to the case, and cannot blindly overwrite a newer identity or ownership decision.
 
-On a cold restart, reuse one minimal authentication/access envelope before exposing a shared or logged-out user's private cached content; do not fetch/parse rosters as part of authentication. Already validated views remain cache-fast. Measure any cold-start change against the existing baseline rather than promising impossible zero-latency revalidation. Logout/expiry/account switching must not leave the previous person's data visible or allow a late response to repaint it.
+Current server authorization must reject the former ownership scope after commit, even while updated artifacts publish asynchronously. Existing identity jobs rebuild only affected account/profile/feed views. Do not serve the old owner's cached scope merely because the replacement is preparing. Already downloaded phone calendar copies follow the calendar client's refresh schedule; server revocation is not a promise to remotely erase an offline client's copy immediately.
 
-## Password feasibility gate
+## Deliverable 4 — durable storage, unread state and lifecycle
 
-Before choosing the final password implementation, benchmark a maintained password-hashing implementation and realistic parameters in the native Free-tier runtime, using synthetic passwords only. Local Node success is not proof of Workers compatibility or CPU cost. Check registration, sign-in, invitation acceptance, password change and concurrent attempts.
+Add additive, indexed tables for cases, private channels/participants, sequenced messages/read cursors, resolution references, mutation idempotency and compact per-account inbox summary/version. Exact schema and query plans are checked before migration. Inbox/message pages are cursor-based, initially 20; no global user/roster scans or unbounded thread downloads.
 
-Explain the alternatives before activation: (1) local strong password hashing, with Argon2id preferred and native PBKDF2 a compatibility candidate at appropriate security parameters; (2) a maintained external authentication provider, which moves costly password verification outside Workers but adds a provider, migration, availability and quota/cost dependencies; (3) passkeys, which avoid storing reusable password secrets for passkey authentication but require enrollment, recovery and actual Safari/iPhone/Citrix compatibility checks. A password fallback still needs strong storage. Provider pricing/free quotas and capabilities must be verified before recommending a specific service. A client-generated password hash must not be treated as a shortcut: if accepted directly, it becomes a reusable password-equivalent secret.
+Case state and each private channel's waiting/read state are distinct, so two parties cannot give one case contradictory global “waiting for you” states. Use conditional monotonic read cursors. Mark read only when a thread is actually opened/advanced, not per render. Update message, unread summary/version and case state atomically with explicit actions; unchanged inputs do no writes.
 
-Use versioned password records and upgrade existing credentials after successful reauthentication, without bulk password export, forced wholesale resets or password processing in GitHub Actions. Routine cookie-authenticated requests must not repeat password hashing. Apply abuse protection before expensive verification, and ensure rejected guesses cannot cause an unbounded stream of D1 counter writes. Verify any platform rate-limiter binding is available within the existing plan/configuration limits before choosing it.
+Use authenticated, account-bound in-memory UI caches first. Clear drafts/private caches on logout, expiry and account change; reject late responses through the existing transport generation/expected-account protections. Durable cross-device history lives on the server, not in browser password storage. Do not introduce permanent free-text message storage in localStorage to make the list appear fast.
 
-Do not retain fast SHA-256 for new password storage, reduce security parameters merely to fit Free CPU, write custom cryptography, or add a paid/external service silently. If an appropriate local password verifier is not viable, present concrete alternatives (for example managed authentication or passkeys) and their migration/cost implications before activating new password storage. The secure-cookie migration can be assessed independently, but Batch 6 must not conceal an unresolved password-storage limitation.
+Bind authorship, role, participants and recipients on the server. Deny cross-user access and arbitrary participant addition. Current admin authority and recent authentication protect consequential ownership changes. Normal support replies do not demand a password repeatedly.
 
-## Migration, rollout and rollback
+Account deletion removes that account's private channel/free-text content and participation, clears client state and leaves other parties' private channels protected. Keep the minimal reviewed identity-operation audit under existing rules. A deleted participant or changed owner makes a pending transfer stale and requires review; deletion must not auto-approve it. Define these cleanup writes in the account-deletion integration and test lost responses.
 
-1. Record current startup, authenticated-request and D1 costs. Verify sessions/password feasibility, indices, environment/binding headroom and final user choices before building the complete feature batch.
-2. Build backward-compatible schema and modules locally/isolated preview, then integrate the complete request/reply/resolve and session/account journeys. Use additive migrations, not production data rewrites.
-3. Perform a short higher-effort security/correctness review before auth activation. No real claim transfer, password reset, email or notification is manufactured against clinicians for testing.
-4. Stage the compatible server verifier before the new client. Initially allow a bounded legacy-password-to-cookie exchange for existing signed-in clients. Remove stored browser passwords only after a valid cookie session is established; clear in-memory copies and stop including them in routine bodies. Avoid an authentication-loop failure if exchange fails.
-5. Gate compatibility by an explicit migration window. Old cached clients must get a clear update/sign-in path when legacy routine authentication closes. Do not silently keep password-in-every-request forever or automatically fall back to it after cookie revocation.
-6. Preserve existing invitation and phone-feed behavior, settings and private export tokens. Existing Postmark invitations are not a reason to send new categories of mail.
-7. Verify a real signed-in Safari/iPhone journey with the new assets actually loaded, not just static HTTP success or a warm old page. Add cache versioning and a full startup/import check to prevent a repeat of the missing clock import incident.
-8. Observe normal traffic and roll back an independent feature boundary if necessary. Schema remains additive. An emergency rollback must not restore invalid sessions or silently regress to plaintext browser password persistence after credentials have been migrated. Retain a session-compatible rollback release before closing legacy authentication.
+Keep old reports inspectable. Convert only clearly identified legacy identity reports with a stable deduplication reference and preserved provenance; unknown source/canonical person stays unknown. Do not convert old free text into ownership proof or treat the old hard-coded MMC label as reliable. Ordinary parser reports remain in their existing location. No broad roster/history migration is needed.
 
-## Acceptance
+## Deliverable 5 — notifications without background traffic growth
 
-- User: clear match still automatically opens their own calendar; contested match creates one durable request; replies, unread state and resolution persist across devices.
-- Admin: correct scoped list/detail, term/grade evidence, reviewed correction/transfer/rejection, preserved reason/history and safe reversal. Duplicate accounts are reviewed rather than automatically merged.
-- Authorization: deny cross-user threads, forged authors, stale previews, CSRF, session fixation, expired/revoked sessions, role changes and shared-browser cache leakage. Admin viewing never impersonates the target for authorization.
-- Lifecycle: existing and new signup/login, invite acceptance, password change, explicit logout, other-device revocation, browser restart, expiry, offline/resume, failed renewal and parallel tabs. Private subscription URLs remain compatible, and ownership changes invalidate the right feeds.
-- Delivery: source rosters, historical grades and personal custom data remain correct. Identity publication failures retain honest state without exposing revoked content.
-- Cost: indexed reads only; no work while typing; no new global polling, per-render writes, whole-table count loops, repeated hash work or roster scans. Measure at least representative 100- and 500-user traffic envelopes plus native cold/warm auth and request workloads. Respect all existing D1 admission/receipt protections and Free-plan constraints.
-- Startup: exercise the actual imported browser dependencies and a cold signed-in startup, both calendar and On shift, plus the new request view. One inbox failure must not blank the application.
+Use a small unread badge on Account and the admin Requests section only when needed. Counts derive from the compact recipient summary, not conversation recounts on login or every calendar request.
 
-## User choices and effort
+Refresh the summary on sign-in, a genuine return to the app and opening the relevant account/request surface. Prefer adding the summary to an existing coalesced status/context response where its measured cost fits, rather than introducing a separate frequent request. Keep the calendar's first paint independent. If a separate summary call is necessary, perform it asynchronously after paint, coalesce identical calls and apply a short freshness window.
 
-- Confirmed: identity requests and admin support.
-- Confirmed: keep ownership unchanged during review; no temporary dual-access feature in this batch.
-- Clarified: work uses a personal Citrix desktop; do not classify it as a shared browser or impose the earlier 16-hour cap solely because it is at work.
-- Confirmed: remembered-device policy, 30 days of inactivity with a 180-day outer reauthentication limit; same persistence choice for personal devices and personal Citrix browsers.
-- Technical gate tested: Argon2id at 19 MiB/two passes used 124 and 142 ms of native CPU; PBKDF2 SHA-256/600,000 and SHA-512/220,000 were rejected by the runtime's 100,000-iteration ceiling. See `password-feasibility-2026-10-15.md` and its sanitized native evidence. Do not weaken settings or treat HTTP 200 as CPU acceptance.
-- Confirmed architecture direction: remain on Cloudflare Free; Supabase for migrated password authentication/fallback and passkey evaluation. The user created `roster-to-calendar-auth` on Supabase Free in Sydney (`ap-southeast-2`), project `nncmejyfkujpfuivlart`, verified in Safari on 16 October. Do not use the earlier Mumbai project.
-- Credential handling: the user replaced/revoked the exposed default key. The replacement is saved as encrypted `ROSTER_AUTH_CONFIG`, disabled. The superseded revoked config was retained under `ROSTER_AUTH_CONFIG_REVOKED` because the dashboard cannot directly overwrite concealed values. Read-only and synthetic account tests passed; the temporary Workers and synthetic accounts were removed. Never emit entire credential-bearing accessibility states, even with a redaction regex.
-- Email proof: existing app password possession is not proof of email ownership. Public provider settings show email autoconfirm is off. The migration foundation creates an unconfirmed provider account and refuses credential retirement until verified provider proof is available. Configure and test confirmation/recovery delivery using synthetic accounts before any clinician migration. Do not silently mark legacy emails verified.
-- Passkeys: Supabase currently documents native registration/sign-in APIs, but labels them experimental. Keep password fallback independent; verify actual project support, client version and real iPhone/Android/Citrix journeys before enabling an optional passkey prompt. Do not introduce a separate WebAuthn implementation by default.
+Only fetch lists/messages when their revision changed or the user explicitly opens an uncached page. Preserve draft/focus/scroll and skip unchanged repaint/storage writes. Do not add a periodic message poll, per-keystroke search query, message work to contact fingerprints, or inbox work to every calendar request. Continuously open views receive new content on the agreed open/foreground/sign-in checks; real-time chat delivery is outside scope.
 
-Use **Medium** for implementation against this plan, with a focused **High** review of authentication, access transitions and migration before production activation. Light/Low suits later wording/layout adjustments, not the account/session migration. Extra High is not required for the routine implementation pass.
+Decision notifications become visible only after the decision is durable. A later publication failure remains a separate retriable job, not a reason to repeat a successful transfer or declare an uncertain transfer successful.
 
-The iPhone displaced bottom bar, natural MCH update observation and MMC next-term source availability remain separate tracked follow-ups; do not silently mix provider or mobile navigation changes into this authentication batch.
+## Implementation and release sequence
 
-## Primary references checked
+Proceed as one coordinated remaining feature release, with independent enable/stop controls for support requests and consequential ownership mutations:
 
-- OWASP session management: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
-- OWASP password storage: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-- Cloudflare Web Crypto: https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
-- Cloudflare Workers limits: https://developers.cloudflare.com/workers/platform/limits/
+1. **Prove the sensitive boundary early:** implement/test the small guarded ownership-commit path against native D1 using synthetic data. Measure the real supported scope before investing in UI polish. If preparation exceeds Free CPU, use the existing external preparation runner and keep a small server-verified atomic commit; do not split an ownership transfer into unsafe partial commits or weaken guards.
+2. **Build the complete request feature:** indexed persistence/APIs, session-bound transport, private user/admin list/detail/reply UI, unread summaries and scoped legacy-report/lifecycle integration.
+3. **Connect reviewed resolution:** composable identity/claim transaction, case/version/idempotency guards, exact-scope preview, durable decision messages and affected publication/reversal behavior.
+4. **Review, test and release together:** focused higher-effort review of authority/privacy/transfers, one coordinated test/cost pass, additive production migration, deployment with gates off, bounded synthetic live acceptance, enable the accepted features and verify normal calendar/login/On shift behavior.
 
-These references support the security/platform constraints; session durations and UI defaults are product proposals, not requirements quoted from OWASP.
+No per-button approval cycle or code change is needed to repeat already accepted password/passkey migration. Do not reset real users, transfer clinician claims, contact real staff or send emails as artificial tests. Exercise identity changes with isolated synthetic people/claims; use the owner and disposable accounts only for approved live support journeys. Stop before production activation if security or measured D1/CPU gates fail.
 
-## Session implementation checkpoint — 16 October
+## Acceptance: Batch 6 is complete when
 
-- Prepared migration 0046 creates indexed hashed-token sessions; role/password changes and account deletion revoke access, and a database trigger prevents legacy clients restoring retired weak password hashes. No live migration applied.
-- The gated session endpoint supports password authentication for exact provider identities, status, logout, recent reauthentication, signing out other devices and explicit foreground activity renewal. Admission must use a staged `AUTH_LOGIN_LIMITER` binding before D1/provider password work; missing binding fails closed. Production Pages binding availability/configuration is not yet accepted.
-- Session cookies are host-only, Secure, HttpOnly, SameSite=Lax. All session POSTs require an exact HTTPS Origin; no credentialed wildcard CORS. Existing state/calendar routes accept verified cookies while retaining Creator as actor and current account/claim checks. Invalid cookies never fall back to body passwords. Public/contact capability paths retain their existing early gates.
-- Inactivity renewal is coalesced to at most one successful update per six hours and only called by the explicit activity endpoint. Normal account/status/calendar/contact reads never renew. Tokens remain stable across parallel tabs and lost renewal responses; fresh authentication replaces the token, and security changes revoke it. This refines the earlier unspecified periodic rotation/grace proposal: no silent periodic token rotation is introduced. Authentication/180-day deadlines never slide.
-- The existing-account coordinator verifies the old password before reserving a stable UUID. A lost provider response resumes by exact UUID; no email-based password reset/overwrite. Email confirmation plus provider password proof are both required before transactional hash retirement. Delivery readiness and a finite migration deadline are separate closed gates.
-- Local suites pass for these behaviors and existing signup/access/startup containment. These are server-side integrations: browser transport/storage removal, complete signup/invite/recovery/password-change/deletion journeys, real email delivery, full native session/D1/browser acceptance and the focused security review remain required before rollout. Messages/requests UI and passkey evaluation remain separate unimplemented Batch 6 scope.
+- A contested name creates one durable request and changes no ownership while pending; a normal support request also works end to end.
+- User and admin can read/reply/resolve/reopen across sessions/devices, with correct audience/privacy, stable drafts, accurate unread state and no irrelevant empty badges.
+- A reviewed correction/transfer commits exactly once, survives response loss, rejects stale/concurrent changes, preserves unrelated data/history and can be safely reviewed for reversal.
+- Old server access/feed scope is invalidated; the correct replacement views publish through current bounded jobs. An interrupted publication cannot repeat the transfer or leak revoked content.
+- Negative tests deny forged actors/recipients, cross-party channels, admin-viewed-account confusion, revoked sessions, CSRF, stale previews and duplicate submissions. Deletion and role changes are covered.
+- The real complete app imports/starts and calendar/On shift remain usable when request APIs fail. Changed messages do not trigger unrelated calendar/contact rebuilds.
+- Native representative cold/warm interactive requests meet the Free CPU target. Normal list/detail paths are small; ownership transactions retain explicit statement/row budgets and existing account-wide admission. Use indexed query-plan/row-cost tests at representative 100/500-account scale, including a large historical message set. Unchanged render/input/summary checks add no writes, no global scan and no polling loop.
+- Record migrations, source/deployment, exact enabled scope, actual costs, synthetic cleanup and rollback. A stop switch for requests must not disable authentication or undo committed identity decisions; schema and pending publication jobs remain recoverable.
 
-## Connected implementation checkpoint — 16 October
+## Effort and remaining decisions
 
-Browser cookie transport, email confirmation/recovery, strong signup/invitations, password change, other-device revocation and durable provider deletion are now implemented together locally. The private admission Worker is staged; the production app/config remains disabled and unmodified. Native synthetic provider lifecycle passed. After focused context optimizations, the final 100-user/200-request test had no failures; 28 sampled traces were 0–9 ms, and ordinary context reads used at most four rows/no writes. These are bounded synthetic results, not full production/device acceptance.
+**Medium** is appropriate for implementation against this consolidated plan. Use a focused **High** review for the ownership/privacy/transaction boundary before activation. Low suits subsequent isolated wording/layout fixes. There is no need to repeat the completed authentication redesign or keep all routine implementation on High.
 
-See `supabase-authentication-preparation-2026-10-16.md` (latest checkpoint) and sanitized `supabase-authentication-connected-2026-10-16.json` for exact scope, test coverage, removed disposable resources and remaining gates. Next connected batch: verify actual email allowance/delivery, focused High security review, browser/roster-backed acceptance, explicit canary/rollback and Free-provider inactivity handling. Do not activate global migration in lieu of these steps. Messaging/disputes and passkeys remain later Batch 6 work.
+No new provider, paid tier, email approval or material product decision is required with these defaults. Privacy is tightened to separate admin/private channels. If live chat, temporary dual access, email recovery/notifications or merging private account data is requested later, treat it as separate scope and obtain the relevant decisions.
 
-## User policy update: seamless signup and migration
-
-Mandatory confirmation emails are removed from scope. The user's explicit decision is: all new password credentials go directly to Supabase; existing users migrate on successful password login without email interruption; optional passkeys for new and existing users follow soon. Preserve roster ownership/settings/feed identifiers. Supabase preconfirmation is a server provisioning step, not mailbox ownership evidence. Postmark allowance/delivery is not a dependency of signup or migration; recovery/invitations remain separate optional journeys. Review recovery under this trust model before enabling it. Seamless code and local regression tests are prepared; production activation still requires the focused security review and staged browser acceptance.
-
-## Rollout safeguards implementation checkpoint
-
-Medium implementation now includes an explicit migration admission flag, optional named cohort, migration-only pause, cold returning-login compatibility after cohort changes and prevention of fresh weak credentials/password updates through old state routes. `authentication-rollout-2026-10-16.md` records a concrete staged deployment/rollback sequence and the remaining High review, real-provider HTTPS/native cost and phone/Citrix acceptance. Connected transport/API/SQLite journeys and synthetic Safari login/reload/account/logout checks pass; production remains disabled. Optional email delivery is not a prerequisite of this password rollout.
-
-## Focused High review completed — 17 October
-
-See `authentication-security-review-2026-10-17.md` for findings, fixes, evidence and the connected Medium staging batch. Credential versions/pending operations close password-change and legacy-compatibility races; expected-account assertions and intent fences protect cross-tab switching; old reset/invitation links are retired; provider-incompatible existing passwords have an inline no-email upgrade. Native D1 trigger-count semantics were corrected and the isolated native revocation probe passed. Migration 0049 is now part of staged deployment. No production activation or staff changes occurred. The High review is complete; Medium is appropriate for real-provider/HTTPS/full-route/device acceptance and the scoped rollout, including already-open-client compatibility. No further plan rewrite or repeated High review is required absent a new security finding.
-
-## General activation checkpoint — 18 October
-
-General Supabase password migration and new-user signup are live, source `dc368746`, deployment `598752f6`. Existing accounts migrate on successful password proof, including compatible client login restoration; ordinary state/calendar reads do not perform provider work. No mandatory mail flow was enabled. Legacy non-cookie state compatibility is bounded through 20 October at 11:00 am Melbourne time. Preserve secure cookie verification during any migration pause. See `authentication-rollout-2026-10-16.md` and `authentication-general-acceptance-2026-10-18.json` for actual acceptance and cleanup evidence. Physical iPhone autofill auto-submission remains a usability follow-up. Real returning/new staff observations remain to be collected as staff use the app; synthetic acceptance does not claim those human journeys.
-
-The next passkey phase is not enabled. The live Sydney project has the BETA option available but off. Official documentation checked on 18 October requires an existing confirmed, non-anonymous signed-in account for registration and calls the API experimental. The user has been asked whether the first release should add optional passkeys after password signup/login, prioritise requests/support instead, or investigate passkey-only signup alternatives. No new WebAuthn implementation, provider toggle, credential or paid plan was introduced. This product decision is distinct from the existing approval for seamless password migration. Identity requests/support conversations and ownership-review UI remain unimplemented.
-
-### Passkey product decision, 18 October
-
-Optional setup after explicit login when no key exists, with an account-wide “Don’t remind me again” checkbox. The prompt explains that Account settings allow later setup. Account settings also restore reminders. Password sign-in remains available. Provider activation and connected acceptance are complete; owner real-device acceptance remains; this does not alter the remaining messaging/request scope.
+Separate remaining batches retain their original order: 7, 3, 4, 5, 8. The displaced iPhone bottom bar, broader diagnostics/retries, Casey ingestion and reporting requirements are not silently absorbed into Batch 6.

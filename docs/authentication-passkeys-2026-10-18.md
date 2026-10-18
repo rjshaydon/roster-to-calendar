@@ -1,6 +1,6 @@
 # Optional passkeys — 18 October 2026
 
-Status: optional passkeys are active in production following explicit user approval. All 20 connected Supabase acceptance checks passed; the exact synthetic account and provider credentials were removed. Owner Safari/Home Screen Face ID acceptance remains. Password sign-in and general migration remain active. The additive reminder preference migration is applied; disposable native test resources are deleted.
+Status: optional passkeys are active in production following explicit user approval. All 20 connected Supabase acceptance checks passed; the exact synthetic account and provider credentials were removed. The owner subsequently reported “That works” after the requested device check; device acceptance is recorded as user-reported. Password sign-in and general migration remain active. The additive reminder preference migration is applied; disposable native test resources are deleted.
 
 ## Approved behavior
 
@@ -48,8 +48,10 @@ All **20 connected checks passed** on 18 October at 11:37 am Melbourne: no-email
 
 After cleanup: **60 accounts, one migrated, zero synthetic accounts remaining, zero pending credential changes**. General migration is enabled for everyone; remaining accounts upgrade only on a future successful password login. No staff account, roster, claim or feed was altered by acceptance testing. No email was sent.
 
-### Owner device check remaining
+### Owner device check and acceptance
 
 Reload once to receive the current options. In the owner app use **Admin → Account → Passkeys → Add a passkey**, or sign out and back in with a password to receive the optional setup prompt. The owner must complete the native credential/biometric prompt. After enrollment, sign out and choose **Sign in with a passkey**. Repeat from the iPhone Home Screen app. Password sign-in stays available throughout.
 
 If passkey provider acceptance regresses, set only `passkeysEnabled:false`; preserve password/session verification and migrated credentials. Native CPU evidence above is component evidence; connected acceptance does not independently measure whole-route CPU.
+
+The owner subsequently confirmed that the requested passkey flow works. This closes the owner device acceptance item without claiming independent coverage of every browser/OS/device.
