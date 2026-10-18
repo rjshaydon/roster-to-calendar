@@ -7,7 +7,7 @@ const classes=(...initial)=>{const set=new Set(initial);return{contains:x=>set.h
 let mobile=true,focuses=0,resets=0;
 const loginEmail={value:'',focus(){focuses++;}},loginPassword={value:''},loginForm={classList:classes()};
 const entrancePage={classList:classes('hidden')};
-const context={loginAutofillSubmit:{reset(){}},currentUserEmail:'',normalizeEmail:s=>String(s).trim().toLowerCase(),entrancePage,loginForm,loginEmail,loginPassword,
+const context={passkeyUI:{loginAvailable(){}},loginAutofillSubmit:{reset(){}},currentUserEmail:'',normalizeEmail:s=>String(s).trim().toLowerCase(),entrancePage,loginForm,loginEmail,loginPassword,
  setEntranceTab(){},forceConsoleSkin(){},clearLoginPasswordUpgrade(){resets++;},localStorage:{getItem(){return null;}},STAY_LOGGED_IN_PREFERENCE_KEY:'fixture',stayLoggedIn:{checked:false},
  document:{querySelector(){return null;}},loginTabButton:null,createTabButton:null,appShell:{classList:classes()},mobileActionBar:{classList:classes()},
  accountTransport:{options:async()=>({recovery:false})},setTimeout:fn=>fn(),isMobileLayout:()=>mobile};
@@ -103,7 +103,7 @@ console.log('Recent-auth dialog passed explicit confirmation, empty-password ref
 // UI visible, making status checks silently stop before reaching the server.
 {
  let hint=true,workspaceVisible=false,forgotten=0;const noop=()=>{},field={value:'',classList:{contains:()=>true,remove(){}}};
- const context={performance:{now:()=>1},currentUserEmail:'fixture@example.test',OWNER_EMAIL:'fixture@example.test',OWNER_DOCTOR_KEY:'FIXTURE',
+ const context={passkeyUI:{afterLogin(){}},performance:{now:()=>1},currentUserEmail:'fixture@example.test',OWNER_EMAIL:'fixture@example.test',OWNER_DOCTOR_KEY:'FIXTURE',
   beginFacilityOverviewAccountSession:noop,cancelScheduledCloudStateSave:noop,clearActiveViewedAccountState:noop,ensureLocalAccountLogin:noop,normalizeEmail:s=>String(s).toLowerCase(),setActiveCalendarContext:noop,primeInsightsAccessForCurrentView:noop,
   beginCalendarTransition:()=>({}),calendarTransitionStillCurrent:()=>true,localStorage:{setItem(){}},CURRENT_EMAIL_KEY:'email',STAY_LOGGED_IN_PREFERENCE_KEY:'remember',forceConsoleSkin:noop,setStatus:noop,setEntranceStatus:noop,
   accountCalendarContextForEmail:()=>({}),loadCachedCalendarSnapshotForContext:()=>null,restoreCloudState:async()=>({}),

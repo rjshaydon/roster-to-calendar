@@ -21,8 +21,8 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
   async function auth(body,options={}){
     const lease=generation;
     const payload={...body};
-    if(hint&&['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary','migrationAccounts'].includes(body.action))payload.expectedAccount=hint.email;
-    const response=await fetchImpl('/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
+    if(hint&&(options.passkeys||['status','activity','logout','changePassword','signOutOtherDevices','retryAuthenticationDeletion','reauthenticate','migrationSummary','migrationAccounts'].includes(body.action)))payload.expectedAccount=hint.email;
+    const response=await fetchImpl(options.passkeys?'/api/auth/passkeys':'/api/auth/session',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),...(options.signal?{signal:options.signal}:{})});
     responseLeases.set(response,lease);
     if(lease===generation&&hint&&[401,403].includes(response.status)){
       const data=await response.clone().json().catch(()=>null);
@@ -42,12 +42,12 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     }
     return changedResponse();
   }
-  async function explicitAuth(body,persistent){
+  async function explicitAuth(body,persistent,ceremony){
     const intent=++authIntent,lease=++generation;
     authenticationPending=intent;
     try {
       if(logoutPromise){await logoutPromise.catch(()=>{});if(intent!==authIntent||lease!==generation)return changedResponse();}
-      let response=await auth(body);
+      let response=ceremony?await ceremony(()=>intent===authIntent&&lease===generation):await auth(body);
       if(['signup','login'].includes(body.action)&&response.status===202){
         if(intent!==authIntent||lease!==generation)return changedResponse();
         const prepared=await response.clone().json().catch(()=>null);
@@ -120,6 +120,15 @@ export function createAccountTransport({ fetchImpl = (...args) => fetch(...args)
     forget(){authIntent++;generation++;authenticationPending=0;hint=null;validated=false;removeHints();},
     responseCurrent:response=>!responseLeases.has(response)||responseLeases.get(response)===generation,
     options:()=>optionsPromise||=(async()=>{try{const r=await fetchImpl('/api/auth/session?options=1',{credentials:'same-origin'});const data=await r.json();upgradeAvailable=data.enabled===true;cohortRollout=data.cohortRollout===true;return data;}catch{return{enabled:false};}})(),
+    passkeyAccount:(action,fields={})=>auth({...fields,action},{passkeys:true}),
+    passkeySignIn:(runCeremony,remember)=>explicitAuth({action:'passkey'},remember,async current=>{
+      const start=await auth({action:'startSignIn',remember:remember===true},{passkeys:true});
+      if(!current())return changedResponse();if(!start.ok)return start;
+      const data=await start.json();if(!current())return changedResponse();
+      const credential=await runCeremony(data.options);
+      if(!current())return changedResponse();
+      return auth({action:'finishSignIn',challengeId:data.challengeId,credential},{passkeys:true});
+    }),
     requestRecovery:email=>auth({action:'requestRecovery',email}),
     completeEmail:body=>auth({action:'completeEmail',...body}),
     changePassword:(currentPassword,newPassword)=>explicitAuth({action:'changePassword',currentPassword,newPassword},hint?.persistent===true),

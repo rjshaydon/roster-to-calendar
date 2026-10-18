@@ -77,7 +77,8 @@
     "test:external-identity-audit": "node --no-warnings scripts/test-external-identity-audit.mjs",
     "test:identity-audit-checkpoints": "node --no-warnings scripts/test-identity-audit-checkpoints.mjs",
     "test:doctor-calendar-artifacts": "node --no-warnings scripts/test-doctor-calendar-artifacts.mjs",
-    "test:authentication-journey": "node --no-warnings scripts/test-authentication-journey.mjs"
+    "test:authentication-journey": "node --no-warnings scripts/test-authentication-journey.mjs",
+    "test:passkeys": "node --no-warnings scripts/test-account-passkeys.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

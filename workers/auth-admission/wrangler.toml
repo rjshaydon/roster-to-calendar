@@ -10,3 +10,10 @@ namespace_id = "2026101601"
 [ratelimits.simple]
 limit = 5
 period = 60
+
+[[ratelimits]]
+name = "PASSKEY_RATE"
+namespace_id = "2026101801"
+[ratelimits.simple]
+limit = 60
+period = 60

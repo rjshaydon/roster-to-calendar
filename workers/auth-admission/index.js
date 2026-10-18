@@ -6,8 +6,11 @@ export default {async fetch(request,env){
   const reader=request.body?.getReader();let text='';
   if(!reader)return new Response(null,{status:400});
   try{let bytes=0;const decoder=new TextDecoder();while(true){const n=await reader.read();if(n.done)break;bytes+=n.value.byteLength;if(bytes>100){await reader.cancel();return new Response(null,{status:413});}text+=decoder.decode(n.value,{stream:true});}text+=decoder.decode();}finally{reader.releaseLock();}
-  if(!/^login:[a-f0-9]{64}$/.test(text))return new Response(null,{status:400});
-  if(!env.LOGIN_RATE?.limit)return new Response(null,{status:503});
-  const {success}=await env.LOGIN_RATE.limit({key:text});
+  if(!/^(login|passkey):[a-f0-9]{64}$/.test(text))return new Response(null,{status:400});
+  // Password admission stays per account at five/minute. Anonymous passkey
+  // ceremonies share a hospital's public IP, so use a separate bounded bucket.
+  const limiter=text.startsWith('passkey:')?env.PASSKEY_RATE:env.LOGIN_RATE;
+  if(!limiter?.limit)return new Response(null,{status:503});
+  const {success}=await limiter.limit({key:text});
   return new Response(null,{status:success?204:429,headers:{'Cache-Control':'no-store'}});
 }};

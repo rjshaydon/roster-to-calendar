@@ -142,6 +142,7 @@ export async function onRequest(context) {
 }
 
 async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput, derivedInput) {
+  if(pathname==='/api/auth/passkeys')return 8;
   if(pathname==='/api/automation/identity-audit'||pathname==='/api/automation/subscription-build') return 96;
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
     if (identityMaintenanceInput === null) return 64;

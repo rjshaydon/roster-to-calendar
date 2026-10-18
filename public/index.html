@@ -11,7 +11,7 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icons/roster-arrow-192.png" type="image/png">
     <link rel="apple-touch-icon" href="/icons/roster-arrow-180.png">
-    <link rel="stylesheet" href="/static/styles.css?v=20261017-autofill-signout2">
+    <link rel="stylesheet" href="/static/styles.css?v=20261018-passkeys">
   </head>
   <body data-skin="console">
     <div id="loadingScreen" class="loading-screen" role="status" aria-live="polite">
@@ -64,6 +64,7 @@
             </label>
             <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox"> Keep me signed in on this device</label>
             <button type="submit" class="button button-primary">Log in</button>
+            <button id="passkeySignIn" type="button" class="button button-secondary hidden">Sign in with a passkey</button>
             <button id="requestPasswordRecovery" type="button" class="button button-secondary hidden">Forgot password?</button>
           </form>
 
@@ -465,6 +466,21 @@
       </button>
     </div>
 
+    <dialog id="passkeyDialog" class="passkey-dialog" aria-labelledby="passkeySetupTitle">
+      <form id="passkeySetupForm" method="post">
+        <h2 id="passkeySetupTitle">Add a passkey?</h2>
+        <p>Sign in with Face ID, a fingerprint, your device PIN or a security key. This is optional; your password will still work.</p>
+        <p>You can add a passkey later from Account settings.</p>
+        <label class="field" hidden><span>Current password</span><input id="passkeySetupPassword" type="password" autocomplete="current-password" placeholder="Confirm it’s you"></label>
+        <label class="toggle"><input id="passkeySuppressReminder" type="checkbox"> Don’t remind me again</label>
+        <p id="passkeySetupStatus" role="status" aria-live="polite"></p>
+        <div class="modal-actions">
+          <button type="button" class="button button-secondary" id="passkeyNotNow">Not now</button>
+          <button type="submit" class="button button-primary">Add passkey</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="appDialog" class="modal hidden" aria-hidden="true">
       <div class="modal-backdrop" data-close-app-dialog></div>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
@@ -723,6 +739,6 @@
         }
       }
     </script>
-    <script type="module" src="/static/app.js?v=20261017-admin-switcher"></script>
+    <script type="module" src="/static/app.js?v=20261018-passkeys"></script>
   </body>
 </html>

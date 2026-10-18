@@ -1,3 +1,4 @@
+import {boundedBody,admit} from '../../_lib/authentication-request.js';
 import {authenticationSettings} from '../../_lib/authentication-settings.js';
 import {applyCredentialChange,beginCredentialChange} from '../../_lib/account-credential-change.js';
 import {loadAuthenticationLink} from '../../_lib/authentication-migration.js';
@@ -16,43 +17,6 @@ import {
 const headers = { 'Cache-Control': 'no-store', 'Vary': 'Cookie' };
 function reply(body, status = 200, setCookie) {
   return Response.json(body, { status, headers: { ...headers, ...(setCookie ? { 'Set-Cookie': setCookie } : {}) } });
-}
-
-async function boundedBody(request) {
-  if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) {
-    throw new AuthenticationError('auth-request', 'A JSON request is required.', 400);
-  }
-  const reader = request.body?.getReader();
-  if (!reader) throw new AuthenticationError('auth-request', 'Invalid request.', 400);
-  let length = 0; const chunks = [];
-  try {
-    while (true) {
-      const next = await reader.read(); if (next.done) break;
-      length += next.value.byteLength;
-      if (length > 8192) { await reader.cancel(); throw new AuthenticationError('auth-request', 'Request is too large.', 413); }
-      chunks.push(next.value);
-    }
-    const bytes = new Uint8Array(length); let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    try { const body = JSON.parse(new TextDecoder().decode(bytes)); if (!body || Array.isArray(body) || typeof body !== 'object') throw Error(); return body; }
-    catch { throw new AuthenticationError('auth-request', 'Invalid request.', 400); }
-  } finally { reader.releaseLock(); }
-}
-
-
-async function admit(env,identity) {
-  if (!env.AUTH_LOGIN_LIMITER?.limit && !env.AUTH_LOGIN_LIMITER?.fetch) throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
-  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity));
-  const key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');
-  // A service binding synthesizes truthy RPC methods for arbitrary names.
-  // Prefer its explicit fetch API; probing .limit first invokes a nonexistent
-  // remote method instead of the service's native-limiter HTTP adapter.
-  if(env.AUTH_LOGIN_LIMITER.fetch){
-    const response=await env.AUTH_LOGIN_LIMITER.fetch('https://admission.internal/check',{method:'POST',body:'login:'+key});
-    if(response.status===204)return;
-    if(response.status!==429)throw new AuthenticationError('auth-unavailable','Sign-in is currently unavailable. Please try again later.');
-  }else if((await env.AUTH_LOGIN_LIMITER.limit({key:'login:'+key}))?.success===true)return;
-  throw new AuthenticationError('auth-rate-limited','Too many attempts. Please wait before trying again.',429);
 }
 
 export async function onRequestPost(context) {
@@ -108,7 +72,12 @@ export async function onRequestPost(context) {
         catch(error) { if(error?.code!=='auth-session-expired')throw error; }
       }
       if (oldSession) await revokeAccountSession(db, oldSession);
-      return reply({ ok: true, email: issued.email }, 200, issued.setCookie);
+      const response=reply({ ok: true, email: issued.email }, 200, issued.setCookie);
+      if(authenticationSettings(context.env).passkeysEnabled===true){
+        const {passkeyLoginGrant}=await import('../../_lib/account-passkeys.js');
+        try { const grant=await passkeyLoginGrant(context.env,context.request,proof,issued);if(grant)response.headers.append('Set-Cookie',grant); } catch { /* Optional enrollment must never fail a valid login. */ }
+      }
+      return response;
     }
     if (action === 'logout') {
       // An expired/invalid cookie may always be cleared locally, but cannot
@@ -191,7 +160,7 @@ export async function onRequestPost(context) {
 export function onRequestGet(context) {
   if(new URL(context.request.url).searchParams.get('options')==='1'){
     let config;try{config=authenticationSettings(context.env);}catch{config={};}
-    const enabled=accountSessionsEnabled(context.env);return reply({enabled,cohortRollout:enabled&&Array.isArray(config.migrationEmails),recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
+    const enabled=accountSessionsEnabled(context.env);return reply({enabled,cohortRollout:enabled&&Array.isArray(config.migrationEmails),passkeys:enabled&&config.passkeysEnabled===true&&new URL(context.request.url).origin==='https://rtc.curiousmind.app',recovery:enabled&&config.emailDeliveryReady===true&&Boolean(context.env.POSTMARK_API_TOKEN)});
   }
   return reply({ error: 'Use POST for account requests.' }, 405);
 }

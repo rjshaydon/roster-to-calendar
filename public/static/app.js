@@ -1,6 +1,6 @@
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
 import { installPasswordAutofillSubmit } from './password-autofill-submit.js';
-import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261017-workspace-auth';
+import { createAccountTransport, AUTH_NOTICE } from './account-transport.js?v=20261018-passkeys';
 import {rosterTermAvailableFrom, melbourneDateKey as australianDateKey} from './roster-term-policy.js';
 import {coverageNoticeRanges, routineCalendarStatus} from './roster-coverage-notice.js';
 import { createRosterComparisonCache } from './roster-comparison-cache.js?v=20261014-final3';
@@ -333,6 +333,23 @@ const accountTransport = createAccountTransport({ persistentStorage: localStorag
   onAuthenticated: clearBrowserPasswordsAfterCookieAuthentication,
   onExpired: () => { void logoutCurrentUser({ expired: true }); },
 });
+let passkeyController=null,passkeyControllerPromise=null;
+const passkeyUI={
+  async controller(){
+    if((await accountTransport.options()).passkeys!==true||!globalThis.PublicKeyCredential||!navigator.credentials)return null;
+    return passkeyControllerPromise||=(import('./passkey-ui.js?v=20261018-passkeys').then(({installPasskeyUI})=>{
+      passkeyController=installPasskeyUI({transport:accountTransport,
+        email:()=>accountTransport.validated()?accountTransport.email():'',readResponse:readJsonResponse,escapeHtml,
+        confirm:showAppDialog,status:setEntranceStatus,
+        onSignIn:(email,remember)=>loginWithEmail(email,'',{mode:'login',stayLoggedIn:remember,passkey:true}),
+      });return passkeyController;
+    }));
+  },
+  async mount(){if(!accountsBody.querySelector('[data-passkey-settings]'))return;try{await(await this.controller())?.mount();}catch{}},
+  async loginAvailable(){try{await(await this.controller())?.loginAvailable();}catch{}},
+  afterLogin(){const actor=accountTransport.email();void this.controller().then(controller=>{if(actor===accountTransport.email()&&accountTransport.validated())controller?.afterLogin();}).catch(()=>{});},
+  reset(){passkeyController?.reset();},
+};
 function accountFetch(...args) { return accountTransport.fetch(...args); }
 function hasAccountAuthentication(password = currentUserPassword) { return Boolean(password || accountTransport.expected()); }
 function clearBrowserPasswordsAfterCookieAuthentication(email) {
@@ -12709,6 +12726,7 @@ function renderAccountsModal(options = {}) {
         <p data-account-session-status role="status" aria-live="polite" hidden></p>
       </form>
       `}
+      ${accountTransport.expected() && normalizeEmail(me.email) === authenticatedAccountEmail() ? '<details class="review-card create-user-card" data-passkey-settings hidden><summary class="review-top"><div><strong>Passkeys</strong><span>Optional Face ID, fingerprint or device sign-in.</span></div><span class="collapsible-chevron" aria-hidden="true">⌄</span></summary><div class="review-body" data-passkey-settings-body></div></details>' : ''}
       ${renderAccountHospitalLocationsCard({ directorPreference: currentNonClinical && currentDirectorViewEnabled && !doctorProfileView })}
       ${currentNonClinical && currentDirectorViewEnabled ? "" : linkedNames}
       ${ownerView || (currentNonClinical && currentDirectorViewEnabled) ? "" : renderFilesMarkup({
@@ -12872,6 +12890,7 @@ function renderAccountsModal(options = {}) {
     }
   }
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+  void passkeyUI.mount();
   if (ownerView && currentAdminTab === "users") { filterAdminUserCards(); syncAdminPermissionControls(); }
   if (ownerView && currentAdminTab === "users" && identityReviewExpanded) mountAdminIdentityReview();
   if (ownerView && currentAdminTab === "users") {
@@ -17269,6 +17288,7 @@ function openLoginModal(prefillEmail = currentUserEmail || "", {resetPassword=fa
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
   void accountTransport.options().then(options => document.querySelector('#requestPasswordRecovery')?.classList.toggle('hidden', options.recovery !== true));
+  void passkeyUI.loginAvailable();
   if(!preserveDraft&&!isMobileLayout())setTimeout(() => loginEmail.focus(), 0);
 }
 
@@ -17278,6 +17298,7 @@ function closeLoginModal() {
 }
 
 async function logoutCurrentUser(options = {}) {
+  passkeyUI.reset();
   rosterComparisonCache.clear();
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
@@ -17592,6 +17613,7 @@ async function loginWithEmail(email, password, options = {}) {
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
+    if(!options.passkey)passkeyUI.afterLogin();
     if (creatorStartupContainmentActive()) {
       finishContainedCreatorStartup({ transition, cachedSnapshot: cachedBeforeAuthentication }, loginStartedAt);
       return;

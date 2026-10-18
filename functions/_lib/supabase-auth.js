@@ -81,7 +81,7 @@ async function boundedJson(response) {
   } finally { reader.releaseLock(); }
 }
 
-async function providerRequest(env, path, { admin = false, method = 'POST', body, allowMissing = false, accessToken } = {}) {
+export async function providerRequest(env, path, { admin = false, method = 'POST', body, allowMissing = false, accessToken } = {}) {
   const config = supabaseAuthenticationConfig(env);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -108,6 +108,9 @@ async function providerRequest(env, path, { admin = false, method = 'POST', body
     if (response.status >= 500) {await response.body?.cancel();throw new AuthenticationError('auth-provider-unavailable', 'Sign-in is temporarily unavailable. Please try again later.');}
     const data = await boundedJson(response);
     if (!response.ok) {
+      if (path.includes('passkeys')) {
+        throw new AuthenticationError('auth-passkey-failed', 'Passkey verification could not be completed. Try again or use your password.', 400);
+      }
       if((data?.code==='weak_password'||data?.error_code==='weak_password'||Array.isArray(data?.weak_password?.reasons))
         &&(path==='user'||path.startsWith('admin/users'))){
         const error=new AuthenticationError('auth-password-policy','Choose a stronger password of at least 12 characters.',400);

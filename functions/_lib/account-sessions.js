@@ -77,7 +77,7 @@ export async function issueAccountSession(db, { email, subject, persistent = fal
       .bind(email, email, hash, MAX_SESSIONS - 1),
   ]);
   if (Number(results[0]?.meta?.changes) !== 1) throw expired();
-  return { setCookie: cookie(token, persistent, SESSION_IDLE_MS), email };
+  return { setCookie: cookie(token, persistent, SESSION_IDLE_MS), email, tokenHash: hash };
 }
 
 export async function readAccountSession(db, request, options = {}) {

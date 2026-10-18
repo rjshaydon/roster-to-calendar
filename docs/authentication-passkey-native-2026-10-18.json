@@ -1,0 +1,39 @@
+{
+  "at": "2026-10-18T00:10:07.171Z",
+  "from": "2026-10-18T00:09:10.000Z",
+  "until": "2026-10-18T00:09:30.000Z",
+  "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+  "credential": "existing-read-only-analytics",
+  "syntheticOnly": true,
+  "stages": [
+    {
+      "stage": "registration",
+      "requests": 6,
+      "medianCpuMs": 3,
+      "p95CpuMs": 5,
+      "maxCpuMs": 5
+    },
+    {
+      "stage": "status",
+      "requests": 6,
+      "medianCpuMs": 2,
+      "p95CpuMs": 2,
+      "maxCpuMs": 2
+    },
+    {
+      "stage": "issue",
+      "requests": 6,
+      "medianCpuMs": 1,
+      "p95CpuMs": 3,
+      "maxCpuMs": 3
+    },
+    {
+      "stage": "seed",
+      "requests": 1,
+      "medianCpuMs": 3,
+      "p95CpuMs": 3,
+      "maxCpuMs": 3
+    }
+  ],
+  "scope": "Native session/crypto components with synthetic provider-proof bytes; no Supabase authentication calls."
+}
