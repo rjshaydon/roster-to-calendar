@@ -30,10 +30,19 @@ Existing authentication foundation, sessions/coordinator/credential-race, accoun
 
 Native Cloudflare probe (disposable empty D1, synthetic provider-proof bytes, no Supabase calls), six requests per stage: session issuance plus encrypted grant max **3 ms CPU**; registration session/link checks plus decrypt/reseal max **5 ms**; status reads max **2 ms**. These are component costs, not a connected end-to-end provider acceptance result. Evidence is in `authentication-passkey-native-2026-10-18.json`.
 
+## Deployment checkpoint
+
+- Commit `b40c609b`, pushed to `main`.
+- Pages deployment `05cdfc04`, client `20261018-passkeys`, app passkey flag explicitly false.
+- Native admission service version `184721e9-4fb9-4143-8d65-1d451d29eae3`; password limit unchanged, separate anonymous passkey bucket prepared.
+- Production migration 0050 applied successfully (the only pending migration).
+- Live public options confirm general password migration/session support enabled, passkeys/recovery disabled, no named migration cohort. The new passkey endpoint refuses work while disabled.
+- Isolated complete-app mobile entrance smoke test passes with no startup errors; disabled passkeys do not download their lazy UI modules.
+- Disposable native Worker and database removed successfully; no synthetic provider account was needed for component tests.
+
 ## Remaining activation checks
 
-1. Confirm enabling Supabase passkeys with the exact RP values above, then save provider configuration.
-2. Apply the additive preference migration and deploy code with app passkey flag off first; verify normal password journey unchanged.
-3. Activate the app feature; run one bounded synthetic connected enrollment/sign-in/fallback/deletion journey. Remove its exact synthetic account and key.
-4. Ask the owner to enroll their own passkey and test actual Safari/Home Screen Face ID, optional dismissal and Account setup. Credential creation itself is a user action.
-5. Record provider/production deployment and acceptance results. If provider checks fail, turn off only passkeys; preserve password authentication and migrated credentials.
+1. Confirm enabling Supabase passkeys with the exact RP values above, then save provider configuration. Browser-control policy requires action-time confirmation for a new security-sensitive sign-in method; the confirmation question is pending.
+2. Activate only the app passkey feature; run one bounded synthetic connected enrollment/sign-in/fallback/deletion journey. Remove its exact synthetic account and key. The connected acceptance script is prepared and refuses to create an account while the app flag is off.
+3. Ask the owner to enroll their own passkey and test actual Safari/Home Screen Face ID, optional dismissal and Account setup. Credential creation itself is a user action.
+4. Record connected/real-device acceptance. If provider checks fail, turn off only passkeys; preserve password authentication and migrated credentials.

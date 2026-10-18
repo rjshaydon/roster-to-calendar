@@ -46,5 +46,21 @@ try{
  await page.evaluate(()=>{ui.reset();fixture.fail=true;ui.afterLogin();});await page.waitForTimeout(1600);assert.equal(await page.locator('#passkeyDialog').isVisible(),false,'provider failure must not show a misleading setup prompt');
  await page.evaluate(()=>{fixture.fail=false;ui.reset();ui.afterLogin();fixture.who='';ui.reset();});await page.waitForTimeout(1600);assert.equal(await page.locator('#passkeyDialog').isVisible(),false,'logout cancels a queued prompt');
  assert.deepEqual(errors,[]);await context.close();
+ // Smoke-test the actual complete app entrance as well, with the feature off.
+ // No credentials/profile are supplied and every request is intercepted.
+ const smoke=await browser.newContext({viewport:{width:390,height:844},isMobile:true});let disabledPasskeyModuleRequests=0;
+ await smoke.route('**/*',async route=>{
+  const url=new URL(route.request().url());if(url.origin!=='https://rtc.curiousmind.app')return route.abort();
+  if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:html});
+  if(url.pathname==='/api/auth/session')return route.fulfill({contentType:'application/json',body:JSON.stringify(url.search?{enabled:true,passkeys:false,recovery:false}:{code:'auth-session-expired'}),status:url.search?200:401});
+  if(url.pathname.startsWith('/api/'))return route.fulfill({contentType:'application/json',body:'{}',status:401});
+  if(!url.pathname.startsWith('/static/')&&!url.pathname.startsWith('/shared/')&&!url.pathname.startsWith('/icons/')&&url.pathname!=='/manifest.webmanifest')return route.abort();
+  if(url.pathname==='/static/passkey-ui.js'||url.pathname==='/static/passkeys.js')disabledPasskeyModuleRequests++;
+  try{const contentType=url.pathname.endsWith('.js')?'text/javascript':url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.png')?'image/png':'application/json';await route.fulfill({contentType,body:await readFile('public'+url.pathname)});}catch{await route.abort();}
+ });
+ const entrance=await smoke.newPage(),startupErrors=[];entrance.on('pageerror',e=>startupErrors.push(e.message));
+ await entrance.goto('https://rtc.curiousmind.app/');await entrance.locator('#loginEmail').waitFor({state:'visible'});
+ assert.equal(await entrance.locator('#passkeySignIn').isVisible(),false);assert.equal(disabledPasskeyModuleRequests,0,'disabled passkeys add no browser module downloads');assert.deepEqual(startupErrors,[],'full app boot must not fail after adding a lazy passkey controller');
+ await smoke.close();
  console.log('Isolated mobile browser passed: optional setup, account-wide dismissal, later Account setup, reminder re-enable, successful add, no reminder with a key, provider failure and logout suppression, no collapsed-panel fetch, no horizontal overflow. Screenshot in /tmp/roster-passkey-ui-20261018. No external requests or real credentials.');
 }finally{await browser.close();}
