@@ -289,3 +289,14 @@ fixture suite stops at an unrelated existing login-markup assertion at line 888;
 the On shift suite passes its server checks then stops at an existing startup
 coalescing assertion at line 177. Neither failure was changed as part of this
 label correction. No claim that these entire suites pass is made.
+
+Final Orientation release: `451e9483`, deployment
+`https://e240b49b.roster-to-calendar.pages.dev`. Safari confirmed a stale module
+export caused the intermediate reload failure; both entrypoint and parser import
+versions are now updated. Final reload completed normally. Live MMC On shift
+showed Orientation with eight 09:00–13:00 Intern entries on 19 October. Selecting
+2 November displayed the full Term 4 roster and Orientation containing Hieu HA
+09:00–13:00 alongside the separate 11:00–13:00 orientation allocation. This also
+completes the previously outstanding 2 November On shift visual check. Existing
+private subscription-output live verification remains unperformed; artifact tests
+pass. The orientation fix required no roster reimport or D1 row mutations.
