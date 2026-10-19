@@ -104,3 +104,39 @@ that live gate. Do not start other restoration batches before resolving it.
 
 The separate manual/automatic authority refinement remains planned, not implemented
 by this repair.
+
+
+## Write-efficiency follow-up, 19 October
+
+The original 80,000 ceiling was conservative rather than derived from measured
+uncertainty. Admission now starts from the Free allowance of 100,000 indexed
+writes and subtracts actual account usage, unsettled reservations, the ordinary
+rest-of-day forecast, and a disclosed uncertainty allowance. That allowance is
+one extra ordinary-traffic window (25-minute maximum analytics lag + 10-minute
+grant lifetime) at the measured ordinary rate, plus 256 writes for bounded
+admission/recovery bookkeeping. The existing 4M read ceiling, atomic shared
+reservations, stale-analytics rejection, unknown-work retention and cost-overrun
+stop remain. This is not permission to spend the entire account allowance on imports.
+
+For the reviewed `ROSTER_STAGING_REUSE_SOURCES` scope (currently MMC adults), the
+server negotiates a hash-pinned `presenceMode: cached`. New full imports advance
+the duplicate-presence cursor in one guarded transaction; incremental/reused
+staging omits daily-presence expansion and inspection. Existing pinned legacy
+jobs retain their original mode. Clinical event rows, compact term/grade facts,
+source/version ordering, invisible staging and atomic promotion remain intact.
+Existing daily-presence rows are retained for legacy recovery, not bulk deleted.
+
+The remaining live daily-presence reader in facility access now probes only
+active source files with applicable coverage and the exact file/doctor index.
+Its cached decision revision changes, and repeated access still costs one
+indexed cache read with no writes. Inactive staged rows cannot grant access.
+Comparison, On shift and subscription publication continue using their normal
+published caches. No frontend loading or contact refresh changes were introduced.
+
+Local verification includes both legacy and cached 4,320-event autosave/rebase
+journeys, rollback/lost response/supersession, current-term preservation, cached
+full imports with overnight/leave events, server rejection of unapproved mode,
+MMC/MCH real-fixture incremental clinical-fact parity, access scope/index/cache
+checks and shared-grant concurrency/recovery tests. Production acceptance follows
+only after a real Term 4 activation and publication; this section alone is not a
+claim that the missing roster has been restored.

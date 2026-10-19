@@ -3739,6 +3739,7 @@ async function resolveMaterializedFacilityOverviewAccess(db, record, claims, ter
   if (!claimPairs.length) return facilityAccessPreparing(today, startedAt);
   const subjectRevision = await sha256(JSON.stringify({
     version: FACILITY_ACCESS_VERSION,
+    presenceEvidence: 'active-file-events-v1',
     email,
     enabled: facilityOverviewEnabledForRecord(record),
     nonClinical: record?.nonClinical === true,
@@ -3794,9 +3795,14 @@ async function resolveMaterializedFacilityOverviewAccess(db, record, claims, ter
           ORDER BY term_start DESC LIMIT 1)
       `).bind(claim.sourceType, claim.doctorKey, today, term.startDate, term.startDate).first(),
       db.prepare(`
-        SELECT source_type, doctor_key FROM roster_daily_presence
-        WHERE doctor_key = ? AND date = ? AND source_type = ? LIMIT 1
-      `).bind(claim.doctorKey, today, claim.sourceType).first(),
+        SELECT e.source_type, e.doctor_key
+        FROM roster_files f INDEXED BY idx_roster_files_source_active
+        CROSS JOIN roster_file_coverage c ON c.file_id = f.id
+        CROSS JOIN roster_events e INDEXED BY idx_roster_events_file_doctor ON e.file_id = f.id
+        WHERE f.source_type = ? AND f.active = 1
+          AND c.coverage_start <= ? AND c.coverage_end >= ?
+          AND e.doctor_key = ? AND e.start_date <= ? AND e.end_date >= ? LIMIT 1
+      `).bind(claim.sourceType, today, today, claim.doctorKey, today, today).first(),
     ]);
     contributions.push(...(staffRows.results || []));
     if (smsRow?.seniority) smsMemberships.push(smsRow);

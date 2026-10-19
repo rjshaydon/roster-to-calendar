@@ -41,6 +41,10 @@ for(const [sourceId,path] of [['monash-adults','AdultTerm1.2026.xlsx'],['monash-
  desired.eventsByDoctor[key].push({...desired.eventsByDoctor[key][1],id:'new-occurrence'});
  desired.doctors.find(d=>d.key===key).seniority='Senior Registrar';
  const plan=await planRosterPatch(desired,baseline,stored),retry=await planRosterPatch(desired,baseline,stored);
+ const cachedPlan=await planRosterPatch(desired,baseline,stored,{presenceMode:'cached'});
+ assert.equal(cachedPlan.manifest.changedFacts,plan.manifest.changedFacts);
+ assert.ok(cachedPlan.batches.every(b=>b.entries.every(e=>e.kind!=='presence')));
+ assert.deepEqual(cachedPlan.batches.flatMap(b=>b.entries),plan.batches.flatMap(b=>b.entries).filter(e=>e.kind!=='presence'),'cached mode preserves every clinical and compact fact');
  assert.equal(plan.patchRevision,retry.patchRevision,'a resumed planner must produce identical hashes');
  assert.ok(plan.manifest.changedFacts<10);
  await call(()=>pinRosterPatchPlan(db,run,{manifest:plan.manifest,patchRevision:plan.patchRevision}));

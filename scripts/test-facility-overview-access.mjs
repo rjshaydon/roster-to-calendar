@@ -67,12 +67,16 @@ const sqlite = new DatabaseSync(":memory:");
 for (const name of (await readdir(new URL("../migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
   sqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
+sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
 const db = new TracedD1(sqlite);
 sqlite.prepare("INSERT INTO roster_files (id, name, source_type, active) VALUES ('access-file', 'Access.xlsx', 'mmc', 1)").run();
 sqlite.prepare(`INSERT INTO facility_term_staff_contributions
   (source_type, term_start, doctor_key, file_id, display_name, seniority, first_applicable_date, last_applicable_date)
   VALUES ('mmc', '2026-08-03', 'TEST DOCTOR', 'access-file', 'Test Doctor', 'HMO', '2026-08-03', '2026-11-02')`).run();
 sqlite.prepare("INSERT INTO roster_daily_presence (date, source_type, doctor_key, display_name, event_id) VALUES ('2026-08-25', 'mmc', 'TEST DOCTOR', 'Test Doctor', 'access-event')").run();
+sqlite.prepare("INSERT INTO roster_file_coverage(file_id,source_type,coverage_start,coverage_end) VALUES('access-file','mmc','2026-08-03','2026-11-02')").run();
+sqlite.prepare(`INSERT INTO roster_events(id,file_id,source_type,doctor_key,display_name,start_date,end_date,start_ts,end_ts,title,event_json)
+ VALUES('access-event','access-file','mmc','TEST DOCTOR','Test Doctor','2026-08-25','2026-08-25','','','Day','{}')`).run();
 const materializedOptions = { today: "2026-08-25", now: new Date("2026-08-25T01:01:00Z"), materializedOnly: true };
 const materializedFirst = await resolveFacilityOverviewAccess(db, account([claim("mmc")]), materializedOptions);
 assert.equal(materializedFirst.mode, "site");
@@ -80,7 +84,11 @@ assert.equal(materializedFirst.facilityKey, "MMC");
 assert.equal(materializedFirst.workingToday, true);
 assert.equal(materializedFirst.cache, "refreshed");
 assert.ok(new Date(materializedFirst.expiresAt).getTime() - materializedOptions.now.getTime() <= 15 * 60 * 1000, "access decisions must expire within 15 minutes");
-assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, "materialized access must never inspect roster_events");
+const presenceSql=db.sql.find(sql=>sql.includes('CROSS JOIN roster_events'));
+assert.ok(presenceSql,'one exact doctor/file probe replaces duplicate presence');
+assert.ok(!db.sql.some(sql=>sql.includes('roster_daily_presence')));
+const evidencePlan=sqlite.prepare('EXPLAIN QUERY PLAN '+presenceSql).all('mmc','2026-08-25','2026-08-25','TEST DOCTOR','2026-08-25','2026-08-25');
+assert.ok(evidencePlan.some(r=>r.detail.includes('idx_roster_events_file_doctor')&&r.detail.includes('doctor_key=?')),'event probe uses exact file/doctor index');
 db.sql = [];
 db.rowsWritten = 0;
 const materializedRepeat = await resolveFacilityOverviewAccess(db, account([claim("mmc")]), materializedOptions);
@@ -217,3 +225,10 @@ for(const options of [{}, {contacts:false}, {contact:{status:'unavailable',reaso
 const failure=onShiftHarness({roster:Promise.resolve().then(()=>{throw Error('Storage failure');})});
 assert.equal((await failure.run()).status,503,'existing roster failure response is preserved without retry');
 console.log('Shared On shift concurrency passed: independent reads overlap, no D1, no retries, unchanged access/expiry/failure paths and bounded DDH context.');
+
+// An inactive staged roster and leftover legacy index rows must never make
+// someone appear to be working. Inclusive overnight/end dates remain intact.
+sqlite.exec("DELETE FROM facility_access_sessions; UPDATE roster_events SET end_date='2026-08-26'");
+assert.equal((await resolveFacilityOverviewAccess(db,account([claim('mmc')]),{...materializedOptions,today:'2026-08-26'})).workingToday,true);
+sqlite.exec("DELETE FROM facility_access_sessions; UPDATE roster_files SET active=0 WHERE id='access-file'");
+assert.equal((await resolveFacilityOverviewAccess(db,account([claim('mmc')]),materializedOptions)).workingToday,false);

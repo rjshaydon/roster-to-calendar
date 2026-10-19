@@ -28,9 +28,9 @@ export async function reusableRosterStage(db,run,manifest) {
  return rows[0]?.file_id||'';
 }
 
-export async function beginRosterRebase(db,run,fileId,range) {
+export async function beginRosterRebase(db,run,fileId,range,cachedPresence=false) {
  const old=await db.prepare('SELECT * FROM roster_rebase_jobs WHERE run_id=?').bind(run.id).first();
- if(old)return baseline(old);
+ if(old)return {...baseline(old),presenceMode:old.plan_revision?JSON.parse(old.manifest_json).presenceMode:(cachedPresence?'cached':undefined)};
  const candidate=await reusableRosterStage(db,run,range);
  if(!candidate||candidate!==fileId)throw Error('Reusable inactive roster does not match this provider file/term.');
  const parent=await db.prepare(`SELECT j.*,f.parsed_at,f.source_type FROM roster_import_jobs j
@@ -47,7 +47,7 @@ export async function beginRosterRebase(db,run,fileId,range) {
   db.prepare(`INSERT INTO roster_rebase_jobs(run_id,baseline_run_id,file_id,source_id,baseline_revision,baseline_parsed_at)
    VALUES(?,?,?,?,?,?)`).bind(run.id,parent.run_id,fileId,run.sourceId,parent.plan_revision,parent.parsed_at),
  ]);
- return baseline({file_id:fileId,baseline_revision:parent.plan_revision,baseline_parsed_at:parent.parsed_at});
+ return {...baseline({file_id:fileId,baseline_revision:parent.plan_revision,baseline_parsed_at:parent.parsed_at}),presenceMode:cachedPresence?'cached':undefined};
 }
 function baseline(job){return {mode:'rebase',fileId:job.file_id,baselineRevision:job.baseline_revision,baselineParsedAt:job.baseline_parsed_at,prepared:Boolean(job.prepared),revision:job.plan_revision,nextBatch:job.next_batch||0,batchCount:job.plan_revision?JSON.parse(job.manifest_json).batches.length:0};}
 async function jobFor(db,run){
@@ -91,7 +91,8 @@ export async function pinRosterRebasePlan(db,run,input){
   ||new Set(p.doctors.map(d=>d.key)).size!==p.doctorCount
   ||!Number.isInteger(p.eventCount)||p.eventCount<1||p.eventCount>25000
   ||!Number.isInteger(p.issueCount)||p.issueCount<0||p.issueCount>5000
-  ||!Number.isInteger(p.presenceCount)||p.presenceCount<p.eventCount||p.presenceCount>50000
+  ||(p.presenceMode==='cached'&&p.presenceCount!==0)
+  ||!Number.isInteger(p.presenceCount)||p.presenceCount<(p.presenceMode==='cached'?0:p.eventCount)||p.presenceCount>50000
   ||!Number.isInteger(p.changedFacts)||p.changedFacts<0||p.changedFacts>1250
   ||![p.contentRevision,p.coverage.staffDigest,p.coverage.dailyDigest].every(v=>/^[a-f0-9]{64}$/.test(v))
   ||!Array.isArray(p.batches)||p.batches.length>800||JSON.stringify(p).length>262144
@@ -165,8 +166,8 @@ export async function prepareRosterRebase(db,run,input,file){
  await db.batch([guard(db,j),
   db.prepare(`SELECT CASE WHEN (SELECT COUNT(*) FROM roster_events WHERE file_id=?)=?
    AND (SELECT COUNT(*) FROM roster_issues WHERE file_id=?)=? AND (SELECT COUNT(*) FROM roster_file_doctors WHERE file_id=?)=?
-   AND (SELECT COUNT(*) FROM roster_events e JOIN roster_daily_presence d INDEXED BY idx_roster_daily_presence_event_id ON d.event_id=e.id WHERE e.file_id=?)=?
-   THEN 1 ELSE json('rebase-final-count-conflict') END`).bind(j.file_id,p.eventCount,j.file_id,p.issueCount,j.file_id,p.doctorCount,j.file_id,p.presenceCount),
+   ${p.presenceMode==='cached'?'':`AND (SELECT COUNT(*) FROM roster_events e JOIN roster_daily_presence d INDEXED BY idx_roster_daily_presence_event_id ON d.event_id=e.id WHERE e.file_id=?)=?`}
+   THEN 1 ELSE json('rebase-final-count-conflict') END`).bind(j.file_id,p.eventCount,j.file_id,p.issueCount,j.file_id,p.doctorCount,...(p.presenceMode==='cached'?[]:[j.file_id,p.presenceCount])),
   db.prepare(`INSERT INTO roster_file_coverage(file_id,source_type,coverage_start,coverage_end,content_revision,staff_digest,daily_digest,updated_at)
    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET coverage_start=excluded.coverage_start,coverage_end=excluded.coverage_end,content_revision=excluded.content_revision,staff_digest=excluded.staff_digest,daily_digest=excluded.daily_digest,updated_at=excluded.updated_at`)
    .bind(j.file_id,j.source_type,p.coverage.start,p.coverage.end,j.plan_revision,p.coverage.staffDigest,p.coverage.dailyDigest,now),

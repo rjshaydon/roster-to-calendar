@@ -8,7 +8,7 @@ export async function executeRosterRebase(payload,target,range,callback){
  if(baseline.prepared)return promote(baseline.revision,callback);
  if(baseline.revision&&baseline.nextBatch>0)return finish(baseline.revision,baseline.nextBatch,baseline.batchCount,callback);
  const stored={};
- for(const [section,limit] of [['doctors',512],['events',25000],['issues',5000],['staff',750],['catalog',750],['presence',25000]]){
+ for(const [section,limit] of [['doctors',512],['events',25000],['issues',5000],['staff',750],['catalog',750],...(baseline.presenceMode==='cached'?[]:[['presence',25000]])]){
   const rows=[];let after='';
   do{
    const page=await callback({phase:'bounded-rebase-page',section,after});
@@ -18,7 +18,7 @@ export async function executeRosterRebase(payload,target,range,callback){
   }while(after);
   stored[section]=section==='presence'?rows.flatMap(r=>JSON.parse(r.rows_json)):rows;
  }
- const plan=await planRosterPatch(payload,baseline,stored,{staging:true});
+ const plan=await planRosterPatch(payload,baseline,stored,{staging:true,presenceMode:baseline.presenceMode});
  console.log(`Staging reuse: ${stored.events.length} retained events; ${plan.manifest.changedFacts} changed facts; ${plan.batches.length} small completion batches.`);
  const pinned=await callback({phase:'bounded-rebase-plan',manifest:plan.manifest,patchRevision:plan.patchRevision});
  if(pinned.deferred||pinned.completed)return pinned;

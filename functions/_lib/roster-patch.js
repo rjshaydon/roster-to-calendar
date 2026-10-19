@@ -11,16 +11,16 @@ export const PATCH_SECTIONS={
   staff:{table:'facility_term_staff_contributions',key:"term_start||'|'||doctor_key",columns:'*',limit:750},
   catalog:{table:'facility_stream_catalog_contributions',key:"term_start||'|'||catalog_key",columns:'*',limit:750},
 };
-export async function beginRosterPatch(db,run,fileId) {
+export async function beginRosterPatch(db,run,fileId,cachedPresence=false) {
   const old=await db.prepare('SELECT * FROM roster_patch_jobs WHERE run_id=?').bind(run.id).first();
-  if(old) return {mode:'patch',fileId:old.file_id,baselineRevision:old.baseline_revision,baselineParsedAt:old.baseline_parsed_at,activated:Boolean(old.activated),patchRevision:old.plan_revision};
+  if(old) return {mode:'patch',fileId:old.file_id,baselineRevision:old.baseline_revision,baselineParsedAt:old.baseline_parsed_at,activated:Boolean(old.activated),patchRevision:old.plan_revision,presenceMode:old.plan_revision?JSON.parse(old.manifest_json).presenceMode:(cachedPresence?'cached':undefined)};
   const baseline=await db.prepare(`SELECT f.parsed_at,f.source_type,c.content_revision FROM roster_files f JOIN roster_file_coverage c ON c.file_id=f.id
     JOIN roster_file_status_summaries s ON s.file_id=f.id WHERE f.id=? AND f.source_id=? AND f.active=1 AND s.derived_state='ready'`).bind(fileId,run.sourceId).first();
   if(!baseline?.content_revision) throw Error('Patch requires an active, fully prepared roster.');
   if(!await reserveRosterMaintenanceBudget(db,32,256)) return {deferred:true};
   await db.prepare('INSERT INTO roster_patch_jobs(run_id,file_id,source_id,source_type,baseline_revision,baseline_parsed_at) VALUES(?,?,?,?,?,?)')
     .bind(run.id,fileId,run.sourceId,baseline.source_type,baseline.content_revision,baseline.parsed_at).run();
-  return {mode:'patch',fileId,baselineRevision:baseline.content_revision,baselineParsedAt:baseline.parsed_at};
+  return {mode:'patch',fileId,baselineRevision:baseline.content_revision,baselineParsedAt:baseline.parsed_at,presenceMode:cachedPresence?'cached':undefined};
 }
 async function jobFor(db,run) {
   const job=await db.prepare('SELECT * FROM roster_patch_jobs WHERE run_id=?').bind(run.id).first();
@@ -96,6 +96,7 @@ function validatePatchManifest(plan,job) {
 export function validatePatchEntry(entry,job,plan) {
   const sizes={doctor:7,event:17,issue:14,presence:5,staff:12,catalog:16,removeDoctor:1,removeEvent:1,removeIssue:1,removeStaff:2,removeCatalog:2};
   const row=entry?.row, kind=entry?.kind;
+  if(plan.presenceMode==='cached'&&kind==='presence')throw Error('Cached imports cannot write duplicate presence facts.');
   if(!sizes[kind] || !Array.isArray(row) || row.length!==sizes[kind] || row.some(v=>typeof v!=='string' && typeof v!=='number')) throw Error('Invalid typed patch fact.');
   const sourceIndex={doctor:1,event:2,issue:2,presence:1,staff:0,catalog:0}[kind];
   if(sourceIndex!==undefined && row[sourceIndex]!==job.source_type) throw Error('Patch fact belongs to another source.');

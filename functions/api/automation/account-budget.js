@@ -2,7 +2,7 @@ import {accountMaintenanceSummaries} from '../../_lib/account-maintenance-summar
 import { maintenanceReceiptSummary } from '../../_lib/maintenance-receipt-summary.js';
 import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
-import { accountMaintenanceHeadroom } from "../../_lib/account-maintenance-policy.js";
+import { accountMaintenanceHeadroom, ACCOUNT_MAINTENANCE_POLICY } from "../../_lib/account-maintenance-policy.js";
 import { stopAccountMaintenance, recoverAbandonedMaintenance, currentOptionalMaintenanceGrant } from "../../_lib/roster-maintenance-budget.js";
 
 export async function onRequestPost(context) {
@@ -37,9 +37,9 @@ export async function refreshAccountMaintenanceBudget(context) {
     const analytics = { ...summarizeAnalyticsPayload(await response.json(), inventory, { requireQueryFingerprints: false }), interval };
     if (!analytics.complete) throw new Error("Account analytics did not reconcile.");
     // Recovery bookkeeping has a small fixed bound; do not spend it when the
-    // account itself is already too close to the unchanged maintenance ceiling.
+    // account itself is already too close to the account ceiling.
     const previousDay=new Date(Date.parse(interval.start)-86400000).toISOString().slice(0,10);
-    const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<79000
+    const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<ACCOUNT_MAINTENANCE_POLICY.writes-1000
       ?await recoverAbandonedMaintenance(db,day,interval.observedUntil)+await recoverAbandonedMaintenance(db,previousDay,interval.observedUntil):0;
     const summary = await maintenanceReceiptSummary(db,day,previousDay,interval.start,interval.observedUntil);
     const accountSummary=await accountMaintenanceSummaries(context,analytics,summary,day,previousDay);

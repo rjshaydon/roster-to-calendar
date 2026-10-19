@@ -123,6 +123,13 @@ export async function prepareBoundedRosterPresence(db, runId, file, revision, ba
   if (batch.index !== job.prepared_batch) throw new Error("Presence batches must be processed in order.");
   const stored = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
   if (!stored || Number(stored.active) === 1) throw new Error("Presence preparation requires an inactive file.");
+  if (manifest.presenceMode === 'cached') {
+    // One fenced cursor advance, not one empty transaction per event batch.
+    if (!await reserveImportWrites(db, COST.control)) return {deferred:true};
+    await db.batch([stagingTransactionGuard(db,runId,revision,file.id,manifest.batches.length,batch.index),
+      db.prepare('UPDATE roster_import_jobs SET prepared_batch=? WHERE run_id=? AND prepared_batch=?').bind(manifest.batches.length,runId,batch.index)]);
+    return {nextBatch:manifest.batches.length};
+  }
   const presence = boundedRosterPresenceStatements(db, file, batch.doctors, batch.eventsByDoctor);
   if (presence.count !== batch.presenceRows || presence.count + 16 > ROSTER_BATCH_FACT_LIMIT) throw new Error("Presence expansion exceeds its pinned batch budget.");
   if (!await reserveImportWrites(db, presence.count * COST.presence + COST.control)) return { deferred: true };

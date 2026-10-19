@@ -22,6 +22,8 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
     const delivery = locating ? {} : await rosterDeliveryOrder(db, run);
     if (delivery.superseded) return Response.json(await skipSupersededRosterDelivery(db,run));
     const file = { ...body.file, sourceId: run.sourceId, sourceType: source.sourceType, active: false };
+    const cachedPresence = context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId);
+    if (body.manifest?.presenceMode && (body.manifest.presenceMode !== 'cached' || !cachedPresence)) throw Error('Cached presence is not enabled for this source.');
     let result;
     switch (body.phase) {
       case "bounded-begin":
@@ -34,15 +36,18 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
         if (body.phase === 'bounded-begin' && (!replacements || body.forceStaging !== true)) {
           const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.rosterEndDate }] }, null);
           if (!target.stagedNextBatch && !target.stagedPreparedBatch && target.fileId !== run.fileId) {
-            if (body.supportsPatch === true && context.env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED === 'true') return Response.json({ok:true,mode:"patch",fileId:target.fileId});
+            if (body.supportsPatch === true && context.env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED === 'true') return Response.json({ok:true,mode:"patch",fileId:target.fileId,presenceMode:cachedPresence?'cached':undefined});
             return Response.json({ ok: true, mode: "complete", boundedReplacementAvailable: replacements });
           }
           if(context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId)){
             const reusable=await reusableRosterStage(db,run,manifest);
-            if(reusable)return Response.json({ok:true,mode:'rebase',fileId:reusable});
+            if(reusable)return Response.json({ok:true,mode:'rebase',fileId:reusable,presenceMode:'cached'});
           }
         }
-        if (locating) return Response.json({ok:true,mode:'staging-ready'});
+        if (locating) {
+          const existing = await db.prepare('SELECT manifest_json FROM roster_import_jobs WHERE run_id=?').bind(run.id).first();
+          return Response.json({ok:true,mode:'staging-ready',presenceMode:existing?JSON.parse(existing.manifest_json).presenceMode:(cachedPresence?'cached':undefined)});
+        }
         result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision }, { allowReplacement: replacements, allowEmptyPlanRecovery: true, validatedPlan:true });
         // An activated job still needs the completion callback if its earlier
         // bookkeeping failed. Only run.status=success means fully completed.
@@ -52,7 +57,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-events": result = await stageBoundedRosterBatch(db, run.id, file, body.revision, body.batch); break;
       case "bounded-presence": result = await prepareBoundedRosterPresence(db, run.id, file, body.revision, body.batch); break;
       case "bounded-metadata": result = await prepareBoundedRosterMetadata(db, run.id, body.revision, body.batch); break;
-      case "bounded-patch-start": result = await beginRosterPatch(db,run,String(body.targetFileId || "")); break;
+      case "bounded-patch-start": result = await beginRosterPatch(db,run,String(body.targetFileId || ""),cachedPresence); break;
       case "bounded-patch-page": result = await readRosterPatchPage(db,run,body); break;
       case "bounded-patch-plan": result = await pinRosterPatchPlan(db,run,body); break;
       case "bounded-patch-stage": result = await stageRosterPatchBatch(db,run,body); break;
@@ -63,7 +68,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-rebase-stage":
       case "bounded-rebase-prepare": {
         if(!context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId))throw Error('Staging reuse is not enabled for this source.');
-        if(body.phase==='bounded-rebase-start')result=await beginRosterRebase(db,run,String(body.targetFileId||''),body.range||{});
+        if(body.phase==='bounded-rebase-start')result=await beginRosterRebase(db,run,String(body.targetFileId||''),body.range||{},cachedPresence);
         if(body.phase==='bounded-rebase-page')result=await readRosterRebasePage(db,run,body);
         if(body.phase==='bounded-rebase-plan')result=await pinRosterRebasePlan(db,run,body);
         if(body.phase==='bounded-rebase-save')result=await saveRosterRebaseBatch(db,run,body,context.env.ROSTER_FILES);

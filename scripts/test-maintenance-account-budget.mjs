@@ -280,3 +280,12 @@ assert.equal(await reserveRosterMaintenanceBudget(atomicRace,1,1),false);
 assert.equal(raceStore.prepare('SELECT COUNT(*) n FROM roster_maintenance_receipts').get().n,3);
 assert.equal(raceStore.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes,144);
 console.log('Atomic optional reservation rejects an interleaved third unknown request without adding credit or receipts.');
+
+// Real incident envelope: 71,873 account writes, 256 outstanding, 2,051
+// ordinary writes over 5h05. Fixed 20k padding must not block a small repair.
+const incident={complete:true,interval:{start:'2026-10-19T00:00:00Z',observedUntil:'2026-10-19T05:05:00Z',end:'2026-10-20T00:00:00Z'},totals:{rowsRead:509120,rowsWritten:71873}};
+const incidentBudget=accountMaintenanceHeadroom(incident,{reads:0,writes:256},'2026-10-19T05:20:00Z',{reads:0,writes:69822});
+assert.ok(incidentBudget.writes>19000&&incidentBudget.writes<21000);
+assert.ok(incidentBudget.uncertaintyWrites>256&&incidentBudget.uncertaintyWrites<1000);
+assert.equal(incidentBudget.writes+71873+256+incidentBudget.forecastWrites+incidentBudget.uncertaintyWrites,100000);
+assert.equal(accountMaintenanceHeadroom({...incident,totals:{rowsRead:509120,rowsWritten:100000}},{reads:0,writes:0},'2026-10-19T05:20:00Z',{reads:0,writes:100000}).writes,0);

@@ -9,6 +9,7 @@ import {onRequestPost as derived} from '../functions/api/automation/derived.js';
 import {beginMaintenanceAccounting,rosterProcessingHeadroom} from '../functions/_lib/roster-maintenance-budget.js';
 import {readRosterRebasePage} from '../functions/_lib/roster-staging-reuse.js';
 import {listQueuedRosterSyncRuns,replaceDerivedRosterFile,refreshFacilityOverviewMaterializationForFile} from '../functions/_lib/d1-calendar.js';
+const cached=process.argv.includes('--cached');
 const sqlite=new DatabaseSync(':memory:');
 for(const n of(await readdir('migrations')).filter(n=>n.endsWith('.sql')).sort())sqlite.exec(await readFile('migrations/'+n,'utf8'));
 for(const def of ['name TEXT','source_type TEXT','size INTEGER','last_modified INTEGER'])sqlite.exec('ALTER TABLE raw_roster_files ADD COLUMN '+def);
@@ -46,7 +47,7 @@ let stopAfterBatch=false,activeRun='new-run';
 async function callback(step){
  account();
  const r=await derived({env,request:new Request('https://fixture.test/api/automation/derived',{method:'POST',headers:{Authorization:'Bearer synthetic-only','Content-Type':'application/json'},body:JSON.stringify({...step,runId:activeRun,sourceId,file:latest.file})})});
- const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));
+ const result=await r.json();if(!cached)delete result.presenceMode;assert.equal(r.status,200,JSON.stringify(result));
  if(stopAfterBatch&&step.phase==='bounded-rebase-stage'&&!result.deferred){stopAfterBatch=false;throw Error('Lost response after saved batch');}
  return result;
 }
@@ -84,10 +85,38 @@ assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(pr
 const after=sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(old.file.id);
 assert.equal(after.length,4320);assert.equal(after.filter(r=>oldFacts.some(o=>o.id===r.id&&o.event_json===r.event_json)).length,4318,'4318 unchanged events were reused without rewriting');
 const material=await refreshFacilityOverviewMaterializationForFile(db,old.file.id,{dryRun:true,contentRevision:sqlite.prepare("SELECT plan_revision FROM roster_rebase_jobs WHERE run_id='third-run'").get().plan_revision});assert.equal(material.proposedWrites,0,'compact facts agree with the normal publication builder');
-assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_events e JOIN roster_daily_presence d ON d.event_id=e.id WHERE e.file_id=?').get(old.file.id).n,4320);
+const persistedPresence=sqlite.prepare('SELECT COUNT(*) n FROM roster_events e JOIN roster_daily_presence d ON d.event_id=e.id WHERE e.file_id=?').get(old.file.id).n;
+if(cached){assert.ok(persistedPresence<200,'no completion of duplicate presence');assert.ok(!sqls.some(sql=>sql.includes('rows_json')),'no presence pagination');}
+else assert.equal(persistedPresence,4320);
 assert.equal((await callback({phase:'bounded-rebase-prepare',patchRevision:sqlite.prepare("SELECT plan_revision FROM roster_rebase_jobs WHERE run_id='third-run'").get().plan_revision})).completed,true,'completed-run replay cannot activate twice');
 assert.ok(sqls.some(s=>s.includes('idx_roster_daily_presence_event_id')));
 const gate={valid_until:new Date(Date.now()+60000).toISOString(),stop_reason:'',maximum_reads:100000,allocated_reads:0,maximum_writes:2100,allocated_writes:100};
 assert.equal(rosterProcessingHeadroom(gate),false,'a nonzero but unusable grant must not launch/parse');
 gate.maximum_writes=3000;assert.equal(rosterProcessingHeadroom(gate),true);gate.stop_reason='cost-overrun:request';assert.equal(rosterProcessingHeadroom(gate),false);
 console.log('Staging reuse passed actual derived HTTP routing, inactive baseline locking, partial presence completion, 4318 unchanged rows, interrupted/rolled-back/superseded batch recovery, current-term preservation, compact parity, queue fairness and affordability. Synthetic data only.');
+
+if(cached){
+ const {executeBoundedRosterImport}=await import('./roster-import-driver.mjs');
+ const snapshot=sqlite.prepare('SELECT COUNT(*) n FROM roster_daily_presence').get().n;
+ activeRun='fresh-term';latest.file={...latest.file,id:'fresh-file',name:'AdultTerm4.2027.xlsx',contentHash:'c'.repeat(64)};
+ latest.doctors=[doctors[0]];
+ latest.eventsByDoctor={[doctors[0].key]:[
+  {id:'night',source:'MMC',title:'Night',start:'2027-11-02T23:00:00',end:'2027-11-03T08:00:00'},
+  {id:'leave',source:'MMC',title:'Annual leave',allDay:true,start:'2027-11-04',end:'2027-11-11'}
+ ]};latest.issuesByDoctor={};
+ sqlite.prepare("INSERT INTO raw_roster_files(file_id,name,source_type,last_modified,object_key)VALUES('fresh-file',?,'mmc',?,'synthetic-only')").run(latest.file.name,Date.parse('2026-10-19T03:00:00Z'));
+ sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,provider_version,content_hash,status,started_at)VALUES('fresh-term',?,'fresh-file','fresh-file','1',?,'queued','2026-10-19T03:00:00Z')").run(sourceId,latest.file.contentHash);
+ const fullPlan=await attachRosterCompactPlan(await planRosterImportBatches(latest,{maximumOccurrences:1}),latest);
+ let presenceCalls=0;
+ const result=await executeBoundedRosterImport(fullPlan,async step=>{if(step.phase==='bounded-presence')presenceCalls++;return callback({...step,forceStaging:true});});
+ assert.equal(result.completed,true);
+ assert.equal(presenceCalls,1,'all presence cursors advance in one fenced transaction');
+ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_daily_presence').get().n,snapshot,'full import writes no duplicate daily rows');
+ assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM roster_events WHERE file_id='fresh-file'").get().n,2,'overnight and leave events remain complete');
+ assert.equal(sqlite.prepare("SELECT active FROM roster_files WHERE id='fresh-file'").get().active,1);
+ // Forged modes on an unapproved source must fail before initialization.
+ env.ROSTER_STAGING_REUSE_SOURCES='';
+ const rejected=await derived({env,request:new Request('https://fixture.test/api/automation/derived',{method:'POST',headers:{Authorization:'Bearer synthetic-only','Content-Type':'application/json'},body:JSON.stringify({phase:'bounded-begin',deferStaging:true,runId:'old-run',sourceId,file:old.file,manifest:{...plan.manifest,presenceMode:'cached'},revision:plan.revision})})});
+ assert.equal(rejected.status,422);
+ console.log('Cached full import passed one-step presence skip, overnight/leave preservation and server-side source approval.');
+}

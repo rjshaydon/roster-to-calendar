@@ -1,4 +1,4 @@
-export const ACCOUNT_MAINTENANCE_POLICY = Object.freeze({ reads: 4000000, writes: 80000, validityMs: 10 * 60 * 1000 });
+export const ACCOUNT_MAINTENANCE_POLICY = Object.freeze({ reads: 4000000, writes: 100000, validityMs: 10 * 60 * 1000 });
 
 // Receipts finished before the settled cutoff are already in account analytics.
 // Unfinished/uninstrumented work retains its full reservation. Never subtract
@@ -32,7 +32,13 @@ export function accountMaintenanceHeadroom(analytics, outstanding, now = new Dat
   const forecastReads = Math.ceil(ordinaryReads * remaining / Math.max(elapsed, 1));
   const forecastWrites = Math.ceil(ordinaryWrites * remaining / Math.max(elapsed, 1));
   if (!analytics.complete || !Number.isFinite(cutoff) || cutoff > nowMs || nowMs - cutoff > 25 * 60 * 1000 || elapsed <= 0) throw new Error("Account analytics are unavailable or stale.");
+  // The daily ordinary-traffic forecast already protects the rest of the day.
+  // Add one extra ordinary-traffic window for a 2x burst during the maximum
+  // analytics lag (25 minutes) plus this grant's lifetime (10 minutes), and
+  // 256 indexed writes for bounded admission/recovery bookkeeping. This margin
+  // scales with observed ordinary use rather than withholding 20,000 writes.
+  const uncertaintyWrites = 256 + Math.ceil(ordinaryWrites * (25 * 60 * 1000 + ACCOUNT_MAINTENANCE_POLICY.validityMs) / Math.max(elapsed, 1));
   const reads = Math.max(0, Math.floor(ACCOUNT_MAINTENANCE_POLICY.reads - analytics.totals.rowsRead - outstanding.reads - forecastReads));
-  const writes = Math.max(0, Math.floor(ACCOUNT_MAINTENANCE_POLICY.writes - analytics.totals.rowsWritten - outstanding.writes - forecastWrites));
-  return { reads, writes, forecastReads, forecastWrites, validUntil: new Date(Math.min(nowMs + ACCOUNT_MAINTENANCE_POLICY.validityMs, Date.parse(analytics.interval.end))).toISOString() };
+  const writes = Math.max(0, Math.floor(ACCOUNT_MAINTENANCE_POLICY.writes - analytics.totals.rowsWritten - outstanding.writes - forecastWrites - uncertaintyWrites));
+  return { reads, writes, forecastReads, forecastWrites, uncertaintyWrites, validUntil: new Date(Math.min(nowMs + ACCOUNT_MAINTENANCE_POLICY.validityMs, Date.parse(analytics.interval.end))).toISOString() };
 }

@@ -90,6 +90,7 @@ export function validateRosterImportManifest(manifest) {
   if (!manifest || !SOURCES.has(manifest.sourceId) || manifest.maximumFacts !== 1250 || !manifest.fileId || manifest.schemaVersion !== 1) throw new Error("Invalid bounded-import manifest.");
   if (!Array.isArray(manifest.doctors) || !manifest.doctors.length || manifest.doctors.length > 512 || new Set(manifest.doctors.map((entry) => entry.key)).size !== manifest.doctors.length || manifest.doctors.some((entry) => !entry.key)) throw new Error("Invalid manifest doctors.");
   if (!Array.isArray(manifest.batches) || !manifest.batches.length || manifest.batches.length > 500 || new TextEncoder().encode(JSON.stringify(manifest)).length > ROSTER_BATCH_BYTE_LIMIT) throw new Error("Manifest exceeds its bounded payload limits.");
+  if (manifest.presenceMode !== undefined && manifest.presenceMode !== 'cached') throw Error('Invalid presence mode.');
   let events = 0;
   let issues = 0;
   for (const [index, batch] of manifest.batches.entries()) {
