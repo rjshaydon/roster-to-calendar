@@ -3431,7 +3431,7 @@ export async function markRosterSyncRunProcessing(db, runId) {
 export async function createRosterSyncRun(db, run = {}) {
   if (!db?.prepare || !run?.id || !run?.sourceId) return { ok: false, reason: "missing-run-input" };
   await ensureCalendarSchema(db);
-  await db.prepare(`
+  const insert = db.prepare(`
     INSERT INTO roster_sync_runs (
       id, source_id, trigger_type, provider_version, content_hash, file_id, source_file_id, status,
       message, doctor_count, event_count, started_at, completed_at
@@ -3441,7 +3441,9 @@ export async function createRosterSyncRun(db, run = {}) {
     String(run.providerVersion || ""), String(run.contentHash || ""), String(run.fileId || ""), String(run.sourceFileId || run.fileId || ""),
     String(run.status || "started"), String(run.message || ""), Number(run.doctorCount || 0),
     Number(run.eventCount || 0), String(run.startedAt || new Date().toISOString()), String(run.completedAt || ""),
-  ).run();
+  );
+  if (run.authorityFence !== undefined) await db.batch([insert, db.prepare("INSERT OR IGNORE INTO roster_authority_fences(run_id,source_type,generations_json) VALUES(?,?,?)").bind(run.id,run.authoritySourceType,run.authorityFence)]);
+  else await insert.run();
   return { ok: true, id: String(run.id) };
 }
 

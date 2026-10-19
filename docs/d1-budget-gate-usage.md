@@ -170,3 +170,15 @@ contain sensitive operational metadata and must not be committed.
 
 `--raw-output` is optional and stores the GraphQL response with file mode
 `0600`. It contains neither the API token nor an authorization header.
+
+### 19 October: operational diagnostic alignment
+
+The default checker now reports **read-only advisory** operational headroom using
+production's accountMaintenanceHeadroom, receipt/preview summaries and active
+publication holds. It reads aggregate D1 summaries through Wrangler's existing
+authorization; it never changes a grant or refunds a receipt. No second passive
+sample or fixed 80,000-write stop is used for ordinary diagnosis. Actual limits,
+ordinary-traffic forecasts, uncertainty, outstanding work and stop flags apply.
+Missing accounting evidence returns STOP. `--mode canary` still adds its explicit
+attribution/reconciliation gates; GO never grants permission to bypass production
+reservations. Output schema is now version 2 and omits large SQL/timeline dumps.

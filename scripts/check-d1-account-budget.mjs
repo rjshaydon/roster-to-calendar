@@ -1,3 +1,4 @@
+import {maintenanceDiagnosticEvidence,evaluateMaintenanceDiagnostic} from './maintenance-budget-diagnostic.mjs';
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -46,28 +47,33 @@ if (accountId && token) {
   }
 }
 
-const assessment = evaluateD1Budget({
-  analytics,
-  inventory,
-  billing: { rowsRead: options.billingReads, rowsWritten: options.billingWrites, observedAt: options.billingObservedAt, unavailableReason: options.billingUnavailableReason },
-  previousReport,
-  now: generatedAt,
-  optionalEstimate: { rowsRead: options.estimatedReads, rowsWritten: options.estimatedWrites },
-  canary: options.mode === "canary" ? {
-    readCeiling: options.canaryReadCeiling,
-    requestId: options.requestId,
-    requestAttribution,
-    reviewedFingerprints: Array.isArray(reviewedFingerprintDocument)
-      ? reviewedFingerprintDocument
-      : reviewedFingerprintDocument?.queries || [],
-  } : null,
-});
+let assessment;
+try {
+  if(!analytics.complete)throw Error('Account analytics are unavailable or inconsistent.');
+  const config=await readFile(resolve('wrangler.toml'),'utf8');
+  const productionConfig=config.split('[env.')[0];
+  const previewEnabled=/^ACCOUNT_MAINTENANCE_PREVIEW_SUMMARY_ENABLED\s*=\s*"true"/m.test(productionConfig);
+  const primary=inventory.databases.find(d=>d.environment==='production'&&d.name==='roster-converter-calendar');
+  const preview=inventory.databases.find(d=>d.name==='roster-identity-batch2-preview');
+  if(!primary||previewEnabled&&!preview)throw Error('Maintenance database inventory is incomplete.');
+  const evidence=await maintenanceDiagnosticEvidence(readOnlyD1(primary.name),preview?readOnlyD1(preview.name):null,analytics,{previewEnabled});
+  assessment=evaluateMaintenanceDiagnostic(analytics,evidence,new Date(generatedAt),{rowsRead:Number(options.estimatedReads||0),rowsWritten:Number(options.estimatedWrites||0)});
+} catch(error){assessment={decision:'STOP',advisory:true,reasons:[String(error.message||error)]};}
+
+if(options.mode==='canary') {
+ const canaryAssessment=evaluateD1Budget({analytics,inventory,billing:{rowsRead:options.billingReads,rowsWritten:options.billingWrites,observedAt:options.billingObservedAt,unavailableReason:options.billingUnavailableReason},previousReport,now:generatedAt,
+ canary:{readCeiling:options.canaryReadCeiling,requestId:options.requestId,requestAttribution,reviewedFingerprints:Array.isArray(reviewedFingerprintDocument)?reviewedFingerprintDocument:reviewedFingerprintDocument?.queries||[]}});
+ assessment={...assessment,canary:canaryAssessment,decision:assessment.decision==='GO'&&canaryAssessment.decision==='GO'?'GO':'STOP',reasons:[...new Set([...assessment.reasons,...canaryAssessment.reasons])]};
+}
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  sampleValid:analytics.complete===true && assessment.budget!==null && assessment.budget!==undefined,
+  interval:analytics.interval,
+  effectiveUsage:{rowsRead:analytics.totals?.rowsRead||0,rowsWritten:analytics.totals?.rowsWritten||0},
   generatedAt,
   inventory: { path: inventoryPath, complete: inventory.complete === true, databaseCount: (inventory.databases || []).length },
   credential: { source: analyticsCredential.source },
-  analytics,
+  analytics: {complete:analytics.complete,reasons:analytics.reasons,totals:analytics.totals,maximumFiveMinute:analytics.maximumFiveMinute,interval:analytics.interval},
   billing: { rowsRead: numericOrNull(options.billingReads), rowsWritten: numericOrNull(options.billingWrites), observedAt: options.billingObservedAt || null, unavailableReason: options.billingUnavailableReason || null },
   ...assessment,
 };
@@ -114,4 +120,21 @@ function loadAnalyticsCredential() {
   } catch {
     return { token: "", source: null };
   }
+}
+
+// Known aggregate queries only; this adapter cannot mutate production or return
+// clinical roster rows. Arguments are passed directly to Wrangler, never a shell.
+function readOnlyD1(databaseId) {
+ return {prepare(sql){
+  if(!/^\s*(?:WITH|SELECT)\b/i.test(sql)||/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|PRAGMA)\b/i.test(sql))throw Error('Diagnostic SQL must be read-only.');
+  return {args:[],bind(...args){this.args=args;return this;},async first(){
+   let index=0;const bound=sql.replace(/\?/g,()=>{const value=this.args[index++];if(value===undefined)throw Error('Missing diagnostic binding.');return typeof value==='number'?String(value):"'"+String(value).replaceAll("'","''")+"'";});
+   if(index!==this.args.length)throw Error('Unexpected diagnostic binding.');
+   let result;
+   for(let attempt=0;attempt<2;attempt++)try {
+    result=JSON.parse(execFileSync('npx',['wrangler','d1','execute',databaseId,'--remote','--command',bound,'--json'],{encoding:'utf8',maxBuffer:1024*1024,stdio:['ignore','pipe','pipe']}));break;
+   }catch(error){if(attempt||!String(error.stdout||error.stderr||'').includes('7403'))throw Error('Read-only maintenance summary unavailable: '+String(error.stdout||error.stderr||error.message||'').replace(/\x1b\[[0-9;]*m/g,'').slice(0,1000));}
+   const row=result?.[0];if(!row?.success||!Array.isArray(row.results)||row.results.length!==1)throw Error('Invalid maintenance summary response.');return row.results[0];
+  }};
+ }};
 }

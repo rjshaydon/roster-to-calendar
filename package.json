@@ -82,7 +82,9 @@
     "test:authentication-journey": "node --no-warnings scripts/test-authentication-journey.mjs",
     "test:passkeys": "node --no-warnings scripts/test-account-passkeys.mjs",
     "test:support-requests": "node --no-warnings scripts/test-support-requests.mjs && node --no-warnings scripts/test-request-calendar-ownership.mjs",
-    "test:support-ui": "node --no-warnings scripts/test-support-ui-browser.mjs"
+    "test:support-ui": "node --no-warnings scripts/test-support-ui-browser.mjs",
+    "test:roster-authority": "node --no-warnings scripts/test-roster-authority.mjs",
+    "test:maintenance-diagnostic": "node scripts/test-maintenance-diagnostic.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

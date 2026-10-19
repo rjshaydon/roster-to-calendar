@@ -1,12 +1,13 @@
+import { ACCOUNT_MAINTENANCE_POLICY } from '../functions/_lib/account-maintenance-policy.js';
 export const D1_BUDGET_LIMITS = Object.freeze({
   dailyReads: 5_000_000,
   dailyWrites: 100_000,
   ordinaryReadReserve: 4_000_000,
-  ordinaryWriteReserve: 80_000,
+  ordinaryWriteReserve: ACCOUNT_MAINTENANCE_POLICY.writes,
   optionalReadStartMaximum: 4_000_000,
-  optionalWriteStartMaximum: 80_000,
+  optionalWriteStartMaximum: ACCOUNT_MAINTENANCE_POLICY.writes,
   optionalReadStop: 4_000_000,
-  optionalWriteStop: 80_000,
+  optionalWriteStop: ACCOUNT_MAINTENANCE_POLICY.writes,
   maximumOrdinaryRowsPerQuery: 10_000,
   minimumPassiveMs: 2 * 60 * 60 * 1000,
   minimumSampleGapMs: 10 * 60 * 1000,

@@ -1,3 +1,4 @@
+import { pinManualAuthority } from './roster-authority.js';
 import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from './roster-import-staging.js';
 import { loadRosterFileStatusSummary } from './d1-calendar.js';
 import { reserveRosterMaintenanceBudget } from './roster-maintenance-budget.js';
@@ -13,7 +14,7 @@ export async function handleManualRosterImport(context, body, email) {
   const file = { ...body.file, sourceId, sourceType, active: false, uploadedBy: email };
   let result;
   switch (body.phase) {
-    case 'bounded-begin': result = await beginBoundedRosterImport(db, runId, file, { manifest: body.manifest, revision }, { allowReplacement: true }); break;
+    case 'bounded-begin': await pinManualAuthority(db,runId,sourceType); result = await beginBoundedRosterImport(db, runId, file, { manifest: body.manifest, revision }, { allowReplacement: true }); break;
     case 'bounded-events': result = await stageBoundedRosterBatch(db, runId, file, revision, body.batch); break;
     case 'bounded-presence': result = await prepareBoundedRosterPresence(db, runId, file, revision, body.batch); break;
     case 'bounded-metadata': result = await prepareBoundedRosterMetadata(db, runId, revision); break;

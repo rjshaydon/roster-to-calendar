@@ -186,3 +186,55 @@ Medium is appropriate for implementation against this plan. Review exact schema
 and race guards before editing; pause for clarification only if actual input
 coverage cannot safely identify the intended term. No implementation is authorized
 by this planning step alone.
+
+## Implementation checkpoint — 19 October evening
+
+User authorised the combined handoff/checker remedial batch. Added migration 0055:
+compact term generations, immutable run fences, provider observations and a
+per-site handoff policy. Existing prepared manual selections are seeded from
+compact catalogue rows; no shift rows are rewritten. Untouched automatic scopes
+remain generation zero, preserving metadata no-op and ingress write costs.
+
+Manual begins pin a generation. Activation compares it transactionally alongside
+the existing active-file fence. Automatic metadata pins observations before
+retrieval; runs carry that evidence. Late jobs cannot acquire a new generation
+merely by retrying. Fresh metadata can create a distinct, idempotent recovery job
+from retained bytes when an old job crossed a manual activation. Completion of a
+retired file cannot move source pointers. Existing automatic provider ordering
+continues alongside the cross-route generation guard.
+
+Fresh unchanged-provider confirmation can restore a ready retained snapshot by
+switching only control rows and queuing bounded publication. It verifies exact
+raw/prepared metadata and full scope; unrelated terms and retired facts remain.
+A changed version with identical bytes records its receipt before handoff so
+budget deferral does not cause repeated downloads. Missing/incompatible prepared
+snapshots return repair-required rather than guessing. Such a repair may need the
+existing retained-input tools; this release does not silently refetch a workbook.
+
+The CLI now calls the same accountMaintenanceHeadroom calculation and bounded
+maintenance/preview summaries as production, subtracting live publication holds
+for bulk headroom. It is explicitly read-only/advisory and cannot recover receipts,
+modify grants or authorize writes. Unknown reservations and circuit stops remain.
+The historical canary checks retain additional attribution gates; their write
+ceiling now references the shared 100,000 policy rather than a literal 80,000.
+Default reports are compact. Missing evidence fails closed.
+
+Passed focused authority and diagnostic tests plus existing restoration mutations,
+Batch 1, ingress idempotency, wire protocol, patch, retained-stage reuse, source
+isolation, publication delivery, facility materialization, subscription artifacts,
+personal artifacts, cold-start and maintenance-account-budget regressions.
+Actual HTTP unchanged-provider recovery is covered with synthetic SQLite data.
+The live read-only checker returned GO above 81,000 actual writes, with roughly
+14,200 usable writes after forecasts, reservations and uncertainty. Local tests
+are not native Cloudflare CPU/billing measurements.
+
+No genuine manual fallback is awaiting restoration, so a live clinical takeover
+must be observed at the next naturally needed manual upload/provider check.
+Do not manufacture a roster replacement for acceptance. Keep that external
+acceptance separate from deployed implementation and regression evidence.
+
+Rollback: set roster_authority_policy.enabled=0 for an affected site to stop
+handoffs from a manual selection while preserving the current active roster.
+Keep generation guards and migration; do not reactivate an old deployment that
+lacks those guards while manual authority rows exist. No staff-search code is
+included. Existing source IDs in Admin Files remain the provenance record.

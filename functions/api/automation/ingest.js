@@ -1,3 +1,5 @@
+import { providerAuthorityFence,restoreRetainedAuthority } from '../../_lib/roster-authority.js';
+import { automaticFacilityPublicationEnabled } from '../../_lib/facility-refresh-queue.js';
 import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
@@ -36,6 +38,7 @@ export async function onRequestPost(context) {
     if (!context.env.ROSTER_FILES?.put) return Response.json({ error: "Roster file storage is unavailable." }, { status: 503 });
 
     const now = new Date().toISOString();
+    const authorityFence = await providerAuthorityFence(context.env.ROSTER_DB,sourceId,file.name,providerVersion);
     const sourceRecord = await loadRosterSource(context.env.ROSTER_DB, sourceId);
     const matchingVersion = providerVersion
       ? await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, file.name)
@@ -96,6 +99,8 @@ export async function onRequestPost(context) {
           startedAt: now, completedAt: now,
         });
       }
+      const handoff=await restoreRetainedAuthority(context.env.ROSTER_DB,prior,{publishFacility:automaticFacilityPublicationEnabled(context.env,source.sourceType),expectedGenerations:authorityFence});
+      if(handoff){if(handoff.status==='authority-restored')await requestQueuedRosterProcessing(context.env,{sourceId,reason:'authority-publication'});return Response.json({ok:true,...handoff});}
       return Response.json({ ok: true, status: "unchanged", sourceId, fileId: prior.fileId, runId: prior.id });
     }
     const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);
@@ -126,6 +131,7 @@ export async function onRequestPost(context) {
     await createRosterSyncRun(context.env.ROSTER_DB, {
       id: runId,
       sourceId,
+      ...(authorityFence==='{}'?{}:{authorityFence, authoritySourceType:source.sourceType}),
       triggerType: "sharepoint",
       providerVersion,
       contentHash,

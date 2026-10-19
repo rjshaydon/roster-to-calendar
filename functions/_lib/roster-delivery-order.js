@@ -4,7 +4,7 @@ const RECENT_RUNS = `SELECT id,status,started_at,source_file_id,file_id FROM ros
   ORDER BY started_at DESC,id DESC LIMIT 65`;
 const eligible = row => ['queued','processing','success'].includes(row.status);
 // Immutable raw-file timestamps prevent old retries replacing newer workbooks.
-export async function rosterDeliveryOrder(db, run) {
+export async function rosterDeliveryOrder(db, run, terms = [], authority = true) {
   if (!run.startedAt) return {};
   const incoming = await db.prepare('SELECT name,last_modified FROM raw_roster_files WHERE file_id=?').bind(run.sourceFileId || run.fileId).first();
   if (!incoming?.name) throw new Error('Queued provider revision metadata is unavailable.');
@@ -26,8 +26,12 @@ export async function rosterDeliveryOrder(db, run) {
     AND CASE WHEN f.last_modified>0 AND ?>0 THEN f.last_modified>?
       ELSE r.started_at>? OR (r.started_at=? AND r.id>?) END) AND NOT EXISTS(SELECT 1 FROM roster_files INDEXED BY idx_roster_files_source_active
       WHERE source_type=(SELECT source_type FROM roster_sources WHERE id=?) AND active=1 AND source_id=?
-      AND LOWER(name)=LOWER(?) AND ?>0 AND last_modified>?) THEN 1 ELSE json('stale-roster-delivery') END`)
-    .bind(run.sourceId,run.id,incoming.name,modified,modified,run.startedAt,run.startedAt,run.id,run.sourceId,run.sourceId,incoming.name,modified,modified);
+      AND LOWER(name)=LOWER(?) AND ?>0 AND last_modified>?)
+    AND NOT EXISTS(SELECT 1 FROM roster_term_authority a WHERE a.source_type=(SELECT source_type FROM roster_sources WHERE id=?)
+      AND ?=1 AND (a.term_start IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM facility_stream_catalog_contributions c WHERE c.file_id=? AND c.term_start=a.term_start))
+      AND a.generation<>COALESCE((SELECT CAST(json_extract(pin.generations_json,'$."'||a.term_start||'"') AS INTEGER) FROM roster_authority_fences pin WHERE pin.run_id=?),0))
+    THEN 1 ELSE json('stale-roster-delivery') END`)
+    .bind(run.sourceId,run.id,incoming.name,modified,modified,run.startedAt,run.startedAt,run.id,run.sourceId,run.sourceId,incoming.name,modified,modified,run.sourceId,authority?1:0,JSON.stringify(terms),run.fileId,run.id);
   return { guard };
 }
 export async function skipSupersededRosterDelivery(db, run) {

@@ -1,3 +1,5 @@
+import { observeProviderAuthority,restoreRetainedAuthority,reconcileQueuedAuthority } from '../../_lib/roster-authority.js';
+import { automaticFacilityPublicationEnabled } from '../../_lib/facility-refresh-queue.js';
 import { findmyshiftConfiguredRosterRange, findmyshiftPollingRosterRanges, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, australianTermStartForDate, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import {loadPendingRosterPublication,loadActiveRosterImport,clearRosterDeliveryWarning} from "../../_lib/roster-delivery-health.js";
@@ -76,6 +78,12 @@ export async function onRequestPost(context, internal = {}) {
       && current.lastSuccessAt
       && currentFormatRun?.status === "success"
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
+      let handoff=await restoreRetainedAuthority(context.env.ROSTER_DB,currentFormatRun,{publishFacility:automaticFacilityPublicationEnabled(context.env,'ddh')});
+      if(handoff?.status==='deferred'&&context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'){
+        const admission=await (await refreshAccountMaintenanceBudget(context)).json();
+        if(!admission.deferred)handoff=await restoreRetainedAuthority(context.env.ROSTER_DB,currentFormatRun,{publishFacility:automaticFacilityPublicationEnabled(context.env,'ddh')});
+      }
+      if(handoff){if(handoff.status==='authority-restored')await requestQueuedRosterProcessing(context.env,{sourceId:SOURCE_ID,reason:'authority-publication'});return Response.json({ok:true,...handoff});}
       if (force) {
         const queue = await queueCurrentFindmyshiftReprocess(context.env, providerVersion, now);
         if (!queue.runIds.length) throw new Error("No retained FindMyShift roster file is available to reprocess.");
@@ -96,6 +104,8 @@ export async function onRequestPost(context, internal = {}) {
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
     }
     if (!force && ['queued', 'processing'].includes(currentFormatRun?.status)) {
+      const reconciled=await reconcileQueuedAuthority(context.env.ROSTER_DB,currentFormatRun,fileName);
+      if(reconciled){if(reconciled.status==='resuming')await requestQueuedRosterProcessing(context.env,{sourceId:SOURCE_ID,reason:'authority-reconcile'});return Response.json({ok:true,...reconciled});}
       const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId: SOURCE_ID, reason: 'metadata-retry' });
       return Response.json({ ok: true, status: currentFormatRun.status, processorDispatch: dispatch.dispatched === true });
     }
@@ -113,6 +123,7 @@ export async function onRequestPost(context, internal = {}) {
       // Include that work in this request; unused allowance settles normally.
       if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 1024+(refreshedAccountBudget?65536:0))) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
     }
+    await observeProviderAuthority(context.env.ROSTER_DB,SOURCE_ID,fileName,providerVersion);
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range, { env: context.env });
     const response = await guardedFetch(context.env, new URL("/api/automation/ingest", context.request.url), {
       method: "POST",

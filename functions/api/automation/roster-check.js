@@ -1,3 +1,5 @@
+import { observeProviderAuthority,restoreRetainedAuthority,reconcileQueuedAuthority } from '../../_lib/roster-authority.js';
+import { automaticFacilityPublicationEnabled } from '../../_lib/facility-refresh-queue.js';
 import {loadPendingRosterPublication,loadActiveRosterImport,clearRosterDeliveryWarning} from '../../_lib/roster-delivery-health.js';
 import { automationSourceDefinition } from '../../_lib/automation-import.js';
 import { findRosterSyncByProviderVersion, loadRawRosterFile, hasCalendarDb } from '../../_lib/d1-calendar.js';
@@ -93,6 +95,12 @@ async function checkRosterMetadata(context,body,checkTime) {
   if (!hasCalendarDb(context.env) || !fileName || fileName.length > 180 || !providerVersion || providerVersion.length > 200) return new Response('Invalid metadata', { status: 400 });
   const run = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, fileName);
   if (run?.status === 'success') {
+    let handoff=await restoreRetainedAuthority(context.env.ROSTER_DB,run,{publishFacility:automaticFacilityPublicationEnabled(context.env,automationSourceDefinition(sourceId).sourceType)});
+    if(handoff?.status==='deferred'&&context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'){
+      const admission=await (await refreshAccountMaintenanceBudget(context)).json();
+      if(!admission.deferred)handoff=await restoreRetainedAuthority(context.env.ROSTER_DB,run,{publishFacility:automaticFacilityPublicationEnabled(context.env,automationSourceDefinition(sourceId).sourceType)});
+    }
+    if(handoff){if(handoff.status==='authority-restored')await requestQueuedRosterProcessing(context.env,{sourceId,reason:'authority-publication'});return Response.json({ok:true,...handoff});}
     if(await loadPendingRosterPublication(context.env,sourceId)) {
       const dispatch=await requestQueuedRosterProcessing(context.env,{sourceId,reason:'publication-resume'});
       return Response.json({ok:true,download:false,status:dispatch.deferred?'deferred':'awaiting-publication'});
@@ -101,6 +109,8 @@ async function checkRosterMetadata(context,body,checkTime) {
     return Response.json({ ok: true, download: false, status: 'unchanged' });
   }
   if (run && ['queued', 'processing'].includes(run.status)) {
+    const reconciled=await reconcileQueuedAuthority(context.env.ROSTER_DB,run,fileName);
+    if(reconciled){if(reconciled.status==='resuming')await requestQueuedRosterProcessing(context.env,{sourceId,reason:'authority-reconcile'});return Response.json({ok:true,...reconciled});}
     const retained = await loadRawRosterFile(context.env.ROSTER_DB, run.sourceFileId || run.fileId);
     if (retained?.objectKey) {
       // Exact retained input can resume without retrieving the provider again.
@@ -127,5 +137,6 @@ async function checkRosterMetadata(context,body,checkTime) {
       if (admission.deferred) return Response.json({ ok: true, download: false, status: 'deferred', reason: admission.reason || 'account-budget' });
     }
   }
+  try {await observeProviderAuthority(context.env.ROSTER_DB,sourceId,fileName,providerVersion);}catch(error){if(error.code==='ROSTER_MAINTENANCE_DEFERRED')return Response.json({ok:true,download:false,status:'deferred',reason:'account-budget'});throw error;}
   return Response.json({ ok: true, download: true, status: 'changed-or-new' });
 }

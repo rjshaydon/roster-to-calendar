@@ -1,3 +1,4 @@
+import {activeAuthorityFile} from './roster-authority.js';
 import { beginRosterPatch,readRosterPatchPage,pinRosterPatchPlan,stageRosterPatchBatch,activateRosterPatch } from './roster-patch.js';
 import { rosterDeliveryOrder, skipSupersededRosterDelivery } from './roster-delivery-order.js';
 import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from "./roster-import-staging.js";
@@ -96,6 +97,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
           if (body.deferCompletion === true) {result={...result,completed:false};break;}
         }
         const targetFileId = result.fileId || run.fileId;
+        if(!await activeAuthorityFile(db,targetFileId))return Response.json(await skipSupersededRosterDelivery(db,run));
         const summary = await loadRosterFileStatusSummary(db, targetFileId);
         const current = await loadRosterSource(db, run.sourceId);
         const latest = current?.activeFileId ? await loadRosterFileStatusSummary(db, current.activeFileId) : null;

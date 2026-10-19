@@ -1,3 +1,4 @@
+import { authorityGuard, authorityTerms, authorityActivationStatements } from './roster-authority.js';
 import {stageDeliveryHolds} from './publication-delivery-budget.js';
 import { stageRosterCompactMetadata } from "./roster-import-compact.js";
 import { rosterTermOwnership } from "./roster-term-ownership.js";
@@ -186,7 +187,9 @@ export async function activateBoundedRosterTerm(db, runId, revision, options = {
   const now = new Date().toISOString();
   // Only small control rows change here. Events and presence are already
   // prepared; active readers switch to the complete file atomically.
-  const deliveryGuards = options.deliveryGuard ? [options.deliveryGuard()] : [];
+  const terms=await authorityTerms(db,job.file_id);
+  const authority=authorityActivationStatements(db,{runId,sourceType:file.source_type,sourceId:job.source_id,fileId:job.file_id,revision,terms,now,gate:"EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activated=1)",gateArgs:[runId]});
+  const deliveryGuards = [authorityGuard(db,runId,file.source_type,terms),...(options.deliveryGuard ? [options.deliveryGuard()] : [])];
   const activation = (await db.batch([...deliveryGuards,
     db.prepare(`UPDATE roster_files SET active = 1 WHERE id = ? AND active = 0 AND NOT EXISTS (
       SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active
@@ -198,6 +201,7 @@ export async function activateBoundedRosterTerm(db, runId, revision, options = {
       .bind(revision, crypto.randomUUID(), now, job.file_id),
     db.prepare("UPDATE roster_import_jobs SET activated = 1 WHERE run_id = ? AND plan_revision = ? AND EXISTS (SELECT 1 FROM roster_files f WHERE f.id = file_id AND f.active = 1)").bind(runId, revision),
     facilitySmsMembershipStatement(db, job.file_id, true),
+    ...authority,
     ...(options.publishFacility ? facilityRefreshStatements(db, file.source_type, facilityTermDates(coverage.coverage_start, coverage.coverage_end), `${job.file_id}:${revision}`) : []),
   ])).slice(deliveryGuards.length);
   if (Number(activation[0]?.meta?.changes || 0) !== 1) throw new Error("New-term activation was superseded by a conflicting roster.");
@@ -251,7 +255,9 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
     facilitySmsMembershipStatement(db,job.file_id,true),
     ...(options.publishFacility ? facilityRefreshStatements(db,file.source_type,dates,`${job.file_id}:${revision}`,guard) : []),
   ];
-  const deliveryGuards = options.deliveryGuard ? [options.deliveryGuard()] : [];
+  const terms=await authorityTerms(db,job.file_id);
+  statements.push(...authorityActivationStatements(db,{runId:job.run_id,sourceType:file.source_type,sourceId:job.source_id,fileId:job.file_id,revision,terms,now,gate,gateArgs:[job.run_id,token]}));
+  const deliveryGuards = [authorityGuard(db,job.run_id,file.source_type,terms),...(options.deliveryGuard ? [options.deliveryGuard()] : [])];
   const results = (await db.batch([...deliveryGuards,...statements])).slice(deliveryGuards.length);
   if (Number(results[0]?.meta?.changes || 0) !== 1) throw new Error("Concurrent roster change prevented replacement activation.");
   return { fileId:job.file_id, retiredFileIds:retire, activated:true };

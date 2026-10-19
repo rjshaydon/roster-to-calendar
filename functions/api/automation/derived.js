@@ -60,7 +60,7 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
     }
     if (run.status === "superseded") return Response.json({ok:true,completed:true,superseded:true,doctorCount:0,eventCount:0});
-    const delivery = phase === "failed" ? {} : await rosterDeliveryOrder(context.env.ROSTER_DB, run);
+    const delivery = phase === "failed" ? {} : await rosterDeliveryOrder(context.env.ROSTER_DB, run,phase==='complete'?[...new Set(Object.values(body.eventsByDoctor||{}).flat().map(e=>australianTermStartForDate(String(e.start||'').slice(0,10))))].filter(Boolean):[]);
     if (delivery.superseded) return Response.json(await skipSupersededRosterDelivery(context.env.ROSTER_DB,run));
     if (phase === "start" && run.status === "processing") {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
@@ -216,6 +216,10 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
   if (String(env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true" && !await reserveRosterMaintenanceBudget(db,0,32*752+128)) throw maintenanceBudgetDeferredError();
   const preflight=await rosterTargetPreflight(db,{sourceType:source.sourceType,sourceId,runId:run.id,start:dates[0],end:dates.at(-1)});
   if (preflight.files.length>32) throw new Error("Roster target lookup exceeds the 32-active-file safety budget.");
+  if(preflight.files.some(row=>row.source_id?.startsWith('manual-')&&row.coverage_start<=dates.at(-1)&&row.coverage_end>=dates[0])&& !run.id.startsWith('manual:')) {
+    if(eventsByDoctor?.range)return {fileId:run.fileId};
+    const error=new Error('Manual fallback requires guarded bounded replacement.');error.code='ROSTER_INCREMENTAL_BUDGET';throw error;
+  }
   const candidates=preflight.files.filter(row=>row.source_id===sourceId);
   for (const row of candidates) {
     if (row.derived_state!=="ready" || !row.coverage_start || !row.coverage_end) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
