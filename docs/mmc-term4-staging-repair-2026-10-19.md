@@ -140,3 +140,27 @@ MMC/MCH real-fixture incremental clinical-fact parity, access scope/index/cache
 checks and shared-grant concurrency/recovery tests. Production acceptance follows
 only after a real Term 4 activation and publication; this section alone is not a
 claim that the missing roster has been restored.
+
+
+### Production acceptance checkpoint after follow-up
+
+App/runner commit `24638644`, production deployment `848dfafb`.
+Actual provider revision 19.0 succeeded at 2026-10-19T05:47:21.643Z:
+132 doctors, 4,075 events, coverage 2026-11-02 through the overnight
+boundary 2027-02-01. Reused 4,078 staged events with 33 changed facts,
+18 cached-mode batches, prepared and activated. Existing current term retained.
+
+At the last verified publication checkpoint all 13 Term 4 day batches and the
+first month were complete; remaining monthly/personal source publication was
+pending, without a recorded error. Normal continuation workflow
+39205895062 was running after initial workflow 39205844065 reached its bounded
+pass limit. Do not equate that workflow's generic deferred message with a D1
+cost-overrun: stop_reason remained empty and admitted writes remained positive
+(last inspected 5,478). Latest settled analytics still lag this activity.
+
+Next acceptance: check facility_refresh_jobs for MMC Term 4 completion, normal
+processor result and doctor-source publication, then inspect MMC 2 Nov in the
+owner's authenticated Safari. The Mac locked during the visual check; unlock
+requested. Do not report full end-to-end publication as verified yet. Scope of
+no-presence mode remains the reviewed MMC adult source; other sources retain
+legacy presence behavior pending their rollout. Tests passed before deployment.
