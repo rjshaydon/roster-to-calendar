@@ -159,7 +159,9 @@ async function buildFacilityPublicationBatch(context, plan, publicPlan, batchInd
       ON CONFLICT(source_type) DO UPDATE SET generation=facility_day_publications.generation + 1,
         operation_id=excluded.operation_id, status='building', base_revision=excluded.base_revision,
         candidate_revision='', lease_expires_at='', last_error='', updated_at=excluded.updated_at
-      WHERE facility_day_publications.status<>'building' OR facility_day_publications.operation_id=excluded.operation_id`)
+      WHERE facility_day_publications.status<>'building' OR facility_day_publications.operation_id=excluded.operation_id
+      OR NOT EXISTS(SELECT 1 FROM facility_refresh_jobs j WHERE j.source_type=facility_day_publications.source_type AND j.status='pending'
+       AND json_extract(CASE WHEN json_valid(j.plan_json) THEN j.plan_json ELSE '{}' END,'$.operationRevision')=facility_day_publications.operation_id)`)
       .bind(plan.sourceType, plan.planRevision, String(plan.manifestObject.data?.revision || ""), now).run();
     if(Number(claimed.meta?.changes||0)!==1)return {ok:true,deferred:true,reason:'publication-owner-busy'};
     operation = { operation_id: plan.planRevision, status: "building" };

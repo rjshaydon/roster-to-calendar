@@ -104,7 +104,7 @@ export async function onRequestPost(context) {
   let result,checkpointed=false;
   try {
     const affectedDates=JSON.parse(job.dates_json);
-    const boundaryOnly=mode==='plan'&&affectedDates.length>0&&affectedDates.every(date=>date===job.term_start)&&await carryOnlyPublication(db,source,job.term_start);
+    const boundaryOnly=affectedDates.length>0&&affectedDates.every(date=>date===job.term_start)&&await carryOnlyPublication(db,source,job.term_start);
     if(boundaryOnly){result={ok:true,boundaryOnly:true,mode:'finalize'};mode='finalize';}
     else result = await runFacilityPublicationStep({ ...context, env: { ...context.env, ROSTER_DB: meter.binding } }, source, {
       mode, requireDoctorCalendars: context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', termStart: job.term_start, dates: JSON.parse(job.dates_json),
@@ -131,6 +131,7 @@ export async function onRequestPost(context) {
         .bind(mode === "plan" ? JSON.stringify(result) : job.plan_json,
           nextBatch,nextMonth,
           mode === "finalize" ? "complete" : "pending", new Date().toISOString(), source, job.term_start, job.request_revision, job.next_batch, job.next_month),
+        ...(result.boundaryOnly&&plan?.operationRevision?[db.prepare("UPDATE facility_day_publications SET status='complete',last_error='',updated_at=? WHERE source_type=? AND operation_id=? AND status='building'").bind(new Date().toISOString(),source,plan.operationRevision)]:[]),
         mode==='finalize'?releasePublicationHoldStatement(db,source,job.term_start,job.request_revision):publicationHoldStatement(db,source,job.term_start,job.request_revision,JSON.parse(job.dates_json),{
           plan:nextPlan,nextBatch,nextMonth,guard:"EXISTS(SELECT 1 FROM facility_refresh_jobs WHERE source_type=? AND term_start=? AND request_revision=? AND status='pending' AND next_batch=? AND next_month=?)",bindings:[source,job.term_start,job.request_revision,nextBatch,nextMonth]}),
       ]);

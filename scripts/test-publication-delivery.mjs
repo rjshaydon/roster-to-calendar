@@ -83,6 +83,7 @@ const rootBefore=await r2.get(facilityMetadataManifestKey('mmc'));assert.ok(root
 // Start a new Term 4 operation, retain its daily data, then publish an unrelated
 // term through its own completed operation. Simulate external metadata changes
 // by editing only the shared manifest, as the independent admin tools can do.
+sqlite.prepare("UPDATE facility_day_publications SET status='building',operation_id='superseded-orphan' WHERE source_type='mmc'").run();
 const ownPlan=await runFacilityPublicationStep(context,'mmc',{mode:'plan',termStart:'2026-11-02',dates:['2026-11-02','2026-11-03']});
 await runFacilityPublicationStep(context,'mmc',{mode:'build-batch',termStart:'2026-11-02',dates:['2026-11-02','2026-11-03'],operationRevision:ownPlan.operationRevision,batchIndex:0});
 const {gunzipSync,gzipSync}=await import('node:zlib');
@@ -133,7 +134,13 @@ sqlite.exec("UPDATE facility_refresh_jobs SET status='complete';DELETE FROM rost
 await fixture('end-night','2027-01-31','2027-02-01');
 sqlite.prepare("INSERT OR IGNORE INTO facility_term_visibility(source_type,term_start,visible_from)VALUES('mmc','2027-02-01','2027-01-01')").run();
 await db.batch(facilityRefreshStatements(db,'mmc',['2027-02-01'],'boundary'));
+const boundaryPlan=await runFacilityPublicationStep(context,'mmc',{mode:'plan',termStart:'2027-02-01',dates:['2027-02-01']});
+await runFacilityPublicationStep(context,'mmc',{mode:'build-batch',termStart:'2027-02-01',dates:['2027-02-01'],operationRevision:boundaryPlan.operationRevision,batchIndex:0});
+sqlite.prepare("UPDATE facility_refresh_jobs SET plan_json=?,next_batch=1 WHERE term_start='2027-02-01'").run(JSON.stringify(boundaryPlan));
+const stableRoot=(await r2.head(facilityMetadataManifestKey('mmc'))).etag;
 const carry=await http();assert.equal(carry.boundaryOnly,true,JSON.stringify(carry));
+assert.equal(sqlite.prepare("SELECT status FROM facility_day_publications WHERE source_type='mmc'").get().status,'complete','retiring a partial boundary releases only its own source lease');
+assert.equal((await r2.head(facilityMetadataManifestKey('mmc'))).etag,stableRoot,'boundary retirement does not replace the published calendar');
 assert.equal(sqlite.prepare("SELECT status FROM facility_refresh_jobs WHERE term_start='2027-02-01'").get().status,'complete');
 assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM roster_events WHERE file_id='end-night' AND end_date='2027-02-01'").get().n,1,'retiring the boundary job preserves the overnight event');
 
