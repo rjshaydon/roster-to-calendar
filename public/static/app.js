@@ -39,7 +39,7 @@ import {
   serializeReviewItem,
   setParserExtensions,
   sourceNames,
-} from "./roster.js";
+} from "./roster.js?v=20261019-mmc-orientation";
 import { attachContactAllocations, contactAllocationCandidates, partitionDdhNightReview, ddhNightReviewWindow, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js?v=20261007-empty-contact1";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 

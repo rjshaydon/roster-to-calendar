@@ -272,3 +272,20 @@ limitations; they do not require reimporting the roster.
 All implementation changes are committed/pushed. No frontend assets changed,
 no Cloudflare plan upgrade or cap relaxation occurred, and no other restoration
 batch was started. Remaining five-hour Codex allowance at the final check: 65%.
+
+## Follow-up: MMC Orientation abbreviation
+
+User requested MMC stream `O` be expanded to Orientation. Aggregate indexed
+production inspection confirmed `0900-1300 O` for eight Intern events on
+19 October and one on 2 November. Implemented source-specific parser recognition
+and normalization of already-cached calendar/On shift events, preserving hours,
+raw roster text and historical grade without database writes or reimport.
+The cached stream catalogue display expands the label while retaining its key.
+Deployed `b0bfe68f` to `https://877984b2.roster-to-calendar.pages.dev`.
+
+Focused `node scripts/test-mmc-orientation.mjs`, subscription-artifact,
+doctor-calendar-artifact, syntax and diff checks passed. The broader legacy
+fixture suite stops at an unrelated existing login-markup assertion at line 888;
+the On shift suite passes its server checks then stops at an existing startup
+coalescing assertion at line 177. Neither failure was changed as part of this
+label correction. No claim that these entire suites pass is made.
