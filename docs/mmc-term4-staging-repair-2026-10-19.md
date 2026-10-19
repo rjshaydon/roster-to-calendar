@@ -83,6 +83,12 @@ available. A post-deployment primary read confirms no active MMC Term 4 file
 and only 42 usable writes, with no overrun/stop flag. Check normal five-minute
 metadata reconciliation stops launching unaffordable jobs.
 
+Post-release observation: the normal 16:11 Melbourne reconciliation succeeded
+in two seconds. Subsequent primary reads showed no new dispatch after 16:06,
+the latest MMC Term 4 input still queued, and the same 42-write remainder. This
+confirms safe retained/deferred behaviour for that cycle, not live import or
+publication acceptance. Ordinary five-minute checking remains On.
+
 The first deployment hit Workers Free's 64-variable limit. Remove the redundant
 production `FACILITY_BOOTSTRAP_EXECUTION_ENABLED=false` entry: its tested default
 is false, so recovery execution stays closed. This leaves room for the scoped
