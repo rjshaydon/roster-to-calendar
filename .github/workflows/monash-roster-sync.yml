@@ -79,17 +79,17 @@ jobs:
             --data "{\"action\":\"lifecycle\",\"event\":\"started\",\"sourceId\":\"${SOURCE_ID}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"}" \
             "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"
       - uses: actions/checkout@v4
-        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != ''
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only
       - uses: actions/setup-node@v4
-        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != ''
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-        if: steps.queue.outputs.count != '0'
-      - name: Parse and import queued rosters
+        if: steps.queue.outputs.count != '0' || inputs.publication_only
+      - name: Process imports or resume publication
         id: process
-        if: steps.queue.outputs.count != '0'
+        if: steps.queue.outputs.count != '0' || inputs.publication_only
         run: node scripts/process-roster-queue.mjs
         env:
           ROSTER_AUTOMATION_BASE_URL: ${{ env.ROSTER_AUTOMATION_BASE_URL }}

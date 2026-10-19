@@ -20,6 +20,7 @@ const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
 const maintenanceBudget = process.env.ROSTER_MAINTENANCE_SESSION ? JSON.parse(process.env.ROSTER_MAINTENANCE_SESSION) : null;
 const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
+const publicationOnly=process.env.ROSTER_PUBLICATION_ONLY==='true';
 
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
@@ -32,17 +33,16 @@ if (admission.deferred || admission.paused) {
 }
 let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
-if(pending.maintenanceDeferred){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
+if(pending.maintenanceDeferred&&!publicationOnly){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
 let runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
 console.log(`Found ${runs.length} queued roster file(s).`);
-if ((!runs.length && !pending.publicationPending) || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
+if ((!runs.length && !pending.publicationPending && !publicationOnly) || (pending.maintenanceDeferred&&!publicationOnly) || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
   console.log("No admitted import work; progress retained.");
   await processorOutcome(pending.maintenanceDeferred || runs.length || pending.publicationPending?'deferred':'completed');
   process.exit(0);
 }
 const publicationBudget={remaining:24};
-const publicationOnly=process.env.ROSTER_PUBLICATION_ONLY==='true';
 if(pending.boundedImportEnabled&&(pending.publicationPending||publicationOnly)){
   const delivery=await drainPublication();
   const after=await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);

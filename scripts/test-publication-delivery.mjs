@@ -132,11 +132,13 @@ assert.ok(personal.events.every(e=>!e.seniority||e.seniority==='Junior Registrar
 // A carry-in boundary does not become a permanently pending full next term.
 sqlite.exec("UPDATE facility_refresh_jobs SET status='complete';DELETE FROM roster_publication_holds");
 await fixture('end-night','2027-01-31','2027-02-01');
-sqlite.prepare("INSERT OR IGNORE INTO facility_term_visibility(source_type,term_start,visible_from)VALUES('mmc','2027-02-01','2027-01-01')").run();
+sqlite.prepare("DELETE FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2027-02-01'").run();
 await db.batch(facilityRefreshStatements(db,'mmc',['2027-02-01'],'boundary'));
+sqlite.prepare("INSERT OR IGNORE INTO facility_term_visibility(source_type,term_start,visible_from)VALUES('mmc','2027-02-01','2027-01-01')").run();
 const boundaryPlan=await runFacilityPublicationStep(context,'mmc',{mode:'plan',termStart:'2027-02-01',dates:['2027-02-01']});
 await runFacilityPublicationStep(context,'mmc',{mode:'build-batch',termStart:'2027-02-01',dates:['2027-02-01'],operationRevision:boundaryPlan.operationRevision,batchIndex:0});
 sqlite.prepare("UPDATE facility_refresh_jobs SET plan_json=?,next_batch=1 WHERE term_start='2027-02-01'").run(JSON.stringify(boundaryPlan));
+sqlite.prepare("DELETE FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2027-02-01'").run();
 const stableRoot=(await r2.head(facilityMetadataManifestKey('mmc'))).etag;
 const carry=await http();assert.equal(carry.boundaryOnly,true,JSON.stringify(carry));
 assert.equal(sqlite.prepare("SELECT status FROM facility_day_publications WHERE source_type='mmc'").get().status,'complete','retiring a partial boundary releases only its own source lease');

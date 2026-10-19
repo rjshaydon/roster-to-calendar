@@ -91,7 +91,14 @@ export async function onRequestPost(context) {
     if (dates.length) await db.batch(facilityRefreshStatements(db, source, dates, JSON.stringify(current.map((row) => [row.id, row.content_revision]))));
     return Response.json({ ok: true, seeded: dates.length > 0, sourceType: source, termStart: term, dateCount: dates.length });
   }
-  const job = await db.prepare(`SELECT j.* FROM facility_refresh_jobs j WHERE j.source_type = ? AND j.status = 'pending' AND EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start) ORDER BY CASE WHEN EXISTS(SELECT 1 FROM facility_day_publications p WHERE p.source_type=j.source_type AND p.status='building'
+  const job = await db.prepare(`SELECT j.* FROM facility_refresh_jobs j WHERE j.source_type = ? AND j.status = 'pending' AND (EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start)
+    OR (json_array_length(j.dates_json)=1 AND json_extract(j.dates_json,'$[0]')=j.term_start
+      AND EXISTS(SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active JOIN roster_file_coverage c ON c.file_id=f.id
+        WHERE f.source_type=j.source_type AND f.active=1 AND c.coverage_start<j.term_start AND c.coverage_end=j.term_start)
+      AND NOT EXISTS(SELECT 1 FROM facility_stream_catalog_contributions c JOIN roster_files f ON f.id=c.file_id
+        WHERE c.source_type=j.source_type AND c.term_start=j.term_start AND f.active=1)
+      AND NOT EXISTS(SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active JOIN roster_file_coverage c ON c.file_id=f.id
+        WHERE f.source_type=j.source_type AND f.active=1 AND c.coverage_start>=j.term_start))) ORDER BY CASE WHEN EXISTS(SELECT 1 FROM facility_day_publications p WHERE p.source_type=j.source_type AND p.status='building'
     AND json_extract(CASE WHEN json_valid(j.plan_json) THEN j.plan_json ELSE '{}' END,'$.operationRevision')=p.operation_id) THEN 0 ELSE 1 END,j.term_start LIMIT 1`).bind(source).first();
   if (!job) return Response.json({ ok: true, idle: true });
   const day = new Date().toISOString().slice(0, 10);
