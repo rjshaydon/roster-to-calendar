@@ -22,6 +22,11 @@ No unresolved incomplete maintenance receipt was found. This is not the earlier
 one-off preview forecast issue; real partial import writes have been consumed.
 The internal maintenance ceiling remains 4,000,000 reads / 80,000 writes.
 
+An aggregate-only follow-up counted 8,290 planned presence rows and 4,309 already
+prepared for version 7. About 3,981 rows remain before newer-revision differences,
+compact facts and publication. Their conservative indexed-write cost alone is
+19,905, so the observed remaining grant cannot complete this work today.
+
 ## Repair
 
 - Additive migration 0053 adds inactive-file lease/progress records and bounded
@@ -73,6 +78,11 @@ synthetic correctness tests and aggregate production inspection instead.
 Migration 0053 is applied to the production database. Deploy the tested code and
 verify normal five-minute metadata reconciliation stops launching unaffordable
 jobs. Retained version 19 and the inactive baseline must remain available.
+
+The first deployment hit Workers Free's 64-variable limit. Remove the redundant
+production `FACILITY_BOOTSTRAP_EXECUTION_ENABLED=false` entry: its tested default
+is false, so recovery execution stays closed. This leaves room for the scoped
+staging-reuse control without upgrading the plan or changing permissions.
 
 **Real MMC Term 4 publication is not yet verified.** Its remaining work must be
 admitted by the existing grant. With only tens of usable writes, do not manually

@@ -43,7 +43,6 @@ FACILITY_AUTOMATIC_PUBLICATION_ENABLED = "true"
 ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "1250"
 # Advanced recovery/inspection and its allowlist use their closed defaults.
 # Omit redundant disabled variables to stay below Workers Free's 64-variable cap.
-FACILITY_BOOTSTRAP_EXECUTION_ENABLED = "false"
 CONTACT_AUTOMATION_WRITES_ENABLED = "true"
 CONTACT_AUTOMATION_SOURCE_ALLOWLIST = "ddh-daily-contact-sheet,mmc-shift-allocations,vhh-shift-phone-allocations"
 IDENTITY_DISCOVERY_ENABLED = "true"
