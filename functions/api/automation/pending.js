@@ -1,6 +1,7 @@
 import {loadPendingRosterPublication} from "../../_lib/roster-delivery-health.js";
 import { hasCalendarDb, listQueuedRosterSyncRuns } from "../../_lib/d1-calendar.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
+import {rosterProcessingHeadroom} from '../../_lib/roster-maintenance-budget.js';
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestGet(context) {
@@ -21,7 +22,7 @@ export async function onRequestGet(context) {
   let maintenanceDeferred = Number(allowance?.reserved_writes || 0) >= 9500 || Number(allowance?.reserved_reads || 0) >= 490000;
   if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true") {
     const gate = await context.env.ROSTER_DB.prepare("SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?").bind(new Date().toISOString().slice(0,10)).first();
-    maintenanceDeferred = !gate || !!gate.stop_reason || gate.valid_until <= new Date().toISOString() || gate.allocated_reads >= gate.maximum_reads || gate.allocated_writes >= gate.maximum_writes;
+    maintenanceDeferred = !rosterProcessingHeadroom(gate);
   }
   const runs = await listQueuedRosterSyncRuns(context.env.ROSTER_DB, sourceId, limit);
   return Response.json({

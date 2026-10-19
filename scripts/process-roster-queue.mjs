@@ -5,6 +5,7 @@ import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 import { planRosterImportBatches } from "../functions/_lib/roster-import-batches.js";
 import { executeRosterPatch } from "./roster-patch-plan.mjs";
+import { executeRosterRebase } from './roster-staging-reuse.mjs';
 import { attachRosterCompactPlan } from "./roster-compact-plan.mjs";
 import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
 
@@ -29,6 +30,7 @@ if (admission.deferred || admission.paused) {
 }
 let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
+if(pending.maintenanceDeferred){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
 console.log(`Found ${runs.length} queued roster file(s).`);
@@ -156,6 +158,15 @@ async function processRun(run) {
       method: "POST", body: { ...step, supportsPatch: pending.patchImportEnabled === true, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
     });
     finished = await executeBoundedRosterImport(plan, importStep(false));
+    if(finished.mode==='rebase'){
+      try{finished=await executeRosterRebase(payload,finished,{startDate:plan.manifest.startDate,rosterEndDate:plan.manifest.rosterEndDate},importStep(false));}
+      catch(error){
+        if(error.code!=='ROSTER_INCREMENTAL_BUDGET'||!error.boundedReplacementRequired)throw error;
+        // A genuinely large rewrite still uses the established, budgeted full
+        // staging path. Ordinary autosaves reuse the invisible baseline.
+        finished=await executeBoundedRosterImport(plan,importStep(true));
+      }
+    }
     if (finished.mode === "patch") {
       try { finished = await executeRosterPatch(payload,finished,importStep(false)); }
       catch(error) {

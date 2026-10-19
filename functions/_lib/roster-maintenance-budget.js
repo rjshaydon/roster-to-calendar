@@ -1,6 +1,14 @@
 const sessionLimits = new WeakMap();
 const requests = new WeakMap();
 
+// A nonzero grant can still be too small for any useful import step. Keep
+// deferred work retained instead of repeatedly dispatching/parsing it.
+export function rosterProcessingHeadroom(gate,now=new Date()) {
+ return Boolean(gate&&!gate.stop_reason&&gate.valid_until>new Date(now).toISOString()
+  &&Number(gate.maximum_writes)-Number(gate.allocated_writes)>=2048
+  &&Number(gate.maximum_reads)-Number(gate.allocated_reads)>=8192);
+}
+
 export function beginMaintenanceAccounting(db, requestId, enabled, options = {}) {
   if (enabled) requests.set(db, { id: requestId, reserved: false, ...options });
 }

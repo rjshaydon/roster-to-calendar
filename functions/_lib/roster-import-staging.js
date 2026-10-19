@@ -11,6 +11,7 @@ export async function beginBoundedRosterImport(db, runId, file, plan, options = 
   if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || !options.validatedPlan && await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
   if (plan.manifest.doctors.length > 512 || plan.manifest.eventCount > 25000 || plan.manifest.issueCount > 5000) throw new Error("Staged import plan exceeds total safety bounds.");
   let existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (existing?.rebase_owner) throw new Error('Staged roster is owned by a newer revision.');
   if (existing && existing.plan_revision !== plan.revision && plan.manifest.compact && !existing.activated) {
     const previous = JSON.parse(existing.manifest_json);
     const { compact: _compact, ...sameEventsManifest } = plan.manifest;
@@ -246,7 +247,7 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
 
 function stagingTransactionGuard(db, runId, revision, fileId, nextBatch, preparedBatch = null) {
   return db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_import_jobs
-    WHERE run_id=? AND plan_revision=? AND file_id=? AND initialized=1 AND activated=0
+    WHERE run_id=? AND plan_revision=? AND file_id=? AND initialized=1 AND activated=0 AND rebase_owner=''
       AND next_batch=? ${preparedBatch === null ? '' : 'AND prepared_batch=?'})
     AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
     THEN 1 ELSE json('staging-conflict') END AS staging_guard`)

@@ -93,7 +93,7 @@ function validatePatchManifest(plan,job) {
   }
   if(count>4000 || !Number.isInteger(plan.reservedWrites) || plan.reservedWrites<64 || plan.reservedWrites>50000) throw Error('Patch cost bound exceeded.');
 }
-function validatePatchEntry(entry,job,plan) {
+export function validatePatchEntry(entry,job,plan) {
   const sizes={doctor:7,event:17,issue:14,presence:5,staff:12,catalog:16,removeDoctor:1,removeEvent:1,removeIssue:1,removeStaff:2,removeCatalog:2};
   const row=entry?.row, kind=entry?.kind;
   if(!sizes[kind] || !Array.isArray(row) || row.length!==sizes[kind] || row.some(v=>typeof v!=='string' && typeof v!=='number')) throw Error('Invalid typed patch fact.');

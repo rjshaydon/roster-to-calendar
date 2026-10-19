@@ -1,17 +1,22 @@
 # Remaining restoration and development batches — 4 October 2026
 
-Status, consolidated 18 October: **Batches 1 and 2 are complete.** Subsequent
+Status, consolidated 19 October: **Batches 1, 2 and 6 are complete.** Subsequent
 MCH draft discovery and automatic publication faults are fixed and accepted.
-**Batch 6 security is complete**, including general password migration, secure
-sessions and optional passkeys with the user's successful device check. Its
-identity requests/private admin-support messaging and reviewed dispute resolution
-remain to implement. Batches 3, 4 and 7 have not been accepted as complete;
+Batch 6 includes general password migration, secure sessions, optional passkeys,
+identity requests/private admin-support messaging and reviewed dispute resolution;
+the owner accepted the iPhone workflow and staff rollout is deployed. See the
+[18 October release checkpoint](restoration-batch6-requests-2026-10-18.md).
+Batches 3, 4 and 7 have not been accepted as complete;
 Batch 5 has partial reliability foundations but its full resilience/diagnostics
 scope remains. Batch 8 remains later work. The dated checkpoints below are
 historical evidence, not a replacement for this current status.
 See [the consolidated Batch 6 plan](restoration-batch6-plan-2026-10-15.md).
-The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
-retaining the original batch numbers for continuity. This plan supersedes earlier
+The user's revised priority is **4 → 5 → 8**, following completed 1, 2 and 6;
+**7 and 3 are deferred**, retaining the original batch numbers for continuity.
+Start Batch 4 with the [automatic/manual authority plan](roster-source-authority-plan-2026-10-19.md).
+The urgent [MMC Term 4 staging repair](mmc-term4-staging-repair-2026-10-19.md)
+takes priority over that planned work; its real publication gate must be checked.
+This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.
 
 Baseline: production `ba5ee7ad` restored VHH history from 4 May, DDH five-minute

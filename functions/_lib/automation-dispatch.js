@@ -6,6 +6,7 @@ import {
 import { guardedFetch, localOnlyEnabled } from "./outbound-network.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled } from "./roster-automation-guard.js";
 import { refreshAccountMaintenanceBudget } from '../api/automation/account-budget.js';
+import {rosterProcessingHeadroom} from './roster-maintenance-budget.js';
 import {markRosterDeliveryDeferred,clearRosterDeliveryWarning,loadPendingRosterPublication} from './roster-delivery-health.js';
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
@@ -34,7 +35,7 @@ export async function requestQueuedRosterProcessing(env, { sourceId = "", reason
       gate=await env.ROSTER_DB.prepare('SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?')
         .bind(requestedAt.toISOString().slice(0,10)).first();
     }
-    if(!gate || gate.stop_reason || gate.valid_until<=requestedAt.toISOString() || gate.allocated_reads>=gate.maximum_reads || gate.allocated_writes>=gate.maximum_writes)
+    if(!rosterProcessingHeadroom(gate,requestedAt))
       return budgetDeferred(env,normalizedSourceId);
   }
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {

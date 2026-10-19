@@ -3297,7 +3297,10 @@ export async function listQueuedRosterSyncRuns(db, sourceId, limit = 1) {
             OR (newer_run.started_at = roster_sync_runs.started_at AND newer_run.id > roster_sync_runs.id)
           )
       )
-    ORDER BY roster_sync_runs.started_at ASC
+    ORDER BY EXISTS(SELECT 1 FROM roster_files current_file INDEXED BY idx_roster_files_source_active
+      WHERE current_file.source_type=raw_roster_files.source_type AND current_file.active=1
+      AND current_file.source_id=roster_sync_runs.source_id AND LOWER(current_file.name)=LOWER(raw_roster_files.name)) ASC,
+      roster_sync_runs.started_at ASC
     LIMIT ?
   `).bind(normalizedSourceId, safeLimit).all();
   return (rows.results || []).map((row) => ({

@@ -5,6 +5,7 @@ import { loadRosterSyncRun, loadRosterSource, loadRosterFileStatusSummary, finis
 import { reviewedRosterFactLimit } from "./roster-automation-guard.js";
 import { automaticFacilityPublicationEnabled } from "./facility-refresh-queue.js";
 import { rosterImportDigest, validateRosterImportManifest } from "./roster-import-batches.js";
+import { reusableRosterStage,beginRosterRebase,readRosterRebasePage,pinRosterRebasePlan,saveRosterRebaseBatch,applyRosterRebaseBatch,prepareRosterRebase } from './roster-staging-reuse.js';
 
 export async function handleBoundedRosterRequest(context, body, source, resolveTarget) {
   if (String(context.env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") !== "true") return Response.json({ error: "Bounded roster importing is not enabled." }, { status: 503 });
@@ -36,6 +37,10 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
             if (body.supportsPatch === true && context.env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED === 'true') return Response.json({ok:true,mode:"patch",fileId:target.fileId});
             return Response.json({ ok: true, mode: "complete", boundedReplacementAvailable: replacements });
           }
+          if(context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId)){
+            const reusable=await reusableRosterStage(db,run,manifest);
+            if(reusable)return Response.json({ok:true,mode:'rebase',fileId:reusable});
+          }
         }
         if (locating) return Response.json({ok:true,mode:'staging-ready'});
         result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision }, { allowReplacement: replacements, allowEmptyPlanRecovery: true, validatedPlan:true });
@@ -51,6 +56,21 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-patch-page": result = await readRosterPatchPage(db,run,body); break;
       case "bounded-patch-plan": result = await pinRosterPatchPlan(db,run,body); break;
       case "bounded-patch-stage": result = await stageRosterPatchBatch(db,run,body); break;
+      case "bounded-rebase-start":
+      case "bounded-rebase-page":
+      case "bounded-rebase-plan":
+      case "bounded-rebase-save":
+      case "bounded-rebase-stage":
+      case "bounded-rebase-prepare": {
+        if(!context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId))throw Error('Staging reuse is not enabled for this source.');
+        if(body.phase==='bounded-rebase-start')result=await beginRosterRebase(db,run,String(body.targetFileId||''),body.range||{});
+        if(body.phase==='bounded-rebase-page')result=await readRosterRebasePage(db,run,body);
+        if(body.phase==='bounded-rebase-plan')result=await pinRosterRebasePlan(db,run,body);
+        if(body.phase==='bounded-rebase-save')result=await saveRosterRebaseBatch(db,run,body,context.env.ROSTER_FILES);
+        if(body.phase==='bounded-rebase-stage')result=await applyRosterRebaseBatch(db,run,body,context.env.ROSTER_FILES);
+        if(body.phase==='bounded-rebase-prepare')result=await prepareRosterRebase(db,run,body,file);
+        break;
+      }
       case "bounded-finalize":
       case "bounded-patch-activate":
       case "bounded-activate": {

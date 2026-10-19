@@ -5,7 +5,7 @@ const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex
 const wire=value=>JSON.parse(JSON.stringify(value));
 const eventColumns='id,doctor_key,display_name,start_date,end_date,start_ts,end_ts,title,raw_value,seniority,provider_staff_id,location,all_day,time_label,event_json'.split(',');
 const issueColumns='id,doctor_key,display_name,start_date,raw_value,seniority,status,message,resolution_type,suggested_title,time_label,issue_json'.split(',');
-export async function planRosterPatch(payload,baseline,stored) {
+export async function planRosterPatch(payload,baseline,stored,options={}) {
   const file={...payload.file,id:baseline.fileId},sourceType=file.sourceType,now=baseline.baselineParsedAt;
   const doctors=sanitizeFileDoctors(payload.doctors,sourceType);
   const {eventRows,issueRows}=collectDerivedEventAndIssueRows(file,sourceType,doctors,payload.eventsByDoctor,payload.issuesByDoctor);
@@ -14,6 +14,8 @@ export async function planRosterPatch(payload,baseline,stored) {
   const compact=await buildFacilityOverviewFacts(file,doctors.map(d=>({doctor_key:d.key,display_name:d.displayName,seniority:d.seniority,membership_source:d.membershipSource,provider_staff_id:d.providerStaffId})),
     eventRows.map(r=>({id:r[0],doctor_key:r[3],display_name:r[4],start_date:r[5],end_date:r[6],seniority:r[11],event_json:r[16]})),contentRevision);
   const entries=[],dates=new Set(),changedDoctors=new Set();let changedFacts=0;
+  const stagedPresence=options.staging?new Map(stored.presence.map(row=>[row[4]+'|'+row[0],JSON.stringify(row)])):null;
+  let presenceCount=0;
   const span=(start,end)=>{
     let cursor=String(start).slice(0,10),last=String(end||start).slice(0,10),n=0;
     while(cursor<=last && n++<180) {dates.add(cursor);cursor=new Date(Date.parse(cursor+'T12:00:00Z')+86400000).toISOString().slice(0,10);}
@@ -27,7 +29,14 @@ export async function planRosterPatch(payload,baseline,stored) {
     const oldMap=new Map(old.map(r=>[r.id,JSON.stringify(columns.map(k=>k==='provider_staff_id'?(r[k]||''):r[k]))]));
     const desiredIds=new Set(desired.map(r=>r[0])),affected=new Set();
     for(const row of desired) {
-      if(JSON.stringify([row[0],...row.slice(3)])===oldMap.get(row[0])) continue;
+      if(kind==='event')presenceCount+=expandEventToDailyPresenceRows(JSON.parse(row[16]),{sourceType,doctorKey:row[3],displayName:row[4]}).length;
+      if(JSON.stringify([row[0],...row.slice(3)])===oldMap.get(row[0])) {
+        if(kind==='event'&&stagedPresence)for(const d of expandEventToDailyPresenceRows(JSON.parse(row[16]),{sourceType,doctorKey:row[3],displayName:row[4]})){
+          const presence=[d.date,d.sourceType,d.doctorKey,d.displayName,row[0]];
+          if(stagedPresence.get(row[0]+'|'+d.date)!==JSON.stringify(presence))entries.push({kind:'presence',row:presence});
+        }
+        continue;
+      }
       entries.push({kind,row});changedFacts++;affected.add(row[0]);
       if(kind==='event') {
         span(row[5],row[6]);
@@ -51,7 +60,7 @@ export async function planRosterPatch(payload,baseline,stored) {
     }
     for(const marker of previous.keys()) if(!desired.has(marker)) entries.push({kind:kind==='staff'?'removeStaff':'removeCatalog',row:marker.split('|')});
   }
-  if(changedFacts>1250 || entries.length>1500 || entries.length*32+1024+doctors.length*4>50000 || dates.size>180) {
+  if(changedFacts>1250 || entries.length>(options.staging?12800:1500) || !options.staging&&entries.length*32+1024+doctors.length*4>50000 || dates.size>180) {
     const error=Error('Roster patch exceeds its reviewed correction envelope.');error.code='ROSTER_INCREMENTAL_BUDGET';error.boundedReplacementRequired=true;throw error;
   }
   const batches=[];
@@ -64,6 +73,7 @@ export async function planRosterPatch(payload,baseline,stored) {
     doctorCount:doctors.length,eventCount:eventRows.length,issueCount:issueRows.length,changedFacts,dates:[...dates].sort(),reservedWrites:entries.length*32+1024+doctors.length*4,
     coverage:{start:compact.coverageStart,end:compact.coverageEnd,staffDigest:compact.staffDigest,dailyDigest:compact.dailyDigest},
     batches:await Promise.all(batches.map(async b=>({index:b.index,count:b.entries.length,hash:await rosterImportDigest(b)})))};
+  if(options.staging){manifest.doctors=doctors;manifest.presenceCount=presenceCount;manifest.rosterEndDate=eventRows.reduce((last,r)=>r[5]>last?r[5]:last,'');}
   return {manifest,batches,patchRevision:await rosterImportDigest(manifest)};
 }
 export async function executeRosterPatch(payload,baseline,callback) {

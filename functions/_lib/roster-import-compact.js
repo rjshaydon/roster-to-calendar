@@ -64,6 +64,6 @@ export async function stageRosterCompactMetadata(db,job,manifest,batch) {
 }
 function inactiveGuard(db,job) {
   return db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
-    AND EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND plan_revision=? AND compact_ready=0)
+    AND EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND plan_revision=? AND compact_ready=0 AND rebase_owner='')
     THEN 1 ELSE json('compact-staging-conflict') END`).bind(job.file_id,job.run_id,job.plan_revision);
 }
