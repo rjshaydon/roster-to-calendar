@@ -238,3 +238,14 @@ handoffs from a manual selection while preserving the current active roster.
 Keep generation guards and migration; do not reactivate an old deployment that
 lacks those guards while manual authority rows exist. No staff-search code is
 included. Existing source IDs in Admin Files remain the provenance record.
+
+Production release: commit 740f2dba, deployment
+https://8abbe4ae.roster-to-calendar.pages.dev. Migration 0055 applied. Live policy
+checks passed with no safeguard stop and about 14,164 unallocated writes. Initial
+seed inspection found two legacy VHH historical gap-fill scopes coexisting with
+automatic fragments. Migration 0056 removes only that inferred seed authority;
+it preserves every roster file/event and excludes new manual activations carrying
+a fence. Historical supplements are not whole-term manual takeovers. No clinical
+roster was uploaded or replaced for testing. Final live handoff remains to be
+observed on a naturally required full manual fallback. Usage reached 20% remaining;
+staff search is not started.
