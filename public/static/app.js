@@ -27,6 +27,7 @@ import {
   exportIcs,
   filterCalendarRosterEvents,
   clinicalSupportRosterMode,
+  normalizeOrientationRosterEvent,
   isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
@@ -5843,6 +5844,7 @@ function buildWhoAssignments(doctor, events) {
 }
 
 function buildWhoAssignment(doctor, metadata, event) {
+  event = normalizeOrientationRosterEvent(event);
   const source = eventSourceCode(event);
   // Some provider shifts omit the staff grade but retain it in the title (for
   // example "Physiotherapist"). Use the same recognised-grade detection as
@@ -9877,7 +9879,8 @@ function facilityOverviewBuildStreamCatalog(rows = []) {
 
 function facilityOverviewStreamsForFacility(facilityKey) {
   const key = String(facilityKey || "").toUpperCase();
-  return (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === key);
+  return (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === key)
+    .map(entry => key === "MMC" && entry.label === "O" ? { ...entry, label: "Orientation" } : entry);
 }
 
 function facilityOverviewFirstStreamKey(facilityKey) {

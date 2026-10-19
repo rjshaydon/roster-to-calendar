@@ -671,9 +671,28 @@ export function filterDuplicateDdhRosterEvents(events = []) {
   return filtered;
 }
 
+// Normalize legacy cached events at the boundary; no database rewrite or roster
+// reimport is needed merely to expand a known source abbreviation.
+export function normalizeOrientationRosterEvent(event) {
+  const source = String(event?.source || event?.sourceType || "").trim().toUpperCase();
+  if (source !== "MMC") return event;
+  const raw = String(event?.rawValue || "").trim();
+  if (!isMmcOrientationCode(raw) && !/^MMC:\s*O$/i.test(String(event?.title || "").trim())) return event;
+  return { ...event, title: "MMC: Orientation",
+    ...(event.titleParts ? { titleParts: { base: "Orientation", period: "", suffix: "" } } : {}),
+    ...(event.status === "unknown" ? { status: "ok" } : {}),
+    ...(event.warning === "MMC shift code not recognised; using explicit roster time." ? { warning: "" } : {}),
+  };
+}
+
+function isMmcOrientationCode(raw) {
+  const explicit = extractMmcExplicitTime(String(raw || ""));
+  return String(explicit?.label || raw || "").trim().toUpperCase() === "O";
+}
+
 export function filterCalendarRosterEvents(events = []) {
   return applyPhnwCalendarPrecedence(
-    filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events)),
+    filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events.map(normalizeOrientationRosterEvent))),
   );
 }
 
@@ -3269,7 +3288,7 @@ function createOrientationRecord(source, day, rawValue, seniority = UNKNOWN_SENI
   const label = String(rawValue || "").trim();
   // Casey uses the abbreviated form "Orient 09-1730". It is a real,
   // timed orientation shift, not metadata to be stripped from a roster cell.
-  if (!/^(?:ORIENTATION|ORIENATION|ORIENT)\b/i.test(label)) return null;
+  if (!/^(?:ORIENTATION|ORIENATION|ORIENT)\b/i.test(label) && !(source === "MMC" && isMmcOrientationCode(label))) return null;
   const range = label.match(/\b(\d{1,2})(?::?(\d{2}))?\s*(?:-|–|—|TO)\s*(\d{1,2})(?::?(\d{2}))?\b/i);
   const location = source === "MMC" ? MMC_LOCATION
     : source === "DDH" ? DDH_LOCATION
