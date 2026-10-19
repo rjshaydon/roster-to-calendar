@@ -240,3 +240,35 @@ native Cloudflare billing or CPU measurement.
 
 Production deployment and aggregate read-only acceptance will be recorded after
 completion. No source workbook edits or production roster exports are needed.
+
+
+## Production acceptance — 19 October, 22:00 AEDT
+
+Applied migration 0054 and deployed code through `3064b59e` to production
+(`https://2e047630.roster-to-calendar.pages.dev`, custom domain unchanged).
+Publication-only workflow run `39241418324` completed successfully, using the
+normal existing credentials and no roster download, parse or import. Its
+read-only delivery result was:
+
+```json
+{"sourceType":"mmc","term":"2026-11-02","ready":true,"matchingParent":true,"termPresent":true,"monthCount":12}
+```
+
+All five tracked MMC term jobs are complete with no last error, including the
+2027-02-01 carry-in-only boundary. The final aggregate D1 check read seven rows
+and wrote zero. The budget snapshot showed settled account writes 81,096,
+usable writes 13,740, and no stop reason; these are the safeguard accounting
+snapshot, not a guarantee against future account-wide activity or analytics lag.
+
+After deployment, refreshing the authenticated Safari personal calendar again
+visibly showed MMC shifts throughout November and December alongside DDH shifts.
+The Mac then became unavailable (`noWindowsAvailable`) before the On shift
+2 November visual check could be completed. A live private subscription response
+was not downloaded: subscription artifacts/invalidation were covered by the
+local regression suite, while production personal-generation readiness was
+verified above. These two visual/output checks remain explicit acceptance
+limitations; they do not require reimporting the roster.
+
+All implementation changes are committed/pushed. No frontend assets changed,
+no Cloudflare plan upgrade or cap relaxation occurred, and no other restoration
+batch was started. Remaining five-hour Codex allowance at the final check: 65%.
