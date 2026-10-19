@@ -75,9 +75,13 @@ synthetic correctness tests and aggregate production inspection instead.
 
 ## Release and remaining gate
 
-Migration 0053 is applied to the production database. Deploy the tested code and
-verify normal five-minute metadata reconciliation stops launching unaffordable
-jobs. Retained version 19 and the inactive baseline must remain available.
+Migration 0053 is applied to the production database. Source commits `00657fe6`
+and `431340ff` are pushed. Production deployment `85c392f1` is successful;
+the root and session-options endpoints return HTTP 200, with Requests and
+passkeys unchanged. Retained version 19 and the inactive baseline remain
+available. A post-deployment primary read confirms no active MMC Term 4 file
+and only 42 usable writes, with no overrun/stop flag. Check normal five-minute
+metadata reconciliation stops launching unaffordable jobs.
 
 The first deployment hit Workers Free's 64-variable limit. Remove the redundant
 production `FACILITY_BOOTSTRAP_EXECUTION_ENABLED=false` entry: its tested default
