@@ -1,3 +1,4 @@
+import { validateRosterImportManifest, rosterImportDigest } from './roster-import-batches.js';
 import { pinManualAuthority } from './roster-authority.js';
 import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from './roster-import-staging.js';
 import { loadRosterFileStatusSummary } from './d1-calendar.js';
@@ -5,6 +6,22 @@ import { reserveRosterMaintenanceBudget } from './roster-maintenance-budget.js';
 import { automaticFacilityPublicationEnabled, facilityRefreshStatements, facilityTermDates } from './facility-refresh-queue.js';
 
 export const MANUAL_ROSTER_SOURCES = Object.freeze({ mmc: 'manual-mmc', mch: 'manual-mch', ddh: 'manual-ddh', vhh: 'manual-vhh' });
+// Omitting the legacy index is safe only while every user reads published
+// artifacts. Do not infer this from a client flag or from one cohort's rollout.
+export function manualCachedPresenceEnabled(env,sourceType) {
+  return Boolean(env.ROSTER_FILES?.get && env.ROSTER_FILES?.put
+    && automaticFacilityPublicationEnabled(env,sourceType)
+    && env.FACILITY_SHARED_ROLLOUT_ACTIVE === 'true'
+    && env.FACILITY_SHARED_EMERGENCY_PAUSED !== 'true'
+    && env.FACILITY_SHARED_READER_COHORT === 'all'
+    && env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST?.split(',').map(s=>s.trim()).includes(sourceType)
+    && env.FACILITY_SHARED_METADATA_ENABLED === 'true'
+    && env.FACILITY_SHARED_DAYS_ENABLED === 'true'
+    && env.FACILITY_LEGACY_READS_PAUSED === 'true'
+    && env.ROSTER_INSIGHT_READS_ENABLED === 'true'
+    && env.SUBSCRIPTION_ARTIFACT_MODE === 'ready');
+}
+
 export async function handleManualRosterImport(context, body, email) {
   const sourceType = String(body.file?.sourceType || '').toLowerCase();
   const sourceId = MANUAL_ROSTER_SOURCES[sourceType];
@@ -12,12 +29,31 @@ export async function handleManualRosterImport(context, body, email) {
   if (!sourceId || !/^manual:[a-f0-9-]{36}$/.test(id) || body.file.sourceId !== sourceId) throw new Error('A bounded manual roster identity and supported site are required.');
   const db = context.env.ROSTER_DB, runId = `manual:${id}`, revision = String(body.revision || '');
   const file = { ...body.file, sourceId, sourceType, active: false, uploadedBy: email };
+  const cachedAllowed=manualCachedPresenceEnabled(context.env,sourceType);
+  if(body.manifest?.presenceMode==='cached' && !cachedAllowed)throw new Error('Published manual-import readers are unavailable; keep the existing roster and retry when restored.');
+  if(!['bounded-begin','bounded-initialize'].includes(body.phase) && !cachedAllowed){
+    const job=await db.prepare('SELECT manifest_json FROM roster_import_jobs WHERE run_id=?').bind(runId).first();
+    if(job && JSON.parse(job.manifest_json).presenceMode==='cached')throw new Error('Published manual-import readers are unavailable; the import is retained for retry.');
+  }
   let result;
   switch (body.phase) {
-    case 'bounded-begin': await pinManualAuthority(db,runId,sourceType); result = await beginBoundedRosterImport(db, runId, file, { manifest: body.manifest, revision }, { allowReplacement: true }); break;
+    case 'bounded-begin':
+    case 'bounded-initialize': {
+      validateRosterImportManifest(body.manifest);
+      if(body.manifest.fileId!==id || body.manifest.sourceId!==sourceId || await rosterImportDigest(body.manifest)!==revision)throw new Error('Manual import plan does not match its file and revision.');
+      if(body.phase==='bounded-begin' && body.deferStaging===true && body.supportsCachedPresence===true) {
+        const existing=await db.prepare('SELECT manifest_json,activated FROM roster_import_jobs WHERE run_id=?').bind(runId).first();
+        // Existing jobs keep their original mode/hash/cursors. Never turn a
+        // partially indexed legacy plan into a differently hashed cached job.
+        return {ok:true,mode:'staging-ready',presenceMode:existing?JSON.parse(existing.manifest_json).presenceMode:(cachedAllowed?'cached':undefined)};
+      }
+      await pinManualAuthority(db,runId,sourceType);
+      result=await beginBoundedRosterImport(db,runId,file,{manifest:body.manifest,revision},{allowReplacement:true});
+      break;
+    }
     case 'bounded-events': result = await stageBoundedRosterBatch(db, runId, file, revision, body.batch); break;
     case 'bounded-presence': result = await prepareBoundedRosterPresence(db, runId, file, revision, body.batch); break;
-    case 'bounded-metadata': result = await prepareBoundedRosterMetadata(db, runId, revision); break;
+    case 'bounded-metadata': result = await prepareBoundedRosterMetadata(db, runId, revision, body.batch); break;
     case 'bounded-activate': result = await activateBoundedRosterTerm(db, runId, revision, { publishFacility: automaticFacilityPublicationEnabled(context.env, sourceType) }); break;
     default: throw new Error('A bounded manual import phase is required.');
   }

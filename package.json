@@ -84,7 +84,8 @@
     "test:support-requests": "node --no-warnings scripts/test-support-requests.mjs && node --no-warnings scripts/test-request-calendar-ownership.mjs",
     "test:support-ui": "node --no-warnings scripts/test-support-ui-browser.mjs",
     "test:roster-authority": "node --no-warnings scripts/test-roster-authority.mjs",
-    "test:maintenance-diagnostic": "node scripts/test-maintenance-diagnostic.mjs"
+    "test:maintenance-diagnostic": "node scripts/test-maintenance-diagnostic.mjs",
+    "test:manual-roster-cache": "node --no-warnings scripts/test-manual-roster-cache.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

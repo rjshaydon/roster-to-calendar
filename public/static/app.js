@@ -13,7 +13,7 @@ import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.
 let currentIdentityReviewEnabled = false;
 let currentAdvancedRosterRecoveryEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
-import { planRosterImportBatches } from "./roster-import-batches.js";
+import { planRosterImportBatches, rosterImportDigest } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
 import { createCalendarRevisionPoller } from './calendar-revision-poller.js';
 import {
@@ -19617,7 +19617,7 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
   if (!entry.id.startsWith("manual:")) throw new Error("Upload this file again to create a safe replacement; its active copy will remain available.");
   const sourceId = { mmc: "manual-mmc", mch: "manual-mch", ddh: "manual-ddh", vhh: "manual-vhh" }[payload.file.sourceType];
   payload.file.sourceId = sourceId;
-  const plan = await planRosterImportBatches(payload);
+  let plan = await planRosterImportBatches(payload);
   await refreshManualRosterBudget();
   const send = async (phase, extra = {}) => {
     if (Date.now() - manualRosterBudgetCheckedAt > 300000) await refreshManualRosterBudget();
@@ -19625,7 +19625,14 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
     if (result.deferred) throw new Error("Import paused by the account usage safeguard; the previous roster remains active. Retry to resume.");
     return result;
   };
-  const progress = await send("bounded-begin", { manifest: plan.manifest });
+  let progress = await send("bounded-begin", { manifest: plan.manifest, deferStaging:true, supportsCachedPresence:true });
+  if(progress.mode==='staging-ready') {
+    if(progress.presenceMode==='cached') {
+      plan={...plan,manifest:{...plan.manifest,presenceMode:'cached'}};
+      plan.revision=await rosterImportDigest(plan.manifest);
+    }
+    progress=await send('bounded-initialize',{manifest:plan.manifest});
+  }
   if (progress.completed) {
     if (progress.retiredFileIds?.length) selectedFiles = selectedFiles.filter(item => !progress.retiredFileIds.includes(item.id));
     const publication = await finishManualRosterPublication(payload.file.sourceType);
@@ -19635,7 +19642,10 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
     setRosterSyncState(entry, "saving", `Saving roster part ${batch.index + 1}/${plan.batches.length}…`);
     await send("bounded-events", { batch });
   }
-  for (const batch of plan.batches.slice(progress.preparedBatch || 0)) await send("bounded-presence", { batch });
+  for (const batch of plan.batches.slice(progress.preparedBatch || 0)) {
+    const prepared=await send('bounded-presence',{batch});
+    if(prepared.nextBatch>=plan.batches.length)break;
+  }
   await send("bounded-metadata");
   const result = await send("bounded-activate");
   if (result.retiredFileIds?.length) selectedFiles = selectedFiles.filter(item => !result.retiredFileIds.includes(item.id));
