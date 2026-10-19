@@ -73,3 +73,17 @@ keeping shared readers enabled. Do not re-enable SQL presence-based readers for
 files whose manifests record cached mode without a separately budgeted index
 rebuild. Preserve in-progress plans and published calendars; do not delete
 clinical data or disable account safeguards. No staff-search work is included.
+
+Released as commit `91001086` and pushed to `main`. Production Pages deployment:
+`https://6c2cce6d.roster-to-calendar.pages.dev`.
+The custom domain serves `app.js?v=20261020-manual-cache` and the negotiated
+initialization code. Authenticated Safari reload completed and displayed the
+existing calendar, including MMC Term 4 shifts. No production roster was replaced
+for testing and no migration was needed.
+
+The live read-only checker returned GO with a valid account-wide sample:
+2,103,826 reads and 82,838 writes observed in the current UTC accounting day;
+advisory bulk headroom was 15,606 writes after forecast/uncertainty. This is not
+enough for a full MMC manual upload today, and deployment does not bypass that
+limit. Native import billing remains to be observed on the next genuine upload.
+The five-hour assistant allowance had 78% remaining at release verification.
