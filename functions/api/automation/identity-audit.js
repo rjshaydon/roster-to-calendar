@@ -1,3 +1,4 @@
+import {scheduleStaffHistoryBuild} from '../../_lib/staff-history-cache.js';
 import {identityMaintenancePreflight} from '../../_lib/identity-maintenance-preflight.js';
 import {readIdentityAuditSnapshotPage} from '../../_lib/identity-audit-snapshot.js';
 import {pinExternalIdentityAudit,applyExternalIdentityAuditBatch,finishExternalIdentityAudit} from '../../_lib/identity-audit-checkpoints.js';
@@ -64,6 +65,7 @@ export async function handleExternalIdentityAudit(context,input){
    if(result.completed){
     await r2.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
     if(!await save(r2,object,{...state,algorithm:ALGORITHM,runId:'',leaseUntil:'',leaseToken:'',status:'complete'}))return Response.json({status:'busy'});
+    scheduleStaffHistoryBuild(context);
    }
   }else{
    result={status:'deferred'};

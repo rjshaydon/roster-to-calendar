@@ -1,3 +1,4 @@
+import {readStaffHistoryView,staffHistoryAccessAllowed,scheduleStaffHistoryBuild} from '../_lib/staff-history-cache.js';
 import {requestIdentityPublication} from '../_lib/identity-publication-dispatch.js';
 import {allowLegacyStateDuringRollout,requireLegacyCredentialNotPending} from '../_lib/authentication-rollout.js';
 import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
@@ -153,6 +154,7 @@ const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
   "queryFacilityOverviewOnShift",
   "queryFacilityOverviewContactList",
   "queryFacilityOverviewStaff",
+  "queryFacilityStaffHistory",
   "queryFacilityOverviewWorkingTogether",
   "queryFacilityOverviewTogetherContext",
   "setContactAllocationResolution",
@@ -694,7 +696,7 @@ async function handleAccountStateRequest(context) {
       actorRole: account.role, actorEmail: account.record?.email || email,
       subjectEmail: facilityOverviewSubject?.record?.email || "",
     }, sources, allowPartial);
-    const publishedReadRevision = (published, selection, access) => sha256(JSON.stringify([published.revision, published.missing || [], selection.missing, access.readerRevision]));
+    const publishedReadRevision = (published, selection, access, capabilities = []) => sha256(JSON.stringify([published.revision, published.missing || [], selection.missing, access.readerRevision, ...capabilities]));
     if (action === "testFindmyshiftConnection") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -2553,6 +2555,18 @@ async function handleAccountStateRequest(context) {
       }
     }
 
+    if (action === "queryFacilityStaffHistory") {
+      const access = await facilityOverviewAccess();
+      const subject = facilityOverviewSubject && {...facilityOverviewSubject.record, role:facilityOverviewSubject.role};
+      if (!facilityOverviewEnabled() || !staffHistoryAccessAllowed(subject,access)) return facilityOverviewAccessDeniedResponse(access);
+      if (context.env.STAFF_HISTORY_ENABLED !== 'true') return Response.json({error:'Staff history is not enabled.'},{status:503});
+      try {
+        const result = await readStaffHistoryView(context.env.ROSTER_FILES,body,australianDateKey());
+        if(result.preparing || result.stale) scheduleStaffHistoryBuild(context);
+        return Response.json({...result,facilityOverviewAccess:access,accessExpiresAt:access.expiresAt},{headers:{'Cache-Control':'private, no-store'}});
+      } catch { return Response.json({error:'Staff history could not be loaded.'},{status:503}); }
+    }
+
     if (action === "queryFacilityOverviewStaff") {
       if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 403 });
@@ -2564,6 +2578,7 @@ async function handleAccountStateRequest(context) {
       }
       const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
       const access = await facilityOverviewAccess();
+      const staffHistoryEnabled = context.env.STAFF_HISTORY_ENABLED === 'true' && staffHistoryAccessAllowed({...facilityOverviewSubject?.record,role:facilityOverviewSubject?.role},access);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }
@@ -2577,14 +2592,14 @@ async function handleAccountStateRequest(context) {
           let published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, selection.sources, termStart, australianDateKey());
           published = facilityStaffDirectoryForAccess(published, access);
           const missing = [...selection.missing, ...(published.missing || [])];
-          const revision = await publishedReadRevision(published, selection, access);
+          const revision = await publishedReadRevision(published, selection, access, [staffHistoryEnabled]);
           if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [], missing });
           if (!missing.length && body?.cachedRevision === revision) return Response.json({ ok: true, unchanged: true, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "" });
-          return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...published, missing, partial: missing.length > 0, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "" });
+          return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", staffHistoryEnabled, ...published, missing, partial: missing.length > 0, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "" });
         }
         const results = await Promise.all(sourceTypes.map(source => queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart, termEnd, facilityKey: source })));
         const result = facilityStaffDirectoryForAccess({ members: results.flatMap(item => item.members || []), events: results.flatMap(item => item.events || []), coverage: results.flatMap(item => item.coverage || []), designations: results.flatMap(item => item.designations || []), seniorityOverrides: results.flatMap(item => item.seniorityOverrides || []) }, access);
-        return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
+        return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", staffHistoryEnabled, ...result });
       } catch (error) {
         console.error("queryFacilityOverviewStaff failed", { termStart, termEnd, facilityKey, error: error?.message || String(error) });
         return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 503 });

@@ -34,3 +34,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/process-roster-maintenance.mjs
+      - name: Resume staff-history preparation if its inputs changed
+        run: node scripts/process-staff-history.mjs --dispatch

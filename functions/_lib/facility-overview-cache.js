@@ -1,3 +1,4 @@
+import {scheduleStaffHistoryBuild} from './staff-history-cache.js';
 import {doctorSourceKey,doctorSourceCurrentKey,DOCTOR_SOURCE_VERSION} from './doctor-source-artifacts.js';
 import {loadDoctorMonthSelection,doctorMonthIndexKey} from './doctor-calendar-artifacts.js';
 import {
@@ -297,6 +298,7 @@ async function finalizeFacilityPublication(context, plan, publicPlan, options = 
   if(options.requireDoctorCalendars&&!await promoteDoctorSource(r2,plan.sourceType,plan.planRevision,revision))return {ok:true,deferred:true,doctorSource:{manifestKey:`facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`,operationRevision:plan.planRevision},sourceType:plan.sourceType,mode:'finalize'};
   await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
     .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
+  scheduleStaffHistoryBuild(context);
   return { ok: true, mode: "finalize", operationRevision: plan.planRevision, revision };
 }
 
@@ -498,6 +500,7 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = [], op
       results.push({ sourceType, changed: false, revision });
     }
   }
+  if(options.deferManifest!==true && results.some(result=>result.changed)) scheduleStaffHistoryBuild(context);
   return { ok: true, results };
 }
 

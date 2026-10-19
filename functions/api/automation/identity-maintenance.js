@@ -1,3 +1,4 @@
+import {scheduleStaffHistoryBuild} from '../../_lib/staff-history-cache.js';
 import {identityMaintenancePreflight} from '../../_lib/identity-maintenance-preflight.js';
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
@@ -77,7 +78,10 @@ export async function onRequestPost(context) {
    await saveRegistryProgress(context.env.ROSTER_FILES,registryObject,missing
     ?{revision:registryRevision,runId:registryState.runId,restart:true}
     :{revision:registryRevision,runId:''});
-   if(!missing) await context.env.ROSTER_FILES.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
+   if(!missing) {
+    await context.env.ROSTER_FILES.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
+    scheduleStaffHistoryBuild(context);
+   }
    return Response.json({status:missing?'running':'complete',runId:registryState.runId,examined:registryState.examined});
   }
   // The indexed names cache retains historical staff. Register one name per
@@ -95,6 +99,7 @@ export async function onRequestPost(context) {
   return Response.json(result);
  }
  const result=await publishIdentityOperation(context.env.ROSTER_DB,context.env.ROSTER_FILES,input.operationId);
+ if(result.status==='complete')scheduleStaffHistoryBuild(context);
  return Response.json(result,{status:result.status==='missing'?404:result.status==='failed'?409:200});
 }
 async function saveRegistryProgress(r2,previous,value) {
