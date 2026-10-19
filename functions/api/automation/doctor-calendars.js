@@ -33,6 +33,13 @@ export async function onRequestPost({request,env}){
   if(input.mode==='finish-source'){const lease=await r2.get('doctor-calendars/v2/build-lease.json'),value=lease?await new Response(lease.body).json():null;if(value?.id===input.dispatchId)await r2.put('doctor-calendars/v2/build-lease.json',JSON.stringify({...value,until:0}),{onlyIf:{etagMatches:lease.etag}});return Response.json({status:'complete'});}
   if(input.mode?.startsWith('legacy-'))return await legacyCoverageOperation(env,input);
   if(!['mmc','mch','ddh','vhh','casey'].includes(input.sourceType))return bad();
+  if(input.mode==='delivery-status'){
+   const [head,current]=await Promise.all([r2.head(facilityMetadataManifestKey(input.sourceType)),loadCachedSnapshot(r2,doctorSourceCurrentKey(input.sourceType))]);
+   const ready=Boolean(head&&current?.version===DOCTOR_SOURCE_VERSION&&current.layout===DOCTOR_SOURCE_LAYOUT&&current.parentEtag===head.etag
+    &&current.comparisonVersion===COMPARISON_INDEX_VERSION&&current.comparisonIndexes&&current.comparisonCertificate);
+   return Response.json({sourceType:input.sourceType,ready,matchingParent:Boolean(head&&current?.parentEtag===head.etag),
+    terms:(current?.metadata?.terms||[]).map(term=>({termStart:term.termStart,termEnd:term.termEnd})),monthCount:current?.metadata?.months?.length||0});
+  }
   if(input.mode==='object'){
    if(!validExportKey(input.sourceType,input.key))return bad();
    const object=await r2.get(input.key);return object?new Response(object.body,{headers:{'Content-Type':'application/octet-stream','x-object-etag':object.etag||''}}):Response.json({status:'gone'},{status:409});

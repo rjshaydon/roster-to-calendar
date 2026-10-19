@@ -68,6 +68,9 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
   if (mode === "finalize" && requestedRevision) {
     const published = await loadJsonObject(context.env.ROSTER_FILES, facilityMetadataManifestKey(sourceType));
     if (published.data?.publicationOperationId === requestedRevision) {
+      if(options.requireDoctorCalendars&&!await promoteDoctorSource(context.env.ROSTER_FILES,sourceType,requestedRevision,published.data.revision))return {
+        ok:true,deferred:true,sourceType,mode:'finalize',reason:'doctor-source-pending',
+        doctorSource:{manifestKey:`facility-overview/v1/${sourceType}/manifests/${requestedRevision}-${published.data.revision}.json.gz`,operationRevision:requestedRevision}};
       await context.env.ROSTER_DB.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
         .bind(String(published.data.revision || ""), new Date().toISOString(), sourceType, requestedRevision).run();
       return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: requestedRevision, revision: published.data.revision };
@@ -91,7 +94,13 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
   const publicPlan = chunkedPublicationPlanResponse(plan);
   if (mode === "plan") return publicPlan;
   const operationRevision = requestedRevision;
-  if (!operationRevision || operationRevision !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
+  if (!operationRevision || operationRevision !== plan.planRevision) {
+    if(operationRevision){
+      const previous=await loadJsonObject(context.env.ROSTER_FILES,facilityOperationKey(sourceType,operationRevision));
+      if(previous.data?.inputRevision===plan.inputRevision)return rebaseFacilityPublication(context,plan,publicPlan,previous.data,operationRevision);
+    }
+    return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
+  }
   if (mode === "build-batch") return buildFacilityPublicationBatch(context, plan, publicPlan, Number(options.batchIndex));
   if (mode === "build-month") return buildFacilityPublicationMonth(context, plan, publicPlan, String(options.month || ""));
   return finalizeFacilityPublication(context, plan, publicPlan, options);
@@ -144,16 +153,18 @@ async function buildFacilityPublicationBatch(context, plan, publicPlan, batchInd
       batches: publicPlan.batches, months: publicPlan.months, preparedManifest,
     });
     const now = new Date().toISOString();
-    await db.prepare(`INSERT INTO facility_day_publications
+    const claimed=await db.prepare(`INSERT INTO facility_day_publications
       (source_type, generation, operation_id, status, base_revision, candidate_revision, lease_expires_at, last_error, updated_at)
       VALUES (?, 1, ?, 'building', ?, '', '', '', ?)
       ON CONFLICT(source_type) DO UPDATE SET generation=facility_day_publications.generation + 1,
         operation_id=excluded.operation_id, status='building', base_revision=excluded.base_revision,
-        candidate_revision='', lease_expires_at='', last_error='', updated_at=excluded.updated_at`)
+        candidate_revision='', lease_expires_at='', last_error='', updated_at=excluded.updated_at
+      WHERE facility_day_publications.status<>'building' OR facility_day_publications.operation_id=excluded.operation_id`)
       .bind(plan.sourceType, plan.planRevision, String(plan.manifestObject.data?.revision || ""), now).run();
+    if(Number(claimed.meta?.changes||0)!==1)return {ok:true,deferred:true,reason:'publication-owner-busy'};
     operation = { operation_id: plan.planRevision, status: "building" };
   } else {
-    if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return { ok: false, reason: "publication-operation-not-building" };
+    if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return {ok:true,deferred:true,reason:'publication-owner-busy'};
     const previous = await loadJsonObject(r2, facilityBatchResultKey(plan.sourceType, plan.planRevision, batchIndex - 1));
     if (!previous.data) return { ok: false, reason: "previous-batch-required" };
   }
@@ -171,6 +182,30 @@ async function buildFacilityPublicationBatch(context, plan, publicPlan, batchInd
   const result = { schemaVersion: SCHEMA_VERSION, operationRevision: plan.planRevision, batchIndex, dates: publicPlan.batches[batchIndex], pointers };
   await putJsonGzip(r2, resultKey, { ...result, revision: await digest(result) });
   return { ok: true, mode: "build-batch", operationRevision: plan.planRevision, batchIndex, dates: result.dates, pointerCount: Object.keys(pointers).length };
+}
+
+async function rebaseFacilityPublication(context,plan,publicPlan,previous,oldRevision){
+ const {ROSTER_DB:db,ROSTER_FILES:r2}=context.env;
+ if(previous.sourceType!==plan.sourceType||previous.termStart!==plan.termStart||JSON.stringify(previous.batches)!==JSON.stringify(publicPlan.batches))return {ok:false,stalePlan:true,reason:'publication-input-changed'};
+ const owner=await db.prepare('SELECT operation_id,status FROM facility_day_publications WHERE source_type=?').bind(plan.sourceType).first();
+ if(owner?.status==='building'&&![oldRevision,plan.planRevision].includes(owner.operation_id))return {ok:true,deferred:true,reason:'publication-owner-busy'};
+ const staff=await publishFacilityStaffMetadata(context,[plan.sourceType],{termStart:plan.termStart,preparedPlan:plan,deferManifest:true});
+ const preparedManifest=staff.results?.[0]?.manifest;
+ if(!preparedManifest)return {ok:false,reason:'staff-publication-failed'};
+ let nextBatch=0;
+ for(let index=0;index<publicPlan.batchCount;index++){
+  const old=await loadJsonObject(r2,facilityBatchResultKey(plan.sourceType,oldRevision,index));
+  if(!old.data)break;
+  if(old.data.operationRevision!==oldRevision||old.data.batchIndex!==index||JSON.stringify(old.data.dates)!==JSON.stringify(publicPlan.batches[index]))return {ok:false,reason:'invalid-retained-day-batch'};
+  await putJsonGzip(r2,facilityBatchResultKey(plan.sourceType,plan.planRevision,index),{...old.data,operationRevision:plan.planRevision});nextBatch++;
+ }
+ await putJsonGzip(r2,facilityOperationKey(plan.sourceType,plan.planRevision),{
+  schemaVersion:SCHEMA_VERSION,sourceType:plan.sourceType,termStart:plan.termStart,operationRevision:plan.planRevision,inputRevision:plan.inputRevision,
+  baseRevision:String(plan.manifestObject.data?.revision||''),baseEtag:String(plan.manifestObject.etag||''),batches:publicPlan.batches,months:publicPlan.months,preparedManifest});
+ const claimed=await db.prepare(`UPDATE facility_day_publications SET operation_id=?,status='building',generation=generation+1,base_revision=?,candidate_revision='',updated_at=?
+  WHERE source_type=? AND operation_id=? AND status=?`).bind(plan.planRevision,String(plan.manifestObject.data?.revision||''),new Date().toISOString(),plan.sourceType,owner?.operation_id||'',owner?.status||'').run();
+ if(Number(claimed.meta?.changes||0)!==1)return {ok:true,deferred:true,reason:'publication-owner-changed'};
+ return {...publicPlan,reconciled:true,nextBatch,nextMonth:0};
 }
 
 async function loadCompletedBatchResults(r2, plan, publicPlan) {
@@ -221,7 +256,7 @@ async function finalizeFacilityPublication(context, plan, publicPlan, options = 
   }
   const operationResult = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).all();
   const operation = operationResult?.results?.[0] || null;
-  if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return { ok: false, reason: "publication-operation-not-building" };
+  if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return {ok:true,deferred:true,reason:'publication-owner-busy'};
   const stagedPlan = await loadJsonObject(r2, facilityOperationKey(plan.sourceType, plan.planRevision));
   if (!stagedPlan.data || stagedPlan.data.inputRevision !== plan.inputRevision) return { ok: false, stalePlan: true, reason: "publication-input-changed" };
   const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
@@ -253,9 +288,10 @@ async function finalizeFacilityPublication(context, plan, publicPlan, options = 
   const ownerResult = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'building'").bind(plan.sourceType).all();
   const owner = ownerResult?.results?.[0] || null;
   if (owner?.operation_id !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-operation-superseded" };
-  await putJsonGzip(r2, facilityMetadataManifestKey(plan.sourceType), candidate, {
+  const promoted=await putJsonGzip(r2, facilityMetadataManifestKey(plan.sourceType), candidate, {
     onlyIf: stagedPlan.data.baseEtag ? { etagMatches: stagedPlan.data.baseEtag } : { etagDoesNotMatch: "*" },
   });
+  if(promoted===null)return {ok:false,stalePlan:true,reason:'publication-manifest-changed'};
   if(options.requireDoctorCalendars&&!await promoteDoctorSource(r2,plan.sourceType,plan.planRevision,revision))return {ok:true,deferred:true,doctorSource:{manifestKey:`facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`,operationRevision:plan.planRevision},sourceType:plan.sourceType,mode:'finalize'};
   await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
     .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
@@ -907,7 +943,14 @@ function monthsInRange(startDate, endDate) {
 
 async function promoteDoctorSource(r2,sourceType,operationRevision,manifestRevision){
  const prepared=await loadCachedSnapshot(r2,doctorSourceKey(sourceType,'generations',operationRevision));if(!prepared||prepared.manifestRevision!==manifestRevision)return false;
- const head=await r2.head(facilityMetadataManifestKey(sourceType));if(!head)return false;
+ const root=await loadJsonObject(r2,facilityMetadataManifestKey(sourceType));
+ if(root.data?.revision!==manifestRevision||root.data?.publicationOperationId!==operationRevision)return false;
+ const operation=await loadJsonObject(r2,facilityOperationKey(sourceType,operationRevision));
+ if(!Array.isArray(operation.data?.months)||operation.data.months.length>6)return false;
+ for(const month of operation.data.months){
+  const pointer=root.data.months?.[month];if(!pointer||!await r2.head(doctorMonthIndexKey(sourceType,month,pointer.revision)))return false;
+ }
+ const head={etag:root.etag};
  const existing=await loadCachedSnapshot(r2,doctorSourceCurrentKey(sourceType));if(existing?.parentEtag===head.etag&&existing.catalogueKey===prepared.catalogueKey)return true;
  const saved=await r2.put(doctorSourceCurrentKey(sourceType),new TextEncoder().encode(JSON.stringify({...prepared,parentEtag:head.etag})),{onlyIf:prepared.baseEtag?{etagMatches:prepared.baseEtag}:{etagDoesNotMatch:'*'}});
  return Boolean(saved);

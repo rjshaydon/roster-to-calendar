@@ -1,3 +1,4 @@
+import {stageDeliveryHolds} from './publication-delivery-budget.js';
 import { stageRosterCompactMetadata } from "./roster-import-compact.js";
 import { rosterTermOwnership } from "./roster-term-ownership.js";
 import { boundedRosterEventStatements, boundedRosterPresenceStatements, startDerivedRosterFileSave, refreshFacilityOverviewMaterializationForFile, australianTermStartForDate, australianTermEndForStart, facilitySmsMembershipStatement } from "./d1-calendar.js";
@@ -53,6 +54,11 @@ export async function beginBoundedRosterImport(db, runId, file, plan, options = 
       .bind(plan.revision,JSON.stringify(plan.manifest),runId,existing.plan_revision,file.id,runId,file.id,file.id).run();
     if (Number(recovered.meta?.changes || 0) !== 1) throw new Error("Staged import changed during empty-plan recovery; no hashes were replaced.");
     existing = { ...existing, plan_revision: plan.revision, manifest_json: JSON.stringify(plan.manifest) };
+  }
+  const held=existing?.initialized===1?await db.prepare('SELECT 1 AS held FROM roster_publication_holds WHERE source_type=? AND term_start=? AND owner_id=?').bind(file.sourceType,australianTermStartForDate(plan.manifest.startDate),runId).first():null;
+  if(!existing?.activated&&!held){
+    if(!await reserveRosterMaintenanceBudget(db,64,256))return {deferred:true,reason:'delivery-capacity'};
+    await stageDeliveryHolds(db,file.sourceType,runId,plan.manifest.startDate,plan.manifest.rosterEndDate,australianTermStartForDate);
   }
   if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated), retiredFileIds: JSON.parse(existing.retired_file_ids_json || "[]") };
   const existingFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();

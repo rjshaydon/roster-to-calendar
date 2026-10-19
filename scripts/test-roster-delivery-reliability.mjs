@@ -92,15 +92,25 @@ try{
  // Run the real processor in a child so its intentional successful exit on
  // deferral cannot terminate this test. No network access or workbook fetch.
  const preload=join(folder,'preload.mjs'),output=join(folder,'output');
- await writeFile(preload,`let published=false;globalThis.fetch=async url=>{const path=new URL(url).pathname;console.log('TESTCALL '+path);if(path.endsWith('account-budget'))return Response.json({deferred:process.env.TEST_DEFER==='true'});if(path.endsWith('facility-refresh')){published=true;return Response.json(process.env.TEST_PUBLICATION==='deferred'?{deferred:true}:{completed:true});}return Response.json({runs:[],boundedImportEnabled:true,publicationPending:Boolean(process.env.TEST_PUBLICATION)&&(process.env.TEST_PUBLICATION==='deferred'||!published)});};`);
+ await writeFile(preload,`let published=false;globalThis.fetch=async url=>{const path=new URL(url).pathname;console.log('TESTCALL '+path);if(path.endsWith('account-budget'))return Response.json({deferred:process.env.TEST_DEFER==='true'});if(path.endsWith('facility-refresh')){if(published&&process.env.TEST_PUBLICATION!=='deferred')return Response.json({idle:true});published=true;return Response.json(process.env.TEST_PUBLICATION==='deferred'?{deferred:true}:{completed:true});}return Response.json({runs:[],boundedImportEnabled:true,publicationPending:Boolean(process.env.TEST_PUBLICATION)&&(process.env.TEST_PUBLICATION==='deferred'||!published)});};`);
  for(const [defer,publication,expected] of [['true','','deferred'],['false','','completed'],['false','done','completed'],['false','deferred','deferred']]){
   await writeFile(output,'');
   const result=spawnSync(process.execPath,['--import',preload,'scripts/process-roster-queue.mjs'],{encoding:'utf8',env:{...process.env,TEST_DEFER:defer,TEST_PUBLICATION:publication,ROSTER_AUTOMATION_TOKEN:'test-only',ROSTER_AUTOMATION_SOURCE_ID:'monash-adults',GITHUB_OUTPUT:output}});
   assert.equal(result.status,0,result.stderr);
-  assert.equal((await readFile(output,'utf8')).trim(),'result='+expected,'GitHub receives the actual processor result');
+  assert.equal((await readFile(output,'utf8')).trim().split('\n')[0],'result='+expected,'GitHub receives the actual processor result');
   assert.equal(result.stdout.includes('/api/automation/raw'),false);
   assert.equal(result.stdout.includes('/api/automation/parser-config'),false,'publication-only work never reparses an unchanged file');
-  if(publication)assert.equal(result.stdout.split('TESTCALL /api/automation/facility-refresh').length-1,1);
+  if(publication)assert.equal(result.stdout.split('TESTCALL /api/automation/facility-refresh').length-1,publication==='done'?2:1);
  }
+
+ // A real queued import cannot be reached while publication keeps yielding.
+ const priority=join(folder,'priority.mjs');
+ await writeFile(priority,`globalThis.fetch=async url=>{const path=new URL(url).pathname;console.log('TESTCALL '+path);if(path.endsWith('account-budget'))return Response.json({});if(path.endsWith('facility-refresh'))return Response.json({mode:'build-batch',ok:true});if(path.endsWith('pending'))return Response.json({runs:[{id:'new-term3',sourceId:'monash-adults'}],boundedImportEnabled:true,publicationPending:true});throw Error('Must finish delivery before '+path);};`);
+ await writeFile(output,'');
+ const waiting=spawnSync(process.execPath,['--import',priority,'scripts/process-roster-queue.mjs'],{encoding:'utf8',env:{...process.env,ROSTER_AUTOMATION_TOKEN:'test-only',ROSTER_AUTOMATION_SOURCE_ID:'monash-adults',GITHUB_OUTPUT:output}});
+ assert.equal(waiting.status,0,waiting.stderr);
+ assert.equal(waiting.stdout.includes('/api/automation/raw'),false);assert.equal(waiting.stdout.includes('/api/automation/parser-config'),false);
+ assert.match(await readFile(output,'utf8'),/reason=run-limit/);
+ assert.equal(waiting.stdout.split('TESTCALL /api/automation/facility-refresh').length-1,24,'one run performs at most its bounded delivery steps');
 }finally{await rm(folder,{recursive:true,force:true});}
 console.log('Delayed-only warnings, corrupt diagnostics, blocked dispatch, retained queue and honest GitHub outcomes passed.');

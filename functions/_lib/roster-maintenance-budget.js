@@ -1,12 +1,17 @@
+import {publicationHeldWrites,publicationHeldReads,PUBLICATION_STEP_WRITES,PUBLICATION_STEP_READS} from './publication-delivery-budget.js';
 const sessionLimits = new WeakMap();
 const requests = new WeakMap();
 
 // A nonzero grant can still be too small for any useful import step. Keep
 // deferred work retained instead of repeatedly dispatching/parsing it.
-export function rosterProcessingHeadroom(gate,now=new Date()) {
+export function rosterProcessingHeadroom(gate,now=new Date(),publication=false) {
  return Boolean(gate&&!gate.stop_reason&&gate.valid_until>new Date(now).toISOString()
-  &&Number(gate.maximum_writes)-Number(gate.allocated_writes)>=2048
-  &&Number(gate.maximum_reads)-Number(gate.allocated_reads)>=8192);
+  &&Number(gate.maximum_writes)-Number(gate.allocated_writes)-Number(publication?0:gate.held_writes||0)>=(publication?PUBLICATION_STEP_WRITES:2048)
+  &&Number(gate.maximum_reads)-Number(gate.allocated_reads)-Number(publication?0:gate.held_reads||0)>=(publication?PUBLICATION_STEP_READS:8192));
+}
+
+export function configurePublicationReservation(db,job){
+ const request=requests.get(db);if(request)request.publication={source:job.source_type,term:job.term_start,owner:job.request_revision};
 }
 
 export function beginMaintenanceAccounting(db, requestId, enabled, options = {}) {
@@ -112,14 +117,16 @@ export async function reserveRosterMaintenanceBudget(db, writes = 0, reads = 0) 
     const estimatedWrites = Math.ceil(writes) + 48;
     const estimatedReads = Math.ceil(reads) + 48;
     const optional=request.purpose==='identity';
+    const publication=request.publication;
     const deadline=request.deadlineAt||0;
     const recoverAfter=deadline?new Date(deadline+(Number(request.statementLimit||512)+8)*30000+120000).toISOString():'';
     const results = await db.batch([
       db.prepare(`UPDATE roster_account_budget SET allocated_writes=allocated_writes+?, allocated_reads=allocated_reads+?
         WHERE utc_day=? AND valid_until>? AND stop_reason=''
-        AND allocated_writes+?<=maximum_writes AND allocated_reads+?<=maximum_reads
+        AND allocated_writes+?+${publication?'0':publicationHeldWrites}<=maximum_writes AND allocated_reads+?+${publication?'0':publicationHeldReads}<=maximum_reads
+        ${publication?`AND EXISTS(SELECT 1 FROM facility_refresh_jobs WHERE source_type=? AND term_start=? AND request_revision=? AND status='pending')`:''}
         ${optional?"AND (SELECT COUNT(*) FROM (SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=? AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3))<3":''}`)
-        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?200000:0),...(optional?[day]:[])),
+        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?200000:0),...(publication?[publication.source,publication.term,publication.owner]:[]),...(optional?[day]:[])),
       db.prepare(`INSERT INTO roster_import_daily_budget (utc_day,reserved_writes,reserved_reads)
         SELECT ?,?,? WHERE changes()=1 ON CONFLICT(utc_day) DO UPDATE SET
         reserved_writes=reserved_writes+excluded.reserved_writes,reserved_reads=reserved_reads+excluded.reserved_reads`)

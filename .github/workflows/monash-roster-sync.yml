@@ -16,6 +16,15 @@ on:
           - monash-paeds
           - vhh-active-medical-roster
           - dandenong-findmyshift
+      verify_term_start:
+        description: "Optional term start to require in the delivered source generation"
+        required: false
+        type: string
+      publication_only:
+        description: "Resume publication without downloading/importing any roster"
+        required: false
+        default: false
+        type: boolean
       automation_base_url:
         description: "Pages base URL to process"
         required: false
@@ -70,9 +79,9 @@ jobs:
             --data "{\"action\":\"lifecycle\",\"event\":\"started\",\"sourceId\":\"${SOURCE_ID}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"}" \
             "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"
       - uses: actions/checkout@v4
-        if: steps.queue.outputs.count != '0'
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != ''
       - uses: actions/setup-node@v4
-        if: steps.queue.outputs.count != '0'
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != ''
         with:
           node-version: 22
           cache: npm
@@ -84,6 +93,13 @@ jobs:
         run: node scripts/process-roster-queue.mjs
         env:
           ROSTER_AUTOMATION_BASE_URL: ${{ env.ROSTER_AUTOMATION_BASE_URL }}
+          ROSTER_PUBLICATION_ONLY: ${{ inputs.publication_only && 'true' || 'false' }}
+      - name: Verify requested delivered generation
+        id: verify
+        if: inputs.verify_term_start != '' && (steps.process.outcome == 'success' || steps.queue.outputs.count == '0')
+        env:
+          VERIFY_TERM_START: ${{ inputs.verify_term_start }}
+        run: node scripts/check-roster-delivery.mjs
       - name: Record processor completion
         if: always() && steps.queue.outputs.count != '0' && inputs.dispatch_id != ''
         env:
@@ -91,11 +107,13 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           PROCESS_OUTCOME: ${{ steps.process.outcome }}
           PROCESS_RESULT: ${{ steps.process.outputs.result }}
+          PROCESS_REASON: ${{ steps.process.outputs.reason }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           SOURCE_ID: ${{ env.ROSTER_AUTOMATION_SOURCE_ID }}
         run: |
           event=completed
           message=""
-          if [ "${PROCESS_OUTCOME}" != "success" ]; then
+          if [ "${PROCESS_OUTCOME}" != "success" ] || [ "${VERIFY_OUTCOME}" = "failure" ]; then
             event=failed
             message=",\"message\":\"GitHub roster processor did not complete successfully.\""
           elif [ "${PROCESS_RESULT}" = "deferred" ]; then
@@ -105,5 +123,5 @@ jobs:
             --request POST \
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
             --header "Content-Type: application/json" \
-            --data "{\"action\":\"lifecycle\",\"event\":\"${event}\",\"sourceId\":\"${SOURCE_ID}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"${message}}" \
+            --data "{\"action\":\"lifecycle\",\"event\":\"${event}\",\"reason\":\"${PROCESS_REASON}\",\"sourceId\":\"${SOURCE_ID}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"${message}}" \
             "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"

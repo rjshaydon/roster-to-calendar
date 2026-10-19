@@ -1,3 +1,4 @@
+import {publicationHeldWrites,publicationHeldReads} from './publication-delivery-budget.js';
 import {
   claimRosterDispatch,
   updateRosterDispatch,
@@ -26,8 +27,9 @@ export async function requestQueuedRosterProcessing(env, { sourceId = "", reason
     return { ok: false, dispatched: false, reason: "local-disabled", dispatch: null };
   }
   const requestedAt = validDate(now);
+  const publicationPending=Boolean(await loadPendingRosterPublication(env,normalizedSourceId));
   if(env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
-    let gate=await env.ROSTER_DB.prepare(`SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason
+    let gate=await env.ROSTER_DB.prepare(`SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason,${publicationHeldWrites} AS held_writes,${publicationHeldReads} AS held_reads
       FROM roster_account_budget WHERE utc_day=?`).bind(requestedAt.toISOString().slice(0,10)).first();
     if(!gate || gate.valid_until<=requestedAt.toISOString()) {
       const refreshed=await (await refreshAccountMaintenanceBudget({env})).json();
@@ -35,12 +37,12 @@ export async function requestQueuedRosterProcessing(env, { sourceId = "", reason
       gate=await env.ROSTER_DB.prepare('SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?')
         .bind(requestedAt.toISOString().slice(0,10)).first();
     }
-    if(!rosterProcessingHeadroom(gate,requestedAt))
+    if(!rosterProcessingHeadroom(gate,requestedAt,publicationPending))
       return budgetDeferred(env,normalizedSourceId);
   }
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {
     sourceId: normalizedSourceId,
-    publicationPending: Boolean(await loadPendingRosterPublication(env,normalizedSourceId)),
+    publicationPending,
     reason,
     now: requestedAt.toISOString(),
     retryAfter: addMilliseconds(requestedAt, REQUEST_LEASE_MS).toISOString(),
@@ -121,7 +123,7 @@ export async function recordRosterDispatchLifecycle(env, body = {}) {
     githubRunId: String(body?.githubRunId || "").trim(),
     completedAt: now.toISOString(),
     retryAfter: event==='deferred'?addMilliseconds(now,TRANSIENT_RETRY_MS).toISOString():now.toISOString(),
-    lastError: event === "failed" ? String(body?.message || "GitHub roster processor failed.").slice(0, 300) : event==='deferred'?'Account maintenance allowance deferred; queued roster retained.':'',
+    lastError: event === "failed" ? String(body?.message || "GitHub roster processor failed.").slice(0, 300) : event==='deferred'?deferredDispatchMessage(body.reason):'',
   });
   if(event==='completed' && result.ok && !(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1)).length && !await loadPendingRosterPublication(env,sourceId)) await clearRosterDeliveryWarning(env.ROSTER_FILES,sourceId);
   if(event==='deferred') await budgetDeferred(env,sourceId);
@@ -162,4 +164,8 @@ function sanitiseGitHubError(text, status) {
     message = String(text || "");
   }
   return `GitHub workflow dispatch returned HTTP ${status}${message ? `: ${message.slice(0, 180)}` : "."}`;
+}
+
+function deferredDispatchMessage(reason){
+ return ({'run-limit':'Background run yielded; publication retained for continuation.', 'publication-pending':'Calendar publication is still pending.', 'publication-conflict':'Publication changed; bounded reconciliation is required.', 'account-budget':'Account maintenance allowance deferred; queued work retained.'})[reason]||'Background work deferred; queued work retained.';
 }

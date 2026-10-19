@@ -1,3 +1,4 @@
+import {drainRosterPublication} from './roster-publication-driver.mjs';
 import {publishDoctorSource} from './process-doctor-source.mjs';
 import {publishDoctorMonth,doctorCalendarRequest} from './process-doctor-calendars.mjs';
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
@@ -12,7 +13,8 @@ import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
 import { guardedFetch } from "../functions/_lib/outbound-network.js";
 import {appendFile} from 'node:fs/promises';
 let processorDeferred=false;
-async function processorOutcome(value) {if(process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,`result=${value}\n`);}
+let processorReason='';
+async function processorOutcome(value) {if(process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,`result=${value}\nreason=${processorReason|| (value==='deferred'?'account-budget':'')}\n`);}
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -31,13 +33,27 @@ if (admission.deferred || admission.paused) {
 let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 if(pending.maintenanceDeferred){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
-const runs = Array.isArray(pending.runs) ? pending.runs : [];
+let runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
 console.log(`Found ${runs.length} queued roster file(s).`);
 if ((!runs.length && !pending.publicationPending) || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
   console.log("No admitted import work; progress retained.");
   await processorOutcome(pending.maintenanceDeferred || runs.length || pending.publicationPending?'deferred':'completed');
   process.exit(0);
+}
+const publicationBudget={remaining:24};
+const publicationOnly=process.env.ROSTER_PUBLICATION_ONLY==='true';
+if(pending.boundedImportEnabled&&(pending.publicationPending||publicationOnly)){
+  const delivery=await drainPublication();
+  const after=await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
+  const blocked=after.publicationPending||(delivery.deferred&&delivery.reason!=='run-limit');
+  if(blocked||publicationOnly){
+    processorReason=blocked?(delivery.reason||'publication-pending'):'';
+    await processorOutcome(blocked?'deferred':'completed');process.exit(0);
+  }
+  runs=Array.isArray(after.runs)?after.runs:[];
+  if(!runs.length){await processorOutcome('completed');process.exit(0);}
+  if(!publicationBudget.remaining){processorReason='run-limit';await processorOutcome('deferred');process.exit(0);}
 }
 const parserConfig = runs.length ? await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`) : {};
 if (parserConfig.deferred || parserConfig.paused) {await processorOutcome('deferred');process.exit(0);}
@@ -75,20 +91,18 @@ for (const run of runs) {
 }
 
 if (pending.boundedImportEnabled === true) {
-  for (let step = 0; step < 24; step += 1) {
-    const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId, maintenanceBudget } });
-    const doctorRequest=doctorCalendarRequest({base:baseUrl,token:process.env.ROSTER_AUTOMATION_TOKEN});
-    const doctorSource={"monash-adults":"mmc","monash-paeds":"mch","dandenong-findmyshift":"ddh","vhh-active-medical-roster":"vhh"}[sourceId];
-    if(refresh.doctorCalendarsEnabled&&refresh.mode==='build-month'&&refresh.revision)await publishDoctorMonth({sourceType:doctorSource,month:refresh.month,revision:refresh.revision,request:doctorRequest});
-    if(refresh.doctorCalendars?.length){
-      for(const pointer of refresh.doctorCalendars)await publishDoctorMonth({sourceType:refresh.sourceType,month:pointer.month,revision:pointer.revision,request:doctorRequest});
-      continue;
-    }
-    if(refresh.doctorSource){await publishDoctorSource({sourceType:refresh.sourceType,request:doctorRequest,...refresh.doctorSource});continue;}
-    if(refresh.deferred) processorDeferred=true;
-    if (refresh.idle || refresh.deferred || refresh.completed) break;
-    if(step===23) processorDeferred=true;
-  }
+ const delivery=await drainPublication();
+ if(delivery.deferred){processorDeferred=true;processorReason=delivery.reason;}
+}
+
+async function drainPublication(){
+ const sourceType={"monash-adults":"mmc","monash-paeds":"mch","dandenong-findmyshift":"ddh","vhh-active-medical-roster":"vhh"}[sourceId];
+ const request=doctorCalendarRequest({base:baseUrl,token});
+ return drainRosterPublication({budget:publicationBudget,
+  step:()=>automationRequest('/api/automation/facility-refresh',{method:'POST',body:{sourceId,maintenanceBudget}}),
+  publishMonth:r=>publishDoctorMonth({sourceType:r.sourceType||sourceType,month:r.month,revision:r.revision,request}),
+  publishSource:r=>publishDoctorSource({sourceType:r.sourceType||sourceType,request,...r.doctorSource}),
+ });
 }
 
 if (failures.length) {
@@ -97,6 +111,7 @@ if (failures.length) {
 if(pending.boundedImportEnabled===true) {
   const remaining=await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
   if(remaining.publicationPending || remaining.runs?.length || remaining.deferred || remaining.paused) processorDeferred=true;
+  else if(processorReason==='run-limit'){processorDeferred=false;processorReason='';}
 }
 await processorOutcome(processorDeferred?'deferred':'completed');
 
@@ -245,8 +260,9 @@ async function automationRequest(path, options = {}) {
         break;
       }
       if (response.ok) return result;
-      const diagnostic = String(result.code || result.phase || "").trim();
-      lastError = new Error(`${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
+      if(path==='/api/automation/facility-refresh'&&response.status===409&&result.stalePlan)return {...result,recoverableConflict:true};
+      const diagnostic = String(result.reason || result.code || result.phase || "").trim();
+      lastError = new Error(`${path} source=${sourceId} phase=${String(result.mode||options.body?.phase||'publication')} ${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
       lastError.code = String(result.code || '');
       lastError.boundedReplacementRequired = result.boundedReplacementRequired === true;
       if (path === "/api/automation/derived" || ![408, 429, 500, 502, 503, 504].includes(response.status)) break;

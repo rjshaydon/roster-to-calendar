@@ -1,7 +1,8 @@
+import {publicationHoldStatement,releasePublicationHoldStatement} from '../../_lib/publication-delivery-budget.js';
 import { createD1Meter } from "../../_middleware.js";
 import { runFacilityPublicationStep } from "../../_lib/facility-overview-cache.js";
 import { automaticFacilityPublicationEnabled, facilityRefreshStatements, facilityTermDates } from "../../_lib/facility-refresh-queue.js";
-import { reserveRosterMaintenanceBudget, configureRosterMaintenanceBudget, stopAccountMaintenance } from "../../_lib/roster-maintenance-budget.js";
+import { reserveRosterMaintenanceBudget, configureRosterMaintenanceBudget, configurePublicationReservation, stopAccountMaintenance } from "../../_lib/roster-maintenance-budget.js";
 import { automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 import { australianTermStartForDate, australianTermEndForStart, refreshFacilityOverviewMaterializationForFile, upsertRosterFileStatusSummaryStatement } from "../../_lib/d1-calendar.js";
@@ -90,17 +91,22 @@ export async function onRequestPost(context) {
     if (dates.length) await db.batch(facilityRefreshStatements(db, source, dates, JSON.stringify(current.map((row) => [row.id, row.content_revision]))));
     return Response.json({ ok: true, seeded: dates.length > 0, sourceType: source, termStart: term, dateCount: dates.length });
   }
-  const job = await db.prepare("SELECT j.* FROM facility_refresh_jobs j WHERE j.source_type = ? AND j.status = 'pending' AND EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start) ORDER BY j.term_start LIMIT 1").bind(source).first();
+  const job = await db.prepare(`SELECT j.* FROM facility_refresh_jobs j WHERE j.source_type = ? AND j.status = 'pending' AND EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start) ORDER BY CASE WHEN EXISTS(SELECT 1 FROM facility_day_publications p WHERE p.source_type=j.source_type AND p.status='building'
+    AND json_extract(CASE WHEN json_valid(j.plan_json) THEN j.plan_json ELSE '{}' END,'$.operationRevision')=p.operation_id) THEN 0 ELSE 1 END,j.term_start LIMIT 1`).bind(source).first();
   if (!job) return Response.json({ ok: true, idle: true });
   const day = new Date().toISOString().slice(0, 10);
+  configurePublicationReservation(db,job);
   if (!await reserveRosterMaintenanceBudget(db, WRITE_RESERVATION, READ_RESERVATION)) return Response.json({ ok: true, deferred: true });
   const plan = job.plan_json ? JSON.parse(job.plan_json) : null;
   let mode = "plan";
   if (plan) mode = job.next_batch < plan.batchCount ? "build-batch" : job.next_month < plan.months.length ? "build-month" : "finalize";
   const meter = createD1Meter(db, 48);
-  let result;
+  let result,checkpointed=false;
   try {
-    result = await runFacilityPublicationStep({ ...context, env: { ...context.env, ROSTER_DB: meter.binding } }, source, {
+    const affectedDates=JSON.parse(job.dates_json);
+    const boundaryOnly=mode==='plan'&&affectedDates.length>0&&affectedDates.every(date=>date===job.term_start)&&await carryOnlyPublication(db,source,job.term_start);
+    if(boundaryOnly){result={ok:true,boundaryOnly:true,mode:'finalize'};mode='finalize';}
+    else result = await runFacilityPublicationStep({ ...context, env: { ...context.env, ROSTER_DB: meter.binding } }, source, {
       mode, requireDoctorCalendars: context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', termStart: job.term_start, dates: JSON.parse(job.dates_json),
       operationRevision: plan?.operationRevision, batchIndex: job.next_batch, month: plan?.months[job.next_month],
     });
@@ -109,13 +115,27 @@ export async function onRequestPost(context) {
       else await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = 500000, reserved_writes = 10000 WHERE utc_day = ?").bind(day).run();
       throw new Error("Publication exceeded its reserved cost; maintenance stopped for this UTC day.");
     }
-    if (result.reason === "term-not-prepared") result = { ...result, ok: true, deferred: true, waitingForTerm: true };
+    if (result.reason === "term-not-prepared") {
+      // An end date at the next term boundary is attendance, not ownership.
+      // Prove that only previous-term files reach this date and no active
+      // compact catalogue owns shifts in this term before retiring the job.
+      result=await carryOnlyPublication(db,source,job.term_start)?{ok:true,mode:'finalize',boundaryOnly:true}:{...result,ok:true,deferred:true,waitingForTerm:true};
+      if(result.boundaryOnly)mode='finalize';
+    }
+    if(result.reconciled)mode='plan';
     if (result.ok && !result.deferred) {
-      await db.prepare(`UPDATE facility_refresh_jobs SET plan_json = ?, next_batch = ?, next_month = ?, status = ?, last_error = '', updated_at = ?
+      const nextBatch=result.reconciled?result.nextBatch:job.next_batch+(mode==='build-batch'?1:0),nextMonth=result.reconciled?0:job.next_month+(mode==='build-month'?1:0);
+      const nextPlan=mode==='plan'?result:plan;
+      const checkpoint=await db.batch([db.prepare(`UPDATE facility_refresh_jobs SET plan_json = ?, next_batch = ?, next_month = ?, status = ?, last_error = '', updated_at = ?
         WHERE source_type = ? AND term_start = ? AND request_revision = ? AND next_batch = ? AND next_month = ?`)
         .bind(mode === "plan" ? JSON.stringify(result) : job.plan_json,
-          job.next_batch + (mode === "build-batch" ? 1 : 0), job.next_month + (mode === "build-month" ? 1 : 0),
-          mode === "finalize" ? "complete" : "pending", new Date().toISOString(), source, job.term_start, job.request_revision, job.next_batch, job.next_month).run();
+          nextBatch,nextMonth,
+          mode === "finalize" ? "complete" : "pending", new Date().toISOString(), source, job.term_start, job.request_revision, job.next_batch, job.next_month),
+        mode==='finalize'?releasePublicationHoldStatement(db,source,job.term_start,job.request_revision):publicationHoldStatement(db,source,job.term_start,job.request_revision,JSON.parse(job.dates_json),{
+          plan:nextPlan,nextBatch,nextMonth,guard:"EXISTS(SELECT 1 FROM facility_refresh_jobs WHERE source_type=? AND term_start=? AND request_revision=? AND status='pending' AND next_batch=? AND next_month=?)",bindings:[source,job.term_start,job.request_revision,nextBatch,nextMonth]}),
+      ]);
+      checkpointed=Number(checkpoint[0]?.meta?.changes||0)===1;
+      if(!checkpointed)result={ok:true,deferred:true,reason:'publication-cursor-changed'};
     } else if (result.stalePlan) {
       await db.prepare("UPDATE facility_refresh_jobs SET plan_json = '', next_batch = 0, next_month = 0, last_error = ? WHERE source_type = ? AND term_start = ? AND request_revision = ?")
         .bind(result.reason, source, job.term_start, job.request_revision).run();
@@ -125,6 +145,9 @@ export async function onRequestPost(context) {
       .bind(String(error.message || error).slice(0, 300), source, job.term_start, job.request_revision).run();
     throw error;
   } finally {
+    if(!checkpointed)await publicationHoldStatement(db,source,job.term_start,job.request_revision,JSON.parse(job.dates_json),{
+      plan:result?.stalePlan?null:plan,nextBatch:result?.stalePlan?0:job.next_batch,nextMonth:result?.stalePlan?0:job.next_month,
+      guard:"EXISTS(SELECT 1 FROM facility_refresh_jobs WHERE source_type=? AND term_start=? AND request_revision=? AND status='pending' AND next_batch=? AND next_month=?)",bindings:[source,job.term_start,job.request_revision,result?.stalePlan?0:job.next_batch,result?.stalePlan?0:job.next_month]}).run();
     // Refund unused reads only when every result supplied D1 billing metadata.
     // The reservation remains intact after errors or incomplete instrumentation.
     if (result?.ok && meter.metadataComplete && meter.rowsRead <= READ_RESERVATION && meter.rowsWritten <= WRITE_RESERVATION) {
@@ -133,4 +156,16 @@ export async function onRequestPost(context) {
     }
   }
   return Response.json({ ...result, doctorCalendarsEnabled:context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready', completed: result.ok && !result.deferred && mode === "finalize" }, { status: result.ok ? 200 : 409 });
+}
+
+async function carryOnlyPublication(db,source,term){
+ const row=await db.prepare(`SELECT
+  EXISTS(SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active JOIN roster_file_coverage c ON c.file_id=f.id
+    WHERE f.source_type=? AND f.active=1 AND c.coverage_start<? AND c.coverage_end=?) AS carry,
+  EXISTS(SELECT 1 FROM facility_stream_catalog_contributions c JOIN roster_files f ON f.id=c.file_id
+    WHERE c.source_type=? AND c.term_start=? AND f.active=1 LIMIT 1) AS owned,
+  EXISTS(SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active JOIN roster_file_coverage c ON c.file_id=f.id
+    WHERE f.source_type=? AND f.active=1 AND c.coverage_start>=? AND c.coverage_start<=?) AS next_file`)
+  .bind(source,term,term,source,term,source,term,australianTermEndForStart(term)).first();
+ return Boolean(row?.carry&&!row.owned&&!row.next_file);
 }

@@ -577,6 +577,7 @@ sqlite.prepare(`INSERT INTO account_profiles
   .run("doctor@example.com", salt, passwordHash, new Date().toISOString(), new Date().toISOString());
 sqlite.prepare(`INSERT INTO account_claims (email, source_type, doctor_key, display_name, matched_at, updated_at)
   VALUES ('doctor@example.com', 'mmc', 'TERM TRAINEE', 'Term Trainee', '', '')`).run();
+sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
 async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
@@ -586,7 +587,7 @@ async function callSharedAction(body, options = {}) {
   });
   const payload = await response.json();
   assert.equal(response.status, options.status || 200, JSON.stringify(payload));
-  assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, `${body.action} must not query roster_events`);
+  assert.ok(db.sql.filter(sql=>/\broster_events\b/i.test(sql)).every(sql=>sql.includes('CROSS JOIN roster_events e INDEXED BY idx_roster_events_file_doctor')&&sql.includes('LIMIT 1')),`${body.action}: only the bounded access-evidence probe may touch events; cached views must not scan them`);
   return payload;
 }
 // Restored Creator surfaces use indexed account pages and visible R2 membership.

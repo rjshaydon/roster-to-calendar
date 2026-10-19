@@ -1,3 +1,5 @@
+import {stageDeliveryHolds} from './publication-delivery-budget.js';
+import {australianTermStartForDate} from './d1-calendar.js';
 import { rosterImportDigest } from './roster-import-batches.js';
 import { reserveRosterMaintenanceBudget } from './roster-maintenance-budget.js';
 import { derivedRosterFileUpsertStatement,upsertRosterFileStatusSummaryStatement,facilitySmsMembershipStatement } from './d1-calendar.js';
@@ -48,6 +50,7 @@ export async function pinRosterPatchPlan(db,run,input) {
     return {nextBatch:job.next_batch,activated:Boolean(job.activated)};
   }
   if(!await reserveRosterMaintenanceBudget(db,32,256)) return {deferred:true};
+  if(plan.dates.length)await stageDeliveryHolds(db,job.source_type,run.id,plan.dates[0],plan.dates.at(-1),australianTermStartForDate);
   await db.batch([patchGuard(db,job),db.prepare("UPDATE roster_patch_jobs SET manifest_json=?,plan_revision=? WHERE run_id=? AND plan_revision=''").bind(JSON.stringify(plan),revision,run.id)]);
   return {nextBatch:0};
 }

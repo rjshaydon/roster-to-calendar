@@ -1,3 +1,5 @@
+import {stageDeliveryHolds} from './publication-delivery-budget.js';
+import {australianTermStartForDate} from './d1-calendar.js';
 import { reserveRosterMaintenanceBudget } from './roster-maintenance-budget.js';
 import { PATCH_SECTIONS, validatePatchEntry } from './roster-patch.js';
 import { rosterImportDigest } from './roster-import-batches.js';
@@ -99,6 +101,7 @@ export async function pinRosterRebasePlan(db,run,input){
   ||p.batches.some((b,i)=>b.index!==i||!Number.isInteger(b.count)||b.count<1||b.count>16||!/^[a-f0-9]{64}$/.test(b.hash))
   ||await rosterImportDigest(p)!==input.patchRevision)throw Error('Invalid bounded staging reuse plan.');
  if(!await reserveRosterMaintenanceBudget(db,64,128))return {deferred:true};
+ await stageDeliveryHolds(db,j.source_type,run.id,p.coverage.start,p.rosterEndDate,australianTermStartForDate);
  await db.batch([guard(db,j),db.prepare("UPDATE roster_rebase_jobs SET manifest_json=?,plan_revision=? WHERE run_id=? AND plan_revision=''").bind(JSON.stringify(p),input.patchRevision,run.id)]);
  return {nextBatch:0};
 }
