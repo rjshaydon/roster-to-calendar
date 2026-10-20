@@ -33,6 +33,10 @@ export async function onRequestPost(context) {
     const source = automationSourceDefinition(sourceId);
     if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
     configureRosterMaintenanceBudget(context.env.ROSTER_DB, body.maintenanceBudget);
+    if (body.vhhHistory || phase === 'bounded-history-inspect') {
+      const {handleVhhHistoryRequest}=await import('../../_lib/vhh-history-protocol.js');
+      return handleVhhHistoryRequest(context,{...body,sourceId});
+    }
     if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, (...args) => resolveCompleteTarget(...args, context.env));
     // Bounded imports do not need the account/admin state handler or its
     // identity and UI dependencies. Load that legacy path only when requested.

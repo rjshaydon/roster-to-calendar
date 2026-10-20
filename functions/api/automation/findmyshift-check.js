@@ -120,8 +120,10 @@ export async function onRequestPost(context, internal = {}) {
         refreshedAccountBudget=true;
       }
       // Inline grant refresh also reads bounded receipt/recovery/CAS summaries.
-      // Include that work in this request; unused allowance settles normally.
-      if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 1024+(refreshedAccountBudget?65536:0))) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
+      // Include reads already spent checking both term windows as well as
+      // the changed-input path. An unchanged first window can precede this
+      // reservation in the same metered request; unused capacity is refunded.
+      if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 16384+Math.ceil(Number(context.data?.d1Meter?.rowsRead||0))+(refreshedAccountBudget?65536:0))) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
     }
     await observeProviderAuthority(context.env.ROSTER_DB,SOURCE_ID,fileName,providerVersion);
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range, { env: context.env });

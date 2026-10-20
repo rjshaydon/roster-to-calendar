@@ -89,8 +89,8 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
           result={activated:true,fileId:job.file_id};
         } else {
           result = body.phase === 'bounded-patch-activate'
-            ? await activateRosterPatch(db,run,body,{file,deliveryGuard:delivery.guard,publishFacility:automaticFacilityPublicationEnabled(context.env,source.sourceType)})
-            : await activateBoundedRosterTerm(db, run.id, body.revision, { publishFacility: automaticFacilityPublicationEnabled(context.env, source.sourceType), deliveryGuard: delivery.guard });
+            ? await activateRosterPatch(db,run,body,{file,deliveryGuard:delivery.guard,publishFacility:automaticFacilityPublicationEnabled(context.env,source.sourceType),historyWindows:body.historyWindows})
+            : await activateBoundedRosterTerm(db, run.id, body.revision, { publishFacility: automaticFacilityPublicationEnabled(context.env, source.sourceType), deliveryGuard: delivery.guard, historyWindows:body.historyWindows });
           if (result.deferred) break;
           // Atomic publication is independent of the small, retryable source/run
           // bookkeeping callback. An interrupted callback does not repeat facts.

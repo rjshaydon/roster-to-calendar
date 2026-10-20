@@ -5251,6 +5251,17 @@ export async function queryMaterializedFacilityMetadata(db, options = {}) {
   rejectFacilityReadOverflow(rawCatalogRows.results, maximumInputRows, "term-catalog-input-read-limit");
   let catalogRows = rawCatalogRows.results || [];
   if (maximumInputRows != null) {
+    // Reuse the already bounded catalogue read in one pass; no event query.
+    const ownership=new Map();
+    for(const row of catalogRows) {
+      const previous=ownership.get(row.file_id);
+      if(!previous)ownership.set(row.file_id,{first:row.first_date,last:row.last_date});
+      else {if(row.first_date<previous.first)previous.first=row.first_date;if(row.last_date>previous.last)previous.last=row.last_date;}
+    }
+    for(const entry of coverage) {
+      const own=ownership.get(entry.fileId);
+      if(own){entry.rosterStartDate=own.first;entry.rosterEndDate=own.last;}
+    }
     const aggregated = new Map();
     for (const row of catalogRows) {
       if (!activeFileIds.has(String(row.file_id || ""))) continue;

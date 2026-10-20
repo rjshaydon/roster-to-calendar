@@ -20,6 +20,11 @@ on:
         description: "Optional term start to require in the delivered source generation"
         required: false
         type: string
+      recover_vhh_history:
+        description: "Recover only missing past VHH weeks from the latest retained workbook"
+        required: false
+        default: false
+        type: boolean
       publication_only:
         description: "Resume publication without downloading/importing any roster"
         required: false
@@ -79,20 +84,21 @@ jobs:
             --data "{\"action\":\"lifecycle\",\"event\":\"started\",\"sourceId\":\"${SOURCE_ID}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"}" \
             "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"
       - uses: actions/checkout@v4
-        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only || inputs.recover_vhh_history
       - uses: actions/setup-node@v4
-        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only
+        if: steps.queue.outputs.count != '0' || inputs.verify_term_start != '' || inputs.publication_only || inputs.recover_vhh_history
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-        if: steps.queue.outputs.count != '0' || inputs.publication_only
+        if: steps.queue.outputs.count != '0' || inputs.publication_only || inputs.recover_vhh_history
       - name: Process imports or resume publication
         id: process
-        if: steps.queue.outputs.count != '0' || inputs.publication_only
+        if: steps.queue.outputs.count != '0' || inputs.publication_only || inputs.recover_vhh_history
         run: node scripts/process-roster-queue.mjs
         env:
           ROSTER_AUTOMATION_BASE_URL: ${{ env.ROSTER_AUTOMATION_BASE_URL }}
+          ROSTER_RECOVER_VHH_HISTORY: ${{ inputs.recover_vhh_history && 'true' || 'false' }}
           ROSTER_PUBLICATION_ONLY: ${{ inputs.publication_only && 'true' || 'false' }}
       - name: Verify requested delivered generation
         id: verify

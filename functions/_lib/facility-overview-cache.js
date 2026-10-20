@@ -16,6 +16,9 @@ import {
 import { ddhNightReviewWindow, ddhWorkingNightRows } from "../../public/static/contact-allocations.js";
 import { rosterTermVisible } from '../../public/static/roster-term-policy.js';
 
+export function rosterCoverageContains(entry,date) {
+  return (entry.rosterStartDate||entry.startDate)<=date && (entry.rosterEndDate||entry.endDate)>=date;
+}
 const SCHEMA_VERSION = 1;
 const FACILITY_PUBLICATION_BATCH_SIZE = 7;
 export const FACILITY_PUBLICATION_LIMITS = Object.freeze({
@@ -174,7 +177,7 @@ async function buildFacilityPublicationBatch(context, plan, publicPlan, batchInd
   const pointers = {};
   for (const date of publicPlan.batches[batchIndex]) {
     const rows = await queryFacilityOverviewOnShift(db, { facilityKey: plan.sourceType, date, includeOverrides: false, maximumRows: FACILITY_PUBLICATION_LIMITS.dayRows });
-    const covered = (plan.metadata.coverage || []).some((entry) => entry.startDate <= date && entry.endDate >= date);
+    const covered = (plan.metadata.coverage || []).some((entry) => rosterCoverageContains(entry,date));
     if (!rows.length && !covered) continue;
     const payload = { schemaVersion: SCHEMA_VERSION, sourceType: plan.sourceType, date, rows };
     const revision = await digest(payload);
@@ -541,7 +544,7 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
       const rows = await queryFacilityOverviewOnShift(db, {
         facilityKey: sourceType, date, includeOverrides: false, maximumRows: options.maximumRowsPerDay,
       });
-      const covered = (currentManifest.coverage || []).some((entry) => entry.startDate <= date && entry.endDate >= date);
+      const covered = (currentManifest.coverage || []).some((entry) => rosterCoverageContains(entry,date));
       if (!rows.length && !covered) {
         delete days[date];
         continue;
@@ -630,7 +633,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
       const visible = Boolean(publication);
       // Coverage dates use the same inclusive end as the publication builder.
       const covered = publication && (publication.empty || !Array.isArray(publication.coverage)
-        || publication.coverage.some(item => item.startDate <= date && item.endDate >= date));
+        || publication.coverage.some(item => rosterCoverageContains(item,date)));
       const reason = !visible ? "history-unavailable" : !covered ? "coverage-unavailable" : "";
       if (reason && gap?.reason === reason) gap.endDate = date;
       else { if (gap) missing.push(gap); gap = reason ? { sourceType, startDate: date, endDate: date, reason } : null; }
@@ -711,6 +714,18 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
   const missing = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    if(manifest) {
+      const visibleTerm=(manifest.terms||[]).find(term=>term.termStart<=date&&term.termEnd>=date&&rosterTermVisible(term,currentDate));
+      const coverage=visibleTerm?.coverage||manifest.coverage;
+      if(date<=currentDate && Array.isArray(manifest.terms) && manifest.terms.length && Array.isArray(coverage) && (!visibleTerm || !coverage.some(entry=>rosterCoverageContains(entry,date)))) {
+        // A committed manifest can positively report absent historical input.
+        // Retrying a 503 cannot produce it. Corrupt/missing artifacts within
+        // covered dates still follow the existing preparation failure path.
+        found=true;
+        missing.push({sourceType,startDate:date,endDate:date,reason:visibleTerm?'coverage-unavailable':'history-unavailable'});
+        continue;
+      }
+    }
     const pointer = manifest?.days?.[date];
     if (!pointer?.key) { missing.push({ sourceType, startDate: date, endDate: date, reason: "day-unavailable" }); continue; }
     const day = await loadCachedSnapshot(r2, pointer.key);

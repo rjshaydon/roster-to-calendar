@@ -1,3 +1,4 @@
+import {preserveVhhHistory} from './process-vhh-history.mjs';
 import {drainRosterPublication} from './roster-publication-driver.mjs';
 import {publishDoctorSource} from './process-doctor-source.mjs';
 import {publishDoctorMonth,doctorCalendarRequest} from './process-doctor-calendars.mjs';
@@ -21,6 +22,7 @@ const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
 const maintenanceBudget = process.env.ROSTER_MAINTENANCE_SESSION ? JSON.parse(process.env.ROSTER_MAINTENANCE_SESSION) : null;
 const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
 const publicationOnly=process.env.ROSTER_PUBLICATION_ONLY==='true';
+const recoverVhhHistory=process.env.ROSTER_RECOVER_VHH_HISTORY==='true';
 
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
@@ -35,6 +37,12 @@ let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 if(pending.maintenanceDeferred&&!publicationOnly){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
 let runs = Array.isArray(pending.runs) ? pending.runs : [];
+if(recoverVhhHistory) {
+  if(sourceId!==VHH_ROSTER_SOURCE_ID) throw Error('Historical recovery is restricted to VHH.');
+  const retained=await automationRequest('/api/automation/derived',{method:'POST',body:{phase:'bounded-history-inspect',sourceId,maintenanceBudget}});
+  if(retained.deferred){await processorOutcome('deferred');process.exit(0);}
+  runs=retained.needsRecovery?[retained.run]:[];
+}
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
 console.log(`Found ${runs.length} queued roster file(s).`);
 if ((!runs.length && !pending.publicationPending && !publicationOnly) || (pending.maintenanceDeferred&&!publicationOnly) || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
@@ -51,7 +59,7 @@ if(pending.boundedImportEnabled&&(pending.publicationPending||publicationOnly)){
     processorReason=blocked?(delivery.reason||'publication-pending'):'';
     await processorOutcome(blocked?'deferred':'completed');process.exit(0);
   }
-  runs=Array.isArray(after.runs)?after.runs:[];
+  if(!recoverVhhHistory) runs=Array.isArray(after.runs)?after.runs:[];
   if(!runs.length){await processorOutcome('completed');process.exit(0);}
   if(!publicationBudget.remaining){processorReason='run-limit';await processorOutcome('deferred');process.exit(0);}
 }
@@ -121,6 +129,7 @@ async function processRun(run) {
   }, { label: "Roster processor download" });
   if (!response.ok) throw new Error(`Roster download returned HTTP ${response.status}.`);
   let payload;
+  let historyWindows=[];
   let processedFileName = run.fileName || "roster.xlsx";
   if (run.sourceId === VHH_ROSTER_SOURCE_ID) {
     const isLegacyJson = /json/i.test(run.contentType || "") || /\.json$/i.test(processedFileName);
@@ -136,6 +145,12 @@ async function processRun(run) {
           providerModifiedAt: new Date(file.lastModified).toISOString(),
           providerVersion: run.providerVersion,
         });
+    run.boundedImportStarted=true;
+    const preservation=await preserveVhhHistory({run,extract,recoveryOnly:recoverVhhHistory,
+      request:body=>automationRequest('/api/automation/derived',{method:'POST',body:{...body,sourceId:run.sourceId,runId:run.id,maintenanceBudget}})});
+    if(preservation.deferred){processorDeferred=true;return;}
+    historyWindows=preservation.historyWindows;
+    if(recoverVhhHistory) return;
     payload = buildVhhDerivedRosterPayload({
       extract,
       contentHash: run.contentHash,
@@ -170,7 +185,7 @@ async function processRun(run) {
     const plan = await attachRosterCompactPlan(await planRosterImportBatches(payload, {maximumBatchBytes:65536,maximumOccurrences:64}), payload);
     run.boundedImportStarted = true;
     const importStep = forceStaging => step => automationRequest("/api/automation/derived", {
-      method: "POST", body: { ...step, supportsPatch: pending.patchImportEnabled === true, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
+      method: "POST", body: { ...step, historyWindows, supportsPatch: pending.patchImportEnabled === true, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
     });
     finished = await executeBoundedRosterImport(plan, importStep(false));
     if(finished.mode==='rebase'){

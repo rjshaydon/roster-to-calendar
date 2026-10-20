@@ -1,0 +1,27 @@
+name: Recover retained VHH history
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '25 0 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: roster-production-vhh-active-medical-roster
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      ROSTER_AUTOMATION_SOURCE_ID: vhh-active-medical-roster
+      ROSTER_RECOVER_VHH_HISTORY: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/process-roster-queue.mjs

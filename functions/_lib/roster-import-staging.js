@@ -1,3 +1,4 @@
+import {prepareVhhHistoryPromotion,requirePreservedPrefix} from './vhh-history-preservation.js';
 import { authorityGuard, authorityTerms, authorityActivationStatements } from './roster-authority.js';
 import {stageDeliveryHolds} from './publication-delivery-budget.js';
 import { stageRosterCompactMetadata } from "./roster-import-compact.js";
@@ -59,7 +60,7 @@ export async function beginBoundedRosterImport(db, runId, file, plan, options = 
   const held=existing?.initialized===1?await db.prepare('SELECT 1 AS held FROM roster_publication_holds WHERE source_type=? AND term_start=? AND owner_id=?').bind(file.sourceType,australianTermStartForDate(plan.manifest.startDate),runId).first():null;
   if(!existing?.activated&&!held){
     if(!await reserveRosterMaintenanceBudget(db,64,256))return {deferred:true,reason:'delivery-capacity'};
-    await stageDeliveryHolds(db,file.sourceType,runId,plan.manifest.startDate,plan.manifest.rosterEndDate,australianTermStartForDate);
+    await stageDeliveryHolds(db,file.sourceType,options.holdOwnerId||runId,plan.manifest.startDate,plan.manifest.rosterEndDate,australianTermStartForDate);
   }
   if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated), retiredFileIds: JSON.parse(existing.retired_file_ids_json || "[]") };
   const existingFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
@@ -188,7 +189,7 @@ export async function activateBoundedRosterTerm(db, runId, revision, options = {
   // Only small control rows change here. Events and presence are already
   // prepared; active readers switch to the complete file atomically.
   const terms=await authorityTerms(db,job.file_id);
-  const authority=authorityActivationStatements(db,{runId,sourceType:file.source_type,sourceId:job.source_id,fileId:job.file_id,revision,terms,now,gate:"EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activated=1)",gateArgs:[runId]});
+  const authority=options.historySupplement?[]:authorityActivationStatements(db,{runId,sourceType:file.source_type,sourceId:job.source_id,fileId:job.file_id,revision,terms,now,gate:"EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activated=1)",gateArgs:[runId]});
   const deliveryGuards = [authorityGuard(db,runId,file.source_type,terms),...(options.deliveryGuard ? [options.deliveryGuard()] : [])];
   const activation = (await db.batch([...deliveryGuards,
     db.prepare(`UPDATE roster_files SET active = 1 WHERE id = ? AND active = 0 AND NOT EXISTS (
@@ -224,16 +225,21 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
   if (JSON.stringify(active) !== JSON.stringify(fence)) throw new Error("Active rosters changed during import; replacement was not activated. Start a fresh import after reviewing the current roster.");
   const incoming = await rosterTermOwnership(db, job.file_id);
   const retire = [];
+  const historyWindows=options.historyWindows||[];
   let start = coverage.coverage_start, end = coverage.coverage_end;
   for (const old of active) {
     const own = await rosterTermOwnership(db, old.id);
     if (own.firstDate > incoming.lastDate || own.lastDate < incoming.firstDate) continue;
-    if (own.firstTerm !== incoming.firstTerm || own.lastTerm !== incoming.lastTerm || own.firstDate < incoming.firstDate || own.lastDate > incoming.lastDate) throw new Error("Replacement would remove dates outside the incoming roster. Import the full retained term range.");
+    if ((file.source_type!=='vhh' && (own.firstTerm !== incoming.firstTerm || own.lastTerm !== incoming.lastTerm || own.firstDate < incoming.firstDate)) || own.lastDate > incoming.lastDate) throw new Error("Replacement would remove dates outside the incoming roster. Import the full retained term range.");
+    if(file.source_type==='vhh') requirePreservedPrefix(own.firstDate,incoming.firstDate,historyWindows);
     const oldCoverage = await db.prepare("SELECT coverage_start,coverage_end FROM roster_file_coverage WHERE file_id=?").bind(old.id).first();
     start = start < oldCoverage.coverage_start ? start : oldCoverage.coverage_start;
     end = end > oldCoverage.coverage_end ? end : oldCoverage.coverage_end;
     retire.push(old.id);
   }
+  if(file.source_type==='vhh' && historyWindows.some(w=>w.to>=incoming.firstDate)) throw Error('History overlaps the incoming live roster.');
+  const history=file.source_type==='vhh'?await prepareVhhHistoryPromotion(db,job.run_id,historyWindows,retire):null;
+  if(history?.writes && !await reserveRosterMaintenanceBudget(db,history.writes,8192)) return {deferred:true};
   const dates = facilityTermDates(start, end), token = crypto.randomUUID(), now = new Date().toISOString();
   const guard = { runId: job.run_id, token };
   const gate = "EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activation_token=?)";
@@ -255,9 +261,10 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
     facilitySmsMembershipStatement(db,job.file_id,true),
     ...(options.publishFacility ? facilityRefreshStatements(db,file.source_type,dates,`${job.file_id}:${revision}`,guard) : []),
   ];
+  if(history?.jobs.length) statements.push(db.prepare("SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activation_token=? AND activated=1) THEN 1 ELSE json('vhh-history-main-conflict') END").bind(job.run_id,token),...history.statements);
   const terms=await authorityTerms(db,job.file_id);
   statements.push(...authorityActivationStatements(db,{runId:job.run_id,sourceType:file.source_type,sourceId:job.source_id,fileId:job.file_id,revision,terms,now,gate,gateArgs:[job.run_id,token]}));
-  const deliveryGuards = [authorityGuard(db,job.run_id,file.source_type,terms),...(options.deliveryGuard ? [options.deliveryGuard()] : [])];
+  const deliveryGuards = [...(history?.guards||[]),authorityGuard(db,job.run_id,file.source_type,terms),...(options.deliveryGuard ? [options.deliveryGuard()] : [])];
   const results = (await db.batch([...deliveryGuards,...statements])).slice(deliveryGuards.length);
   if (Number(results[0]?.meta?.changes || 0) !== 1) throw new Error("Concurrent roster change prevented replacement activation.");
   return { fileId:job.file_id, retiredFileIds:retire, activated:true };

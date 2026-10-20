@@ -1,3 +1,5 @@
+import {prepareVhhHistoryPromotion,requirePreservedPrefix} from './vhh-history-preservation.js';
+import {rosterTermOwnership} from './roster-term-ownership.js';
 import { authorityGuard,authorityTerms,authorityActivationStatements } from './roster-authority.js';
 import {stageDeliveryHolds} from './publication-delivery-budget.js';
 import {australianTermStartForDate} from './d1-calendar.js';
@@ -109,11 +111,19 @@ export function validatePatchEntry(entry,job,plan) {
   if(['removeEvent','removeIssue'].includes(kind) && !row[0].startsWith(job.file_id+':') || kind==='presence' && !row[4].startsWith(job.file_id+':')) throw Error('Patch removal or presence belongs to another file.');
 }
 
-export async function activateRosterPatch(db,run,input,{file,deliveryGuard,publishFacility}={}) {
+export async function activateRosterPatch(db,run,input,{file,deliveryGuard,publishFacility,historyWindows=[]}={}) {
   const job=await jobFor(db,run);
   if(job.activated) return {activated:true,fileId:job.file_id};
   const plan=JSON.parse(job.manifest_json||'null');
   if(!plan || input.patchRevision!==job.plan_revision || job.next_batch!==plan.batches.length) throw Error('Patch has unfinished batches.');
+  let history=null;
+  if(file.sourceType==='vhh') {
+    if(historyWindows.some(w=>w.to>=plan.coverage.start)) throw Error('History overlaps the incoming live roster.');
+    const own=await rosterTermOwnership(db,job.file_id);
+    requirePreservedPrefix(own.firstDate,plan.coverage.start,historyWindows);
+    history=await prepareVhhHistoryPromotion(db,run.id,historyWindows,[job.file_id]);
+    if(history.writes && !await reserveRosterMaintenanceBudget(db,history.writes,8192)) return {deferred:true};
+  }
   const total=plan.batches.reduce((n,b)=>n+b.count,0);
   const from=`FROM roster_patch_batches b,json_each(b.entries_json) e WHERE b.run_id=?`;
   const kind=k=>`${from} AND json_extract(e.value,'$.kind')='${k}'`;
@@ -125,7 +135,7 @@ export async function activateRosterPatch(db,run,input,{file,deliveryGuard,publi
   if(writes>50000) return {deferred:true,reason:'patch-write-envelope'};
   if(!await reserveRosterMaintenanceBudget(db,writes,100000)) return {deferred:true};
   const terms=await authorityTerms(db,job.file_id);
-  const now=new Date().toISOString(), statements=[authorityGuard(db,run.id,file.sourceType,terms),...(deliveryGuard?[deliveryGuard()]:[]),patchGuard(db,job),
+  const now=new Date().toISOString(), statements=[...(history?.guards||[]),authorityGuard(db,run.id,file.sourceType,terms),...(deliveryGuard?[deliveryGuard()]:[]),patchGuard(db,job),
     db.prepare(`SELECT CASE WHEN (SELECT COUNT(*) FROM roster_patch_batches WHERE run_id=?)=?
       AND (SELECT COALESCE(SUM(json_array_length(entries_json)),0) FROM roster_patch_batches WHERE run_id=?)=?
       AND EXISTS(SELECT 1 FROM roster_patch_jobs WHERE run_id=? AND plan_revision=? AND next_batch=? AND activated=0)
@@ -169,6 +179,7 @@ export async function activateRosterPatch(db,run,input,{file,deliveryGuard,publi
   if(publishFacility && plan.dates.length) statements.push(...facilityRefreshStatements(db,file.sourceType,plan.dates,plan.contentRevision));
   statements.push(db.prepare('UPDATE roster_patch_jobs SET activated=1 WHERE run_id=? AND plan_revision=?').bind(run.id,job.plan_revision));
   statements.push(...authorityActivationStatements(db,{runId:run.id,sourceType:file.sourceType,sourceId:run.sourceId,fileId:job.file_id,revision:plan.contentRevision,terms,now}));
+  statements.push(...(history?.statements||[]));
   await db.batch(statements);
   return {activated:true,fileId:job.file_id,doctorCount:plan.doctorCount,eventCount:plan.eventCount};
 }
