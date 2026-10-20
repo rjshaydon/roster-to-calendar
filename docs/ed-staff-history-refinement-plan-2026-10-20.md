@@ -1,6 +1,6 @@
 # Staff-history grade and refresh correction — 20 October 2026
 
-Status: implementation and bounded production grade repair completed on Medium. Final visual acceptance is pending because the Mac locked.
+Status: implementation and bounded production grade repair completed on Medium. Final live visual acceptance and unchanged preparation replay passed after the Mac was unlocked.
 
 ## Read-only findings
 
@@ -58,3 +58,14 @@ search text/results while repair was in progress. Final corrected visual check
 and an unchanged preparation replay remain pending; do not mark these as passed.
 The user has been asked to unlock the Mac. Usage reached 15% remaining during
 verification, so no further implementation was started.
+
+## Final acceptance after unlock
+
+Native authenticated Safari showed Richard Haydon as exactly two SMS ranges,
+DDH and MMC, each Term 1 – Term 4 2026 (2 Feb 2026 – 31 Jan 2027). The original
+open search had retained its query and adopted the corrected catalogue without
+a manual reload. Patrick Tan showed known Senior Registrar grades, with MMC
+Term 1, MMC Term 3, then DDH Term 4; the missing Term 2 was not fabricated.
+Unchanged preparation run 39371682172 succeeded with status `unchanged` at
+04:50 UTC (15:50 AEDT); no repair or catalogue rewrite was repeated.
+Screenshot of Richard's final result: /tmp/staff-history-refined-20261020.png.
