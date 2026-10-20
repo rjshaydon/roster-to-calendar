@@ -1,6 +1,6 @@
 # Staff-history grade and refresh correction — 20 October 2026
 
-Status: investigation and implementation plan only. No application code, production data or configuration changed in this round. Implement on Medium as one batch, then test and deploy.
+Status: implementation and bounded production grade repair completed on Medium. Final visual acceptance is pending because the Mac locked.
 
 ## Read-only findings
 
@@ -28,4 +28,33 @@ Status: investigation and implementation plan only. No application code, product
 - JMS consecutive terms coalesce; grade changes, missing terms, simultaneous sites and year boundaries remain correct. Historical-only names and approved alias search survive.
 - An open result survives unchanged source publications, pending background preparation, a new complete catalogue, and a quarter-hour authorization renewal. Unchanged content does not rerender; genuine changes replace a coherent result. Logout/access loss/account switching clear results safely.
 - Focused builder/client/renderer integration tests, unchanged-replay checks, and bounded authenticated CPU/D1 checks cover the changed paths. Confirm real examples through native authenticated Safari, using aggregate production queries only; do not export private roster rows to local/test environments.
-- No code change or data repair has been performed during this planning round. Retain current safeguards and Cloudflare Free.
+- Retain current safeguards and Cloudflare Free.
+
+## Release evidence
+
+Runtime commit a0213c95; deployment https://aa1492b5.roster-to-calendar.pages.dev.
+Additional regression tests committed as 34668095. Successful repair/preparation
+run 39359875438 completed at 02:39 UTC (13:39 AEDT), publishing 718 current
+approved/roster identities. Earlier passes yielded to the existing unfinished
+maintenance concurrency guard and resumed durable checkpoints; no reservations
+were manually refunded or bypassed.
+
+Aggregate verification: all 364 formerly Unknown MMC/MCH contribution summaries
+are now known. Richard's MMC Terms 1–4 all say SMS; Patrick's MMC Terms 1 and 3
+say Senior Registrar. Patrick still has no Term 2 contribution. Seven DDH Term 3
+unknown summaries remain: the repair does not invent a grade when evidence is
+missing or contradictory. Original shift/event records were not changed.
+
+Passed staff-history API/builder/client/repair tests; actual browser function
+checks for unchanged authorization renewal, retained histories and unchanged
+DOM; revision fingerprint isolation; facility materialization/access/snapshot
+suites; maintenance-account-budget; cold route startup; syntax and whitespace
+checks. No new native CPU maximum is claimed for this refinement. Existing
+full-handler evidence predates it; interactive readers now avoid watermark HEAD
+checks and stream the same prepared name envelope.
+
+Live Safari before lock confirmed compact current/future grouping and retained
+search text/results while repair was in progress. Final corrected visual check
+and an unchanged preparation replay remain pending; do not mark these as passed.
+The user has been asked to unlock the Mac. Usage reached 15% remaining during
+verification, so no further implementation was started.
