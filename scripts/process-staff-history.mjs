@@ -27,7 +27,7 @@ export async function prepareStaffHistory({request,maxAliasPages=64}){
  const people=buildStaffHistoryCatalogue(fragments,aliases,descriptor.today);
  if(people.length>4096)throw Error('Staff history catalogue limit exceeded.');
  const revision=createHash('sha256').update(JSON.stringify({people,missing})).digest('hex');
- for(let index=0;index<Math.max(1,Math.ceil(people.length/STAFF_HISTORY_PAGE));index++)await request({mode:'store',revision,kind:'names',index,people:people.slice(index*STAFF_HISTORY_PAGE,(index+1)*STAFF_HISTORY_PAGE).map(({history,...p})=>p)});
+ for(let index=0;index<Math.max(1,Math.ceil(people.length/STAFF_HISTORY_PAGE));index++)await request({mode:'store',revision,kind:'names',index,metadata:{revision,missing,next:index+1<Math.ceil(people.length/STAFF_HISTORY_PAGE)?index+1:null,total:people.length},people:people.slice(index*STAFF_HISTORY_PAGE,(index+1)*STAFF_HISTORY_PAGE).map(({history,...p})=>p)});
  for(let index=0;index<Math.ceil(people.length/STAFF_HISTORY_SHARD);index++)await request({mode:'store',revision,kind:'histories',index,people:people.slice(index*STAFF_HISTORY_SHARD,(index+1)*STAFF_HISTORY_SHARD).map(({names,...p})=>p)});
  return request({mode:'finish',descriptor,revision,count:people.length,identityRevision,missing,projectionInput});
 }

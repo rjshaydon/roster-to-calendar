@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
-import {runInNewContext} from 'node:vm';
+import {staffHistoryResponse} from '../functions/api/state.js';
 import {buildStaffHistoryCatalogue,matchesStaffHistory,coalesceStaffHistory,createStaffHistoryClient} from '../public/static/staff-history.js';
 import {prepareStaffHistory} from './process-staff-history.mjs';
 import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark,staffHistoryEnabledFor} from '../functions/_lib/staff-history-cache.js';
@@ -32,6 +32,13 @@ const now=new Date().toISOString();sqlite.prepare("INSERT INTO roster_people(per
 for(const [sourceType,key,name]of [['mmc','HAYDON R','Richard HAYDON'],['ddh','RICHARD','Rich HAYDON'],['vhh','ALIAS','Haydon, Richie']])sqlite.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id,provenance,confidence,review_state,created_at,updated_at,approved_by)VALUES(?,?,?,'person:haydon-richard','test','test','approved',?,?,'test')").run(sourceType,key,name,now,now);
 async function request(body){const response=await onRequestPost({env,request:new Request('https://test.invalid/api/automation/staff-history',{method:'POST',headers:{Authorization:'Bearer synthetic-token','Content-Type':'application/json'},body:JSON.stringify(body)})});const value=await response.json();assert.equal(response.status,200,JSON.stringify(value));return value;}
 const result=await prepareStaffHistory({request});assert.equal(result.status,'complete');assert.equal(result.count,4);
+// A queued import cannot make a read-only approved-alias export unsafe: source
+// objects are immutable and final revision fences reject mixed generations.
+sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,status,started_at)VALUES('synthetic-staging','monash-adults','queued',?)").run(now);
+assert.ok((await request({mode:'aliases'})).aliases.length>0);
+sqlite.prepare("UPDATE roster_sync_runs SET status='success' WHERE id='synthetic-staging'").run();
+
+const streamed=await readStaffHistoryView(r2,{mode:'names'},today,{streamNames:true});assert.equal(streamed.headers.get('content-encoding'),'gzip');const decoded=await new Response(streamed.body.pipeThrough(new DecompressionStream('gzip'))).json();assert.equal(decoded.people.length,4);assert.equal(decoded.total,4);assert.equal(decoded.next,null);assert.ok(decoded.revision);
 const names=await readStaffHistoryView(r2,{mode:'names'},today);assert.equal(names.people.length,4);assert.equal(names.next,null);
 const richard=names.people.find(p=>p.displayName==='Richard Haydon');assert.ok(matchesStaffHistory(richard,'haydon'));assert.ok(matchesStaffHistory(richard,'HAYDON, Richie'));assert.ok(matchesStaffHistory(richard,'Richard Hay'));assert.ok(names.people.some(p=>p.displayName==='Historical Only'));assert.equal(names.people.filter(p=>p.displayName==='Sam Lee').length,2,'unapproved identical names stay separate');assert.ok(!JSON.stringify(names).includes('Continuing SMS'));assert.ok(!JSON.stringify(names).includes('Directory Only'));
 const sqlBefore=db.sql.length,details=await readStaffHistoryView(r2,{mode:'histories',revision:names.revision,slots:[richard.slot]},today);assert.equal(db.sql.length,sqlBefore,'interactive history never queries D1');const history=details.people[0].history;assert.equal(history.length,4);assert.deepEqual(history.filter(h=>h.sourceType==='mmc').map(h=>h.grade),['HMO','Junior Registrar','SMS']);
@@ -61,8 +68,11 @@ const late=createStaffHistoryClient(()=>new Promise(r=>{resolve=r;}));const load
 let failPage=true;const pagedCalls=[];const paged=createStaffHistoryClient(async input=>{pagedCalls.push(input);if(input.page===0)return {revision:'new',people:[richard],next:1};if(failPage)throw Error('synthetic lost page');return {revision:'new',people:[{...richard,slot:99,displayName:'Historical Later Page',names:['Historical Later Page']}],next:null};});
 await assert.rejects(()=>paged.load(),/lost page/);assert.equal(paged.revision,'');failPage=false;await paged.load();assert.equal(pagedCalls[2].cachedRevision,'');assert.equal(paged.matches('Later Page').length,1);
 await assert.rejects(()=>readStaffHistoryView(r2,{mode:'histories',slots:Array.from({length:13},(_,i)=>i)},today),/twelve/);
-// Execute the actual endpoint gate, proving denial happens before cache reads.
-const state=await readFile(new URL('../functions/api/state.js',import.meta.url),'utf8');const block=state.slice(state.indexOf('    if (action === "queryFacilityStaffHistory")'),state.indexOf('    if (action === "queryFacilityOverviewStaff")'));let reads=0;const denied=await runInNewContext('(async()=>{'+block+'})()',{action:'queryFacilityStaffHistory',Response,body:{mode:'names'},setRequestOperationPhase(){},facilityOverviewAccess:async()=>({mode:'site',isSms:false}),facilityOverviewSubject:{record:{facilityOverviewEnabled:true},role:'user'},facilityOverviewEnabled:()=>true,staffHistoryAccessAllowed,staffHistoryEnabledFor,facilityOverviewAccessDeniedResponse:()=>new Response('denied',{status:403}),readStaffHistoryView:()=>{reads++;},context:{env:{STAFF_HISTORY_ENABLED:'true'}}});assert.equal(denied.status,403);assert.equal(reads,0);
+// Execute the actual shared response gate; denial precedes any R2 history
+// read in both the fast authenticated route and legacy direct-handler fallback.
+let reads=0;
+const denied=await staffHistoryResponse({env:{STAFF_HISTORY_ENABLED:'true',ROSTER_FILES:{async get(){reads++;throw Error('Unexpected history read');}}}},{mode:'names'},{role:'user',facilityOverviewEnabled:true},{mode:'site',isSms:false});
+assert.equal(denied.status,403);assert.equal(reads,0);
 // Old cached staff objects without contribution counts are not silently lost.
 // The background endpoint uses the indexed contribution table, excluding an
 // inactive file and carried-forward directory entries without reading events.

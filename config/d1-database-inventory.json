@@ -83,6 +83,14 @@
       "knownCallers": [
         "Small gated synthetic request boundary test only; Worker/database deleted after passing CPU checks on 18 October 2026; no production/provider/mail bindings"
       ]
+    },
+    {
+      "id": "eb7f42fb-2564-4954-8bae-b713e63887f6",
+      "name": "roster-staff-history-native-20261020",
+      "environment": "temporary",
+      "knownCallers": [
+        "Gated full authenticated staff-history CPU test with synthetic accounts only; no production or provider bindings"
+      ]
     }
   ]
 }

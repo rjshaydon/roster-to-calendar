@@ -241,7 +241,9 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
   try {
-    const response = context.data?.stateAction === 'loadCalendarEvents'
+    const response = context.data?.stateAction === 'queryFacilityStaffHistory'
+      ? await handleStaffHistoryRequest(context)
+      : context.data?.stateAction === 'loadCalendarEvents'
       ? await handleCalendarEventsRequest(context)
       : context.data?.stateAction === 'loadAccountContext' && accountSessionsEnabled(context.env)
         ? await handleAccountContextRequest(context) : await handleAccountStateRequest(context);
@@ -249,7 +251,7 @@ export async function onRequestPost(context) {
     const headers = new Headers(response.headers);
     headers.set('Cache-Control', 'no-store'); headers.set('Vary', 'Cookie');
     headers.set('X-Roster-Authentication', 'cookie');
-    return new Response(response.body, { status: response.status, headers });
+    return new Response(response.body, { status: response.status, headers, encodeBody:headers.has('Content-Encoding')?'manual':'automatic' });
   } catch (error) {
     if (!(error instanceof AuthenticationError)) throw error;
     return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { 'Cache-Control': 'no-store' } });
@@ -369,6 +371,52 @@ async function handleAccountContextRequest(context) {
   if(!account&&!email)return Response.json({error:'Email address is required.'},{status:400});
   const verified=account||await verifyD1Account(context.env.ROSTER_DB,email,String(body.password||''),{secureAuthentication:accountSessionsEnabled(context.env)});
   return accountContextResponse(context, verified, normalizeEmail(body.targetEmail));
+}
+
+// Keep the cache reader out of the large legacy account action function: its
+// cold compilation is unnecessary for a small, authenticated R2-only response.
+async function handleStaffHistoryRequest(context) {
+  if(facilityOverviewMaintenanceMode(context.env))return facilityOverviewMaintenanceResponse();
+  const body=await context.request.json().catch(()=>null);
+  if(body?.action!=='queryFacilityStaffHistory')return Response.json({error:'Invalid staff history request.'},{status:400});
+  const actor=await cookieAccountForRequest(context,body);
+  if(!actor)throw new AuthenticationError('auth-session-expired','Please sign in again.',401);
+  let subject=actor;
+  const target=normalizeEmail(body.targetEmail);
+  if(target&&target!==normalizeEmail(actor.record.email)) {
+    if(!['creator','owner'].includes(actor.role))return facilityOverviewAccessDeniedResponse();
+    const record=await loadAccountMirror(context.env.ROSTER_DB,target);
+    subject=record?{record,role:record.role||roleForEmail(record.email)}:null;
+  }
+  if(!subject||!facilityOverviewEnabledForRecord({...subject.record,role:subject.role}))return facilityOverviewAccessDeniedResponse();
+  const accessOptions={materializedOnly:facilityLegacyReadsPaused(context.env)||(String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED||'').toLowerCase()==='true'&&facilityAccessMaterializedForRecords(context.env,actor.record,subject.record))};
+  const accessRecord={...subject.record,role:subject.role};
+  // Creator access is already role-authorized; expanding their roster aliases
+  // cannot change it. Entered clinical accounts still use their own evidence.
+  const access=['creator','owner'].includes(subject.role)
+    ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB,accessRecord,accessOptions)
+    : await resolveEffectiveFacilityIdentityAccess(context.env,accessRecord,accessOptions);
+  const sharedFacilityMetadataEnabled=String(context.env.FACILITY_SHARED_METADATA_ENABLED||'').toLowerCase()==='true';
+  const sharedFacilityDaysEnabled=sharedFacilityMetadataEnabled&&String(context.env.FACILITY_SHARED_DAYS_ENABLED||'').toLowerCase()==='true';
+  const scopedAccess={...access,
+    readerFacilityKeys:facilityReaderSources(context.env).filter(source=>facilityAccessAllows(access,source)).map(source=>source.toUpperCase()),
+    readerRevision:await sha256(JSON.stringify([facilityReaderSources(context.env),sharedFacilityMetadataEnabled,sharedFacilityDaysEnabled,facilityRolloutCohortEligible(context.env,{actorRole:actor.role,actorEmail:actor.record.email,subjectEmail:subject.record.email})])),
+  };
+  return staffHistoryResponse(context,body,{...subject.record,role:subject.role},scopedAccess);
+}
+export async function staffHistoryResponse(context,body,subject,access) {
+  setRequestOperationPhase(context,body?.mode==='histories'?'histories':'names');
+  if(!facilityOverviewEnabledForRecord(subject)||!staffHistoryAccessAllowed(subject,access))return facilityOverviewAccessDeniedResponse(access);
+  if(!staffHistoryEnabledFor(context.env,subject))return Response.json({error:'Staff history is not enabled.'},{status:503});
+  try {
+    const result=await readStaffHistoryView(memoizeSnapshotReads(context.env.ROSTER_FILES),body,australianDateKey(),{streamNames:true});
+    if(result instanceof Response){
+      const headers=new Headers(result.headers);headers.set('X-Roster-Facility-Access',JSON.stringify(access));headers.set('X-Roster-Access-Expires',access.expiresAt||'');
+      return new Response(result.body,{status:result.status,headers,encodeBody:'manual'});
+    }
+    if(result.preparing||result.stale)scheduleStaffHistoryBuild(context);
+    return Response.json({...result,facilityOverviewAccess:access,accessExpiresAt:access.expiresAt},{headers:{'Cache-Control':'private, no-store'}});
+  }catch{return Response.json({error:'Staff history could not be loaded.'},{status:503});}
 }
 
 async function handleAccountStateRequest(context) {
@@ -2556,16 +2604,7 @@ async function handleAccountStateRequest(context) {
     }
 
     if (action === "queryFacilityStaffHistory") {
-      setRequestOperationPhase(context,body?.mode === 'histories' ? 'histories' : 'names');
-      const access = await facilityOverviewAccess();
-      const subject = facilityOverviewSubject && {...facilityOverviewSubject.record, role:facilityOverviewSubject.role};
-      if (!facilityOverviewEnabled() || !staffHistoryAccessAllowed(subject,access)) return facilityOverviewAccessDeniedResponse(access);
-      if (!staffHistoryEnabledFor(context.env,subject)) return Response.json({error:'Staff history is not enabled.'},{status:503});
-      try {
-        const result = await readStaffHistoryView(context.env.ROSTER_FILES,body,australianDateKey());
-        if(result.preparing || result.stale) scheduleStaffHistoryBuild(context);
-        return Response.json({...result,facilityOverviewAccess:access,accessExpiresAt:access.expiresAt},{headers:{'Cache-Control':'private, no-store'}});
-      } catch { return Response.json({error:'Staff history could not be loaded.'},{status:503}); }
+      return staffHistoryResponse(context,body,facilityOverviewSubject && {...facilityOverviewSubject.record,role:facilityOverviewSubject.role},await facilityOverviewAccess());
     }
 
     if (action === "queryFacilityOverviewStaff") {

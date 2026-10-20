@@ -9,7 +9,7 @@ const encode=value=>gzipSync(JSON.stringify(value)).toString('base64');
 const members=Array.from({length:512},(_,i)=>({doctorKey:'SYNTHETIC '+i,displayName:'Synthetic Doctor '+i,seniority:'HMO',contributionCount:1,membershipSource:'roster'}));
 const term={termStart:'2026-08-03',termEnd:'2026-11-01',staffKey:'fixture/staff',staffRevision:revision};
 objects['facility-overview/v1/mmc/manifest.json']=encode({terms:[term],days:Object.fromEntries(Array.from({length:120},(_,i)=>['day'+i,{key:'fixture/'+i,revision}]))});objects['fixture/staff']=encode({members,seniorityOverrides:[]});
-objects[`staff-history/v1/${revision}/names/0.json.gz`]=encode({people:Array.from({length:128},(_,slot)=>({slot,displayName:'Synthetic Doctor '+slot,names:Array.from({length:16},(_,i)=>'Synthetic alias '+slot+' '+i)}))});
+objects[`staff-history/v1/${revision}/names/0.json.gz`]=encode({revision,next:null,total:128,missing:[],people:Array.from({length:128},(_,slot)=>({slot,displayName:'Synthetic Doctor '+slot,names:Array.from({length:16},(_,i)=>'Synthetic alias '+slot+' '+i)}))});
 objects[`staff-history/v1/${revision}/histories/0.json.gz`]=encode({people:Array.from({length:16},(_,slot)=>({slot,displayName:'Synthetic Doctor '+slot,history:Array.from({length:32},(_,i)=>({sourceType:'mmc',termStart:'2026-02-02',termEnd:'2026-05-03',grade:'HMO',rosterNames:['Synthetic Doctor '+slot],upcoming:false}))}))});
 await writeFile(out+'/worker.mjs',`import {readStaffHistoryView,describeStaffHistory,staffHistorySourceTerms,readStaffHistoryFragment,staffHistoryWatermark} from ${JSON.stringify(root+'/functions/_lib/staff-history-cache.js')};
 import {storeCachedSnapshot} from ${JSON.stringify(root+'/functions/_lib/d1-calendar.js')};

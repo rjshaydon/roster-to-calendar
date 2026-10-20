@@ -41,8 +41,15 @@ export async function onRequestPost(context){
   if(input.mode==='aliases'){
    // Keyset pagination on the existing alias primary key, with one coherent
    // identity revision. Never inspect accounts, events or the candidate graph.
-   const preflight=await identityMaintenancePreflight(db,{accountAware:env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'});
-   if(preflight.active_import||Number(preflight.unfinished_count)>=3||!Number(preflight.current_grant)||!await reserveRosterMaintenanceBudget(db,0,2048))return Response.json({status:'deferred'},{status:503});
+   // This exports approved identity rows only; it neither reads mutable roster
+   // facts nor changes identities. Immutable published fragments plus the final
+   // identity/source fences keep it coherent while an import is being staged.
+   // Keep the same quota, unfinished-receipt and optional-reservation guards.
+   const now=new Date().toISOString(),day=now.slice(0,10);
+   const preflight=env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'?await db.prepare(`SELECT
+    (SELECT COUNT(*) FROM (SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=? AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3)) AS unfinished_count,
+    EXISTS(SELECT 1 FROM roster_account_budget WHERE utc_day=? AND valid_until>? AND stop_reason='') AS current_grant`).bind(day,day,now).first():{unfinished_count:0,current_grant:1};
+   if(!preflight||Number(preflight.unfinished_count)>=3||!Number(preflight.current_grant)||!await reserveRosterMaintenanceBudget(db,0,2048))return Response.json({status:'deferred'},{status:503});
    const source=String(input.afterSource||''),key=String(input.afterKey||'');
    if(source.length>20||key.length>200)throw Error('Invalid alias cursor.');
    const results=await db.batch([
@@ -58,7 +65,9 @@ export async function onRequestPost(context){
   if(input.mode==='store'){
    const key=historyObjectKey(input.revision,input.kind,input.index),people=input.people;
    if(!Array.isArray(people)||people.length>(input.kind==='names'?128:STAFF_HISTORY_SHARD)||JSON.stringify(people).length>500000)throw Error('Staff history object limit exceeded.');
-   if(!await r2.head(key))await storeCachedSnapshot(r2,key,{people},{revision:input.revision});
+   const data=input.kind==='names'?{...input.metadata,revision:input.revision,people}:{people};
+   if(JSON.stringify(data).length>500000)throw Error('Staff history object limit exceeded.');
+   if(!await r2.head(key))await storeCachedSnapshot(r2,key,data,{revision:input.revision});
    return Response.json({ok:true});
   }
   if(input.mode==='finish'){

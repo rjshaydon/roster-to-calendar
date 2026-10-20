@@ -134,7 +134,7 @@ function readOnlyD1(databaseId) {
    for(let attempt=0;attempt<2;attempt++)try {
     result=JSON.parse(execFileSync('npx',['wrangler','d1','execute',databaseId,'--remote','--command',bound,'--json'],{encoding:'utf8',maxBuffer:1024*1024,stdio:['ignore','pipe','pipe']}));break;
    }catch(error){if(attempt||!String(error.stdout||error.stderr||'').includes('7403'))throw Error('Read-only maintenance summary unavailable: '+String(error.stdout||error.stderr||error.message||'').replace(/\x1b\[[0-9;]*m/g,'').slice(0,1000));}
-   const row=result?.[0];if(!row?.success||!Array.isArray(row.results)||row.results.length!==1)throw Error('Invalid maintenance summary response.');return row.results[0];
+   const row=result?.[0];if(!row?.success||!Array.isArray(row.results)||row.results.length>1)throw Error('Invalid maintenance summary response.');return row.results[0]||null;
   }};
  }};
 }

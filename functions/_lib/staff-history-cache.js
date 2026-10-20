@@ -48,13 +48,20 @@ export function historyObjectKey(revision,kind,index){
  if(!/^[a-f0-9]{64}$/.test(revision)||!['names','histories'].includes(kind)||!Number.isInteger(index)||index<0||index>=256)throw Error('Invalid staff history object.');
  return ROOT+revision+'/'+kind+'/'+index+'.json.gz';
 }
-export async function readStaffHistoryView(r2,input,today=melbourneDateKey()){
+export async function readStaffHistoryView(r2,input,today=melbourneDateKey(),{streamNames=false}={}){
  const current=await r2.get(STAFF_HISTORY_POINTER), pointer=current?await current.json():null;
  if(!pointer||pointer.inputRevision!==(await staffHistoryWatermark(r2,today)).inputRevision)return {preparing:true};
  if(input.revision&&input.revision!==pointer.revision)return {stale:true,revision:pointer.revision};
  if(input.mode==='names'){
   const page=Number(input.page||0);if(!Number.isInteger(page)||page<0||page>=Math.max(1,pointer.pages))throw Error('Invalid staff history page.');
   if(page===0&&input.cachedRevision===pointer.revision)return {unchanged:true,revision:pointer.revision};
+  // Offline pages already contain the response envelope. Send their gzip
+  // bytes directly; browser decompression/JSON parsing need no Worker CPU.
+  if(streamNames){
+   const object=await r2.get(historyObjectKey(pointer.revision,'names',page));
+   if(!object)return {preparing:true};
+   return new Response(object.body||await object.arrayBuffer(),{encodeBody:'manual',headers:{'Content-Type':'application/json','Content-Encoding':'gzip','Cache-Control':'private, no-store'}});
+  }
   const data=await loadCachedSnapshot(r2,historyObjectKey(pointer.revision,'names',page));
   if(!data)return {preparing:true};
   return {revision:pointer.revision,people:data.people,missing:pointer.missing,next:page+1<pointer.pages?page+1:null,total:pointer.count};

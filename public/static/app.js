@@ -11900,6 +11900,7 @@ async function loadStaffHistorySearch() {
     staffHistoryClient=createStaffHistoryClient(async input=>{
       const response=await accountFetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'queryFacilityStaffHistory',email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword,targetEmail:facilityOverviewTargetEmail(),...input})});
       const data=await readJsonResponse(response,'Could not load staff history.');
+      if(!data.facilityOverviewAccess&&response.headers.get('X-Roster-Facility-Access')){data.facilityOverviewAccess=JSON.parse(response.headers.get('X-Roster-Facility-Access'));data.accessExpiresAt=response.headers.get('X-Roster-Access-Expires')||'';}
       if(staffHistoryScope!==scope)throw new Error('Staff history account changed.');
       refreshFacilityOverviewSnapshotAccess(data);
       staffHistoryCacheExpiresAt=Date.parse(data.accessExpiresAt||data.facilityOverviewAccess?.expiresAt)||0;
