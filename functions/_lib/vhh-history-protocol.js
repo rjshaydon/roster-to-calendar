@@ -33,7 +33,10 @@ export async function handleVhhHistoryRequest(context,body) {
     }
     const parent=await loadRosterSyncRun(db,String(body.runId||''));
     if(!parent || parent.sourceId!==VHH_HISTORY_SOURCE || !['success','queued','processing'].includes(parent.status)) throw Error('Historical input does not match a retained VHH delivery.');
-    const delivery=await rosterDeliveryOrder(db,parent);
+    // A completed parent's authority fence predates its own activation. This
+    // additive supplement takes no term authority: its freshly pinned child
+    // fence guards the historical term, while this guard checks raw ordering.
+    const delivery=await rosterDeliveryOrder(db,parent,[],false);
     if(delivery.superseded) throw Error('A newer VHH input superseded this historical preparation.');
     const {from,to}=historyWindow(body.vhhHistory?.from,body.vhhHistory?.to);
     if(to>=new Date().toISOString().slice(0,10) || australianTermStartForDate(from)!==australianTermStartForDate(to)) throw Error('History requires a past window within one medical term.');
