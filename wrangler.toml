@@ -47,7 +47,7 @@ IDENTITY_DISCOVERY_ENABLED = "true"
 IDENTITY_REVIEW_ENABLED = "true"
 # Seed and verify the compact catalogue before activating the user-facing view.
 STAFF_HISTORY_BUILD_ENABLED = "true"
-STAFF_HISTORY_ENABLED = "creator"
+STAFF_HISTORY_ENABLED = "true"
 SUBSCRIPTION_ARTIFACT_MODE = "ready"
 IDENTITY_EXTERNAL_AUDIT_ENABLED = "true"
 IDENTITY_REGISTRY_ENABLED = "true"

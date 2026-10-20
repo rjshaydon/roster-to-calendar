@@ -1,8 +1,7 @@
 # All EDs staff-history search — 19 October 2026
 
-Status: implementation on `codex/ed-staff-history-search`; initial live cache
-preparation/activation remains pending D1 daily headroom. See the 20 October
-implementation checkpoint for validation and release gates. Effort: Medium.
+Status: implemented, merged and accepted on production on 20 October 2026.
+See the implementation checkpoint for release and validation evidence.
 This is a focused addition before restoration Batch 4, not a renumbering.
 
 ## User-visible contract

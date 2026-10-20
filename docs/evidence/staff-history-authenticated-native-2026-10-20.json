@@ -1,0 +1,101 @@
+{
+  "from": "2026-10-20T00:26:38.908Z",
+  "until": "2026-10-20T00:26:45.449Z",
+  "syntheticOnly": true,
+  "results": [
+    {
+      "kind": "creator",
+      "mode": "full-names",
+      "requests": 12,
+      "firstMeter": {
+        "statements": 2,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "lastMeter": {
+        "statements": 2,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "allSuccessful": true
+    },
+    {
+      "kind": "creator",
+      "mode": "full-histories",
+      "requests": 12,
+      "firstMeter": {
+        "statements": 2,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "lastMeter": {
+        "statements": 2,
+        "rowsRead": 4,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "allSuccessful": true
+    },
+    {
+      "kind": "sms",
+      "mode": "full-names",
+      "requests": 12,
+      "firstMeter": {
+        "statements": 9,
+        "rowsRead": 17,
+        "rowsWritten": 3,
+        "complete": true
+      },
+      "lastMeter": {
+        "statements": 5,
+        "rowsRead": 9,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "allSuccessful": true
+    },
+    {
+      "kind": "sms",
+      "mode": "full-histories",
+      "requests": 12,
+      "firstMeter": {
+        "statements": 5,
+        "rowsRead": 9,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "lastMeter": {
+        "statements": 5,
+        "rowsRead": 9,
+        "rowsWritten": 0,
+        "complete": true
+      },
+      "allSuccessful": true
+    }
+  ],
+  "denied": [
+    {
+      "kind": "trainee",
+      "enteredAccount": false,
+      "status": 403
+    },
+    {
+      "kind": "disabled",
+      "enteredAccount": false,
+      "status": 403
+    },
+    {
+      "kind": "creator",
+      "enteredAccount": true,
+      "status": 403
+    },
+    {
+      "kind": "sms",
+      "enteredAccount": true,
+      "status": 403
+    }
+  ]
+}

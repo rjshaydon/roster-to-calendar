@@ -88,9 +88,9 @@ export default {
     {
       "id": "eb7f42fb-2564-4954-8bae-b713e63887f6",
       "name": "roster-staff-history-native-20261020",
-      "environment": "temporary",
+      "environment": "temporary-deleted",
       "knownCallers": [
-        "Gated full authenticated staff-history CPU test with synthetic accounts only; no production or provider bindings"
+        "Gated full authenticated staff-history CPU test with synthetic accounts only; Worker/database deleted after passing checks on 20 October 2026; no production or provider bindings"
       ]
     }
   ]

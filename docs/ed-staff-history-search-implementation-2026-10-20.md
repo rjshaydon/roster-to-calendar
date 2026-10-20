@@ -1,6 +1,6 @@
 # All EDs staff-history search — implementation checkpoint
 
-Branch: `codex/ed-staff-history-search`. Based on the agreed 19 October plan.
+Merged PR #34; production activation on 20 October. Based on the agreed 19 October plan.
 
 ## Completed on the branch
 
@@ -70,39 +70,50 @@ focus, a single-column history card, coalesced adjacent terms, upcoming labels,
 explicit continuation and zero extra calls for already-cached matches. They do
 not replace the authenticated real-data acceptance below.
 
-## Activation intentionally pending
+## Production activation — 20 October
 
-Both `STAFF_HISTORY_BUILD_ENABLED` and `STAFF_HISTORY_ENABLED` are false. No new
-production deployment or clinical roster replacement was performed for this
-feature. No schema migration or credential change is required.
+Initial preparation run 39347779262 completed successfully with 723 people.
+Replay 39348176983 returned `unchanged`; unchanged preparation performs no
+clinical D1 writes or catalogue rewrites. All four normal source import workflows
+completed successfully after midnight UTC (11 am AEDT). No source queue was
+manually bypassed. Preview deployments retain isolated databases and their
+maintenance gate; production is the acceptance environment.
 
-At the latest read-only check, D1 had observed 95,475 writes in the UTC day and
-only 907 advisory bulk writes after protecting pending publication capacity.
-Do not start the optional identity projection export with that remaining margin.
-This is Cloudflare's daily D1 allowance, independent of the assistant's five-hour
-usage window. The UTC reset is 11 am Melbourne during daylight saving.
+Both production flags are enabled. Initial acceptance used the Creator-only
+cohort before release to existing eligible SMS/CMO accounts with At a glance.
+No access entitlement or source roster was changed. Rollback is
+`STAFF_HISTORY_ENABLED="false"`; the build flag can remain enabled.
 
-After the reset, complete these together:
+Authenticated Safari acceptance confirmed:
 
-1. Review/merge the branch, deploy with BUILD true and the user-facing flag false,
-   then dispatch `staff-history.yml`. Confirm its initial result is complete.
-   Preparation logs must contain aggregate counts/status only, never names,
-   aliases, identifiers, tokens or response bodies. Keep the normal admission
-   and unfinished-work safeguards; stop on any deferral.
-2. Check published term coverage against retained source manifests, including
-   genuinely unavailable Casey/older terms. Verify a historical-only example,
-   an approved multi-site alias, a real grade transition and an upcoming term
-   through authenticated Safari. Do not export private roster rows for testing.
-3. Enable the user-facing flag only after the complete initial catalogue exists.
-   Verify the entire authenticated history action's CPU and D1 cost, normal blank
-   and single-site browsing, unchanged replay and entered-account restrictions.
-4. Record release/deployment and aggregate acceptance evidence here. If any gate
-   fails, leave the feature disabled and preserve existing staff/calendar views.
+- Ordinary blank All EDs lists and single-site lists remain selected-term views;
+  repeated partial-coverage badges are absent. Genuine unavailable Casey
+  coverage remains reported.
+- Surname search finds Richard Haydon's DDH/MMC records and upcoming Term 4.
+  Old MMC grades absent from retained evidence remain Unknown.
+- Jayantha finds the approved Jay Weeraratne identity with DDH/VHH records and
+  source spelling retained.
+- Aeshan's two unmerged spellings appear separately, including MCH Term 1 and
+  DDH Term 2 historical records. Search does not auto-merge names.
+- Lee returns separate Jeremy/Jun identities and explicit continuation.
 
-Rollback: set `STAFF_HISTORY_ENABLED=false`; stop optional preparation with BUILD
-false if needed. Do not delete existing roster facts or published calendars.
-The prior authority handoff/checker/manual-import remediation is already deployed
-on main. This branch does not start restoration Batches 4/5/8 or deferred 3/7.
+The complete authenticated native handler was exercised with Creator, SMS,
+trainee, disabled and entered-account cases using disposable synthetic data.
+48 authorized reads succeeded and four prohibited cases returned 403. Final
+aggregate sampled CPU: names median 3 ms, p95 7 ms, maximum 9 ms; histories
+median 3 ms, p95 5 ms, maximum 6 ms. Creator steady reads use four D1 rows and
+zero writes; SMS steady reads use nine rows and zero writes. The first SMS
+scope cache miss uses 17 reads and three existing permission-cache writes.
+Names envelopes stream already-compressed R2 objects; no names parsing or
+serialization occurs in the Worker. Typing filters cached names locally.
+See the two `staff-history-authenticated-native-*-2026-10-20.json` evidence files.
+The disposable Worker and database were deleted; the database ID remains in
+both account inventories for accurate current-day accounting.
+
+Account budget check at 00:31 UTC was GO: settled sample through 00:16 UTC
+showed 25,244 reads and 556 writes. This is lagged observed usage, not the final
+daily total. Existing forecasts, reservations and publication holds remain
+in force; no D1 safeguards or Cloudflare plan were relaxed.
 
 ## Reset-day release review
 
