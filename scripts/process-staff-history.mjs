@@ -2,13 +2,18 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {buildStaffHistoryCatalogue,STAFF_HISTORY_PAGE,STAFF_HISTORY_SHARD} from '../public/static/staff-history.js';
 import {guardedFetch} from '../functions/_lib/outbound-network.js';
-export async function prepareStaffHistory({request,maxAliasPages=64}){
+export async function prepareStaffHistory({request,maxAliasPages=64,repairPass=0}){
  const initial=await request({mode:'describe'});if(['unchanged','disabled','deferred'].includes(initial.status))return initial;
  const {descriptor}=initial,fragments=[],missing=[...descriptor.missing],terms=[];
  for(const sourceType of descriptor.sources){const source=await request({mode:'terms',sourceType,inputRevision:descriptor.inputRevision});terms.push(...source.terms);missing.push(...source.missing);}
  if(terms.length>320)throw Error('Published staff history exceeds the term limit.');
  for(const term of terms){
   const {fragment}=await request({mode:'fragment',inputRevision:descriptor.inputRevision,sourceType:term.sourceType,termStart:term.termStart});
+  if(!fragment.missing&&fragment.members.some(m=>!m.grade||['unknown','not recorded'].includes(m.grade.toLowerCase()))){
+   let repaired;for(let step=0;step<128;step++){repaired=await request({mode:'repair-grades',sourceType:term.sourceType,termStart:term.termStart,staffRevision:term.staffRevision});if(repaired.status!=='continue')break;}
+   if(repaired.status==='source-repaired'){if(repairPass>=16)throw Error('Grade repair restart limit.');return prepareStaffHistory({request,maxAliasPages,repairPass:repairPass+1});}
+   if(repaired.status!=='complete')throw Error('Grade repair deferred.');
+  }
   if(fragment.missing)missing.push({sourceType:term.sourceType,termStart:term.termStart,reason:'staff-unavailable'});else fragments.push(fragment);
  }
  // Day/month publication tags may change while the staff history stays the
@@ -38,7 +43,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  try{
  const request=async body=>{
   lastMode=body.mode;lastHttpStatus=0;
-  if(['fragment','aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
+  if(['repair-grades','fragment','aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
    const response=await guardedFetch(process.env,base+'/api/automation/account-budget',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(120000)},{label:'Staff history admission'});
    const value=await response.json();if(!response.ok||value.deferred)throw Error('Staff history preparation deferred.');lastAdmission=Date.now();
   }

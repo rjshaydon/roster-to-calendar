@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
 import {staffHistoryResponse} from '../functions/api/state.js';
-import {buildStaffHistoryCatalogue,matchesStaffHistory,coalesceStaffHistory,createStaffHistoryClient} from '../public/static/staff-history.js';
+import {buildStaffHistoryCatalogue,matchesStaffHistory,coalesceStaffHistory,createStaffHistoryClient,staffHistoryTermRange} from '../public/static/staff-history.js';
 import {prepareStaffHistory} from './process-staff-history.mjs';
 import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark,staffHistoryEnabledFor} from '../functions/_lib/staff-history-cache.js';
 import {onRequestPost} from '../functions/api/automation/staff-history.js';
@@ -53,12 +53,12 @@ assert.equal((await prepareStaffHistory({request})).status,'unchanged-history');
 assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'all',isSms:true}),true);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'sites',isSms:false}),false);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:false},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'user',nonClinical:true,facilityOverviewEnabled:true},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'creator'},{mode:'all'}),true);
 // A changed identity marker invalidates the coherent catalogue before new data
 // can be combined with old memberships; a missing shard is preparation, not no match.
-await r2.put('identity/revision.json','{"revision":"changed"}');assert.equal((await readStaffHistoryView(r2,{mode:'names'},today)).preparing,true);
+await r2.put('identity/revision.json','{"revision":"changed"}');assert.equal((await readStaffHistoryView(r2,{mode:'names'},today)).revision,names.revision,'complete catalogue remains readable during preparation');
 assert.equal((await prepareStaffHistory({request})).status,'complete');
 const pointer=JSON.parse(new TextDecoder().decode(r2.objects.get(STAFF_HISTORY_POINTER).bytes));r2.objects.delete(`staff-history/v1/${pointer.revision}/histories/0.json.gz`);assert.equal((await readStaffHistoryView(r2,{mode:'histories',slots:[richard.slot],revision:pointer.revision},today)).preparing,true);
 // Coalescing keeps grade transitions, breaks, simultaneous hospitals and future
 // allocations distinct; it never turns roster listing into attendance evidence.
-const row=(start,end,grade='HMO',sourceType='mmc',upcoming=false)=>({termStart:start,termEnd:end,grade,sourceType,upcoming,rosterNames:['Example']});const merged=coalesceStaffHistory([row(...terms[0]),row(...terms[1]),row(...terms[2],'SMS'),row('2027-02-01','2027-05-02','HMO'),row(...terms[0],'HMO','ddh'),row('2026-11-02','2027-01-31','SMS','mmc',true)]);assert.equal(merged.length,5);assert.equal(merged.find(r=>r.termStart==='2026-02-02'&&r.sourceType==='mmc').termEnd,'2026-08-02');
+const row=(start,end,grade='HMO',sourceType='mmc',upcoming=false)=>({termStart:start,termEnd:end,grade,sourceType,upcoming,rosterNames:['Example']});const merged=coalesceStaffHistory([row(...terms[0]),row(...terms[1]),row(...terms[2],'SMS'),row('2027-02-01','2027-05-02','HMO'),row(...terms[0],'HMO','ddh'),row('2026-11-02','2027-01-31','SMS','mmc',true)]);assert.equal(merged.length,4);assert.equal(merged[0].sourceType,'ddh');assert.equal(merged.find(r=>r.grade==='SMS').termEnd,'2027-01-31');assert.equal(merged.find(r=>r.termStart==='2026-02-02'&&r.sourceType==='mmc').termEnd,'2026-08-02');
 // Browser cache and late logout: typing does not fetch, histories are reused,
 // concurrent catalogue loads coalesce, and a late response cannot refill logout.
 let calls=0,resolve;const client=createStaffHistoryClient(async input=>{calls++;if(input.mode==='names')return {revision:'one',people:[richard],next:null};return {revision:'one',people:[{slot:richard.slot,history}]};});await Promise.all([client.load(),client.load()]);assert.equal(calls,1);for(const q of ['r','ri','rich','haydon'])client.matches(q);assert.equal(calls,1);await client.details([richard]);await client.details([richard]);assert.equal(calls,2);
@@ -85,3 +85,39 @@ const beforeLegacy=db.sql.length,watermark=await staffHistoryWatermark(r2,today)
 await storeCachedSnapshot(r2,'facility-overview/v1/casey/manifest.json',{terms:[{termStart:'2026-11-02',termEnd:'2027-01-31',staffKey:'future',staffRevision:'future'}]});
 assert.equal((await staffHistorySourceTerms(r2,'casey','2026-09-30')).terms.length,0);assert.equal((await staffHistorySourceTerms(r2,'casey','2026-10-01')).terms.length,1,'future term respects its normal release date');
 console.log('Staff history: bounded runner + real API/cache, historical-only and approved aliases, distinct names, grades, continuity exclusions, zero-D1 reads, unchanged no-op, invalidation, paging cache and permission gates passed.');
+
+assert.equal(staffHistoryTermRange({year:2026,termNumber:1},{year:2026,termNumber:4}),'Term 1 – Term 4 2026');
+assert.equal(staffHistoryTermRange({year:2026,termNumber:1},{year:2027,termNumber:3}),'Term 1 2026 – Term 3 2027');
+const chronological=coalesceStaffHistory([row('2026-11-02','2027-01-31','SMS','ddh'),row(...terms[0],'SMS','mmc'),row(...terms[2],'SMS','mmc')]);assert.equal(chronological[0].sourceType,'mmc');assert.equal(chronological.length,3,'a missing term is not bridged');
+// Atomic refresh keeps the old visible generation through incomplete pages,
+// transient errors, revision swaps and late logout. It reuses unchanged details.
+let refreshRevision='old',rejectRefresh=false,resolveHistory,holdHistory=false;
+const atomic=createStaffHistoryClient(async input=>{
+ if(input.mode==='names')return input.cachedRevision===refreshRevision?{unchanged:true}:{revision:refreshRevision,people:[{...richard,slot:refreshRevision==='old'?0:7}],next:null};
+ if(rejectRefresh)throw Error('temporary failure');
+ if(holdHistory)await new Promise(r=>{resolveHistory=r;});
+ return {revision:input.revision,people:[{slot:input.slots[0],history:[{...row(...terms[0]),grade:input.revision}]}]};
+});
+await atomic.load();await atomic.details(atomic.matches('haydon'));refreshRevision='new';rejectRefresh=true;
+await assert.rejects(()=>atomic.load({query:'haydon'}),/temporary failure/);assert.equal(atomic.revision,'old');assert.equal(atomic.history(0)[0].grade,'old');
+rejectRefresh=false;holdHistory=true;const swapping=atomic.load({query:'haydon'});await new Promise(r=>setImmediate(r));assert.equal(atomic.revision,'old');resolveHistory();await swapping;assert.equal(atomic.revision,'new');assert.equal(atomic.history(7)[0].grade,'new');
+assert.equal((await atomic.load({query:'haydon'})).changed,false);atomic.clear();assert.equal(atomic.matches('haydon').length,0);
+
+// Repair real compact facts from bounded same-term evidence and republish only
+// staff metadata. Conflicting grades and a different term never fill a gap.
+const {repairStaffGrades}=await import('../functions/_lib/staff-grade-repair.js');
+const {buildFacilityOverviewFacts}=await import('../functions/_lib/d1-calendar.js');
+sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key,start_date)');
+sqlite.prepare("INSERT INTO roster_files(id,name,source_type,active)VALUES('repair-active','Synthetic.xlsx','mch',1)").run();
+sqlite.prepare("INSERT INTO roster_file_coverage(file_id,source_type,coverage_start,coverage_end)VALUES('repair-active','mch','2026-02-02','2026-05-03')").run();
+sqlite.prepare("INSERT INTO facility_term_visibility(source_type,term_start,visible_from)VALUES('mch','2026-02-02','2026-01-01')").run();
+await source('mch',[[member('FIX','Repair example','Unknown'),member('CONFLICT','Conflict example','Unknown')]]);
+for(const key of ['FIX','CONFLICT'])sqlite.prepare("INSERT INTO facility_term_staff_contributions(source_type,term_start,doctor_key,file_id,display_name,seniority,fact_digest)VALUES('mch','2026-02-02',?,'repair-active',?,'Unknown','old')").run(key,key);
+for(const [id,key,grade,date]of [['e1','FIX','SMS','2026-02-03'],['e2','CONFLICT','HMO','2026-02-03'],['e3','CONFLICT','Junior Registrar','2026-02-04']])sqlite.prepare("INSERT INTO roster_events(id,file_id,source_type,doctor_key,display_name,start_date,end_date,start_ts,end_ts,title,seniority,event_json)VALUES(?,'repair-active','mch',?,?,?,?,'','','',?,'{}')").run(id,key,key,date,date,grade);
+const facts=await buildFacilityOverviewFacts({id:'repair-active',source_type:'mch'},[{doctor_key:'FIX',display_name:'Repair example',seniority:'Unknown'}],[{id:'f',doctor_key:'FIX',display_name:'Repair example',seniority:'SMS',start_date:'2026-02-03',end_date:'2026-02-03',event_json:'{}'}]);assert.equal([...facts.contributions.values()][0].seniority,'SMS');
+const repairInput={sourceType:'mch',termStart:'2026-02-02',staffRevision:'revision0'};
+assert.equal((await repairStaffGrades({env},repairInput)).status,'source-repaired');
+assert.equal(sqlite.prepare("SELECT seniority FROM facility_term_staff_contributions WHERE doctor_key='FIX'").get().seniority,'SMS');assert.equal(sqlite.prepare("SELECT seniority FROM facility_term_staff_contributions WHERE doctor_key='CONFLICT'").get().seniority,'Unknown');
+const repairedTerm=(await staffHistorySourceTerms(r2,'mch',today)).terms[0];assert.notEqual(repairedTerm.staffRevision,'revision0');
+assert.equal((await repairStaffGrades({env},{...repairInput,staffRevision:repairedTerm.staffRevision})).changed,0);
+console.log('Grade evidence repair, conflict handling, compact labels and atomic retained-result refresh passed.');

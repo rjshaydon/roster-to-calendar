@@ -1,4 +1,4 @@
-import {createStaffHistoryClient,coalesceStaffHistory} from './staff-history.js';
+import {createStaffHistoryClient,coalesceStaffHistory,staffHistoryTermRange} from './staff-history.js?v=20261020-history3';
 import {requestSectionMarkup} from './request-section.js?v=20261018-requests';
 import { takeAccountEmailAction, takeInvitationToken } from './account-email-action.js';
 import { installPasswordAutofillSubmit } from './password-autofill-submit.js';
@@ -463,7 +463,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let staffHistoryClient = null, staffHistoryScope = '', staffHistoryTimer = null, staffHistoryExpiryTimer = null;
-let staffHistoryReady = false, staffHistoryLoading = false, staffHistoryError = '', staffHistoryMissing = [], staffHistoryLimit = 12, staffHistoryCacheExpiresAt = 0;
+let staffHistoryReady = false, staffHistoryLoading = false, staffHistoryError = '', staffHistoryMissing = [], staffHistoryLimit = 12, staffHistoryCacheExpiresAt = 0, staffHistoryRefreshQueued = false;
 let facilityOverviewState = {
   tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, previousNightRoster: null, contactAccessToken: "", contactReviewOpen: false, contactPreviousNightReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
@@ -10442,7 +10442,9 @@ function syncFacilityOverviewTabOrder() {
 
 function renderFacilityOverviewStaffBody() {
   if (!facilityOverviewBody || facilityOverviewState.tab !== "staff") return;
-  facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${facilityOverviewState.staffContent || `<article class="issue-card"><p>Loading ED staff…</p></article>`}</div>`;
+  const content=facilityOverviewState.staffContent || `<article class="issue-card"><p>Loading ED staff…</p></article>`;
+  if(staffHistorySearchActive()&&facilityOverviewBody.firstElementChild?.className==='facility-overview-results'&&facilityOverviewBody.firstElementChild.innerHTML===content)return;
+  facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
   queueFacilityOverviewMenuPositioning();
 }
 
@@ -11820,13 +11822,14 @@ async function loadFacilityOverviewStaff() {
   facilityOverviewState.staffTermStart = formatDateKey(term.start);
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
-  facilityOverviewState.staffContent = `<article class="issue-card"><p>Loading ED staff…</p></article>`;
+  const keepHistory=staffHistorySearchActive()&&staffHistoryReady;
+  if(!keepHistory)facilityOverviewState.staffContent = `<article class="issue-card"><p>Loading ED staff…</p></article>`;
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey, termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)) };
   const cached = await loadFacilityOverviewSnapshot("staff", cacheQuery);
   if (cached) {
     facilityOverviewState.staffTerms = facilityOverviewPermittedStaffTerms(cached.coverage || []);
     facilityOverviewState.staffData = cached;
-    facilityOverviewState.staffContent = `<p class="facility-overview-by-stream-summary">Showing the last saved staff list while checking for updates.</p>${renderFacilityOverviewStaffResults(cached, term)}`;
+    facilityOverviewState.staffContent = keepHistory?renderStaffHistoryResults():`<p class="facility-overview-by-stream-summary">Showing the last saved staff list while checking for updates.</p>${renderFacilityOverviewStaffResults(cached, term)}`;
   }
   renderFacilityOverview();
   let refreshed = false;
@@ -11874,7 +11877,7 @@ async function loadFacilityOverviewStaff() {
 function clearStaffHistorySearch() {
   clearTimeout(staffHistoryTimer); staffHistoryTimer=null; clearTimeout(staffHistoryExpiryTimer); staffHistoryExpiryTimer=null;
   staffHistoryClient?.clear(); staffHistoryClient=null; staffHistoryScope='';
-  staffHistoryReady=false; staffHistoryLoading=false; staffHistoryError=''; staffHistoryMissing=[]; staffHistoryLimit=12; staffHistoryCacheExpiresAt=0;
+  staffHistoryReady=false; staffHistoryLoading=false; staffHistoryError=''; staffHistoryMissing=[]; staffHistoryLimit=12; staffHistoryCacheExpiresAt=0;staffHistoryRefreshQueued=false;
 }
 function staffHistoryEligible(data=facilityOverviewState.staffData) {
   return data?.staffHistoryEnabled===true && currentFacilityOverviewAccess.mode==='all' && canUseFullFacilityOverview();
@@ -11885,14 +11888,14 @@ function staffHistorySearchActive(data=facilityOverviewState.staffData) {
 function staffHistoryAccountScope() {
   return [authUserEmail,currentUserEmail,facilityOverviewTargetEmail(),activeCalendarTransitionKey(),currentFacilityOverviewAccess.mode,currentNonClinical].join('|');
 }
-function queueStaffHistorySearch() {
+function queueStaffHistorySearch(refresh=false) {
   clearTimeout(staffHistoryTimer);
   if(!staffHistorySearchActive())return;
-  staffHistoryTimer=setTimeout(()=>void loadStaffHistorySearch(),180);
+  staffHistoryTimer=setTimeout(()=>void loadStaffHistorySearch({refresh}),180);
 }
-async function loadStaffHistorySearch() {
+async function loadStaffHistorySearch({refresh=false}={}) {
   if(!staffHistorySearchActive())return;
-  if(staffHistoryReady&&staffHistoryCacheExpiresAt<=Date.now())clearStaffHistorySearch();
+  refresh ||= staffHistoryReady&&staffHistoryCacheExpiresAt<=Date.now();
   const scope=staffHistoryAccountScope();
   if(staffHistoryClient && staffHistoryScope!==scope)clearStaffHistorySearch();
   if(!staffHistoryClient) {
@@ -11906,15 +11909,15 @@ async function loadStaffHistorySearch() {
       staffHistoryCacheExpiresAt=Date.parse(data.accessExpiresAt||data.facilityOverviewAccess?.expiresAt)||0;
       if(staffHistoryCacheExpiresAt<=Date.now())throw new Error('Staff history access could not be refreshed.');
       clearTimeout(staffHistoryExpiryTimer);
-      staffHistoryExpiryTimer=setTimeout(()=>{clearStaffHistorySearch();staffHistoryError='Search again to refresh staff history.';refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();},staffHistoryCacheExpiresAt-Date.now());
+      staffHistoryExpiryTimer=setTimeout(()=>{if(staffHistorySearchActive()&&!document.hidden)void loadStaffHistorySearch({refresh:true});},Math.max(100,staffHistoryCacheExpiresAt-Date.now()+50));
       return data;
     });
   }
   const client=staffHistoryClient, requestedQuery=facilityOverviewState.staffQuery, requestedLimit=staffHistoryLimit;
-  if(staffHistoryLoading)return;
+  if(staffHistoryLoading){staffHistoryRefreshQueued ||= refresh;return;}
   staffHistoryLoading=true;staffHistoryError='';
   try {
-    if(!staffHistoryReady){const result=await client.load();if(client!==staffHistoryClient)return;staffHistoryReady=true;staffHistoryMissing=result?.missing||[];}
+    if(!staffHistoryReady||refresh){const result=await client.load({query:facilityOverviewState.staffQuery,limit:staffHistoryLimit});if(client!==staffHistoryClient||!result)return;staffHistoryReady=true;staffHistoryMissing=result.missing||[];}
     if(!staffHistorySearchActive())return;
     refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();
     const query=facilityOverviewState.staffQuery;
@@ -11928,16 +11931,17 @@ async function loadStaffHistorySearch() {
   } catch(error) {
     if(client===staffHistoryClient){
       if(error.facilityOverviewAccess)refreshFacilityOverviewSnapshotAccess({facilityOverviewAccess:error.facilityOverviewAccess});
-      if(error.status===401||error.status===403)clearStaffHistorySearch();
-      else {if(error.code==='STAFF_HISTORY_STALE')staffHistoryReady=false;staffHistoryError=error.message||'Staff history is unavailable.';}
+      if(error.status===401||error.status===403){clearStaffHistorySearch();facilityOverviewState.staffContent='<p>Staff history access is no longer available.</p>';renderFacilityOverviewStaffBody();}
+      else if(staffHistoryCacheExpiresAt<=Date.now()){clearStaffHistorySearch();staffHistoryError='Could not renew access. Please try again.';facilityOverviewState.staffContent='<p>Could not renew staff history access. Please try again.</p>';renderFacilityOverviewStaffBody();}
+      else if(!staffHistoryReady)staffHistoryError=error.message||'Staff history is unavailable.';
     }
   }
   finally {
-    if(client===staffHistoryClient){staffHistoryLoading=false;if(staffHistorySearchActive()){refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();if(requestedQuery!==facilityOverviewState.staffQuery||requestedLimit!==staffHistoryLimit)queueStaffHistorySearch();}}
+    if(client===staffHistoryClient){staffHistoryLoading=false;if(staffHistorySearchActive()){refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();if(staffHistoryRefreshQueued||staffHistoryCacheExpiresAt<=Date.now()){staffHistoryRefreshQueued=false;queueStaffHistorySearch(true);}else if(requestedQuery!==facilityOverviewState.staffQuery||requestedLimit!==staffHistoryLimit)queueStaffHistorySearch();}}
   }
 }
 function renderStaffHistoryResults() {
-  if(staffHistoryClient && (staffHistoryScope!==staffHistoryAccountScope()||!staffHistoryEligible()||staffHistoryReady&&staffHistoryCacheExpiresAt<=Date.now()))clearStaffHistorySearch();
+  if(staffHistoryClient && (staffHistoryScope!==staffHistoryAccountScope()||!staffHistoryEligible()))clearStaffHistorySearch();
   const heading='<p class="facility-overview-by-stream-summary">Across available rosters</p>';
   if(staffHistoryError)return heading+`<article class="issue-card"><p>${escapeHtml(staffHistoryError)}</p></article>`;
   if(!staffHistoryReady)return heading+'<p>Loading staff history…</p>';
@@ -11946,8 +11950,8 @@ function renderStaffHistoryResults() {
   return heading+missing+(shown.length?shown.map(person=>{
     const history=staffHistoryClient.history(person.slot);
     const rows=history?coalesceStaffHistory(history.map(row=>({...row,upcoming:row.termStart>today}))):null;
-    const termLabel=row=>{const first=formatAustralianTermLabel(australianTermForDate(parseDateOnly(row.terms[0])));return row.terms.length>1?first+' – '+formatAustralianTermLabel(australianTermForDate(parseDateOnly(row.terms.at(-1)))):first;};
-    return `<article class="facility-overview-staff-member facility-overview-staff-history-member"><strong>${escapeHtml(person.displayName)}</strong>${rows?rows.map(row=>`<p>${escapeHtml(displaySourceCode(row.sourceType))} · ${escapeHtml(row.grade)} · ${escapeHtml(termLabel(row))}<br>${escapeHtml(formatDate(row.termStart))} – ${escapeHtml(formatDate(row.termEnd))}${row.upcoming?' · Upcoming':''}<br><span class="muted">Recorded on roster${row.rosterNames.some(name=>name!==person.displayName)?' as '+escapeHtml(row.rosterNames.join(' / ')):''}</span></p>`).join(''):'<p>Loading roster history…</p>'}</article>`;
+    const termLabel=row=>staffHistoryTermRange(australianTermForDate(parseDateOnly(row.terms[0])),australianTermForDate(parseDateOnly(row.terms.at(-1))));
+    return `<article class="facility-overview-staff-member facility-overview-staff-history-member"><strong>${escapeHtml(person.displayName)}</strong>${rows?rows.map(row=>`<p>${escapeHtml(displaySourceCode(row.sourceType))} · ${escapeHtml(row.grade)} · ${escapeHtml(termLabel(row))}<br>${escapeHtml(formatDate(row.termStart))} – ${escapeHtml(formatDate(row.termEnd))}${row.rosterNames.some(name=>name!==person.displayName)?'<br><span class="muted">Roster name: '+escapeHtml(row.rosterNames.join(' / '))+'</span>':''}</p>`).join(''):'<p>Loading roster history…</p>'}</article>`;
   }).join(''):'<p>No staff match that name across the available rosters.</p>')+(matches.length>shown.length?`<button type="button" class="secondary-button" data-staff-history-more>Show more (${shown.length} of ${matches.length})</button>`:'');
 }
 
@@ -18557,7 +18561,8 @@ function calendarRevisionRefreshAllowed() {
 }
 
 async function readSharedRosterRevision(sources) {
-  const key = `roster-public-revision:${sources.join(',')}`;
+  const history=staffHistorySearchActive()&&isFacilityOverviewOpen();
+  const key = `roster-public-revision:${sources.join(',')}${history?':history':''}`;
   const leaseKey = `${key}:lease`;
   const now = Date.now();
   try {
@@ -18567,7 +18572,7 @@ async function readSharedRosterRevision(sources) {
     localStorage.setItem(leaseKey, String(now + 20000));
   } catch { /* Storage is optional; the server edge cache still coalesces reads. */ }
   try {
-    const response = await fetch(`/api/roster-revision?sites=${sources.join(',')}`, { signal: AbortSignal.timeout(15000) });
+    const response = await fetch(`/api/roster-revision?sites=${sources.join(',')}${history?'&history=1':''}`, { signal: AbortSignal.timeout(15000) });
     const data = await readJsonResponse(response, 'Roster revision is temporarily unavailable.');
     if (!/^[a-f0-9]{64}$/.test(data.revision || '')) return '';
     try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), revision: data.revision })); } catch {}
@@ -18595,7 +18600,7 @@ async function refreshVisibleRosterView(view) {
     if (!await loadFacilityOverviewMetadata({ requireFresh: true })) return false;
     if (calendarRevisionView()?.key !== view.key || !calendarRevisionRefreshAllowed()) return false;
     let applied;
-    if (facilityOverviewState.tab === 'staff') {clearStaffHistorySearch();applied = await loadFacilityOverviewStaff();}
+    if (facilityOverviewState.tab === 'staff') {applied = await loadFacilityOverviewStaff();queueStaffHistorySearch(true);}
     else if (facilityOverviewState.tab === 'together') applied = await loadFacilityOverviewTogether();
     else if (facilityOverviewState.tab === 'by-stream') applied = await loadFacilityOverviewByStream();
     else applied = await loadFacilityOverviewOnShift();
@@ -21751,3 +21756,5 @@ function escapeHtml(value) {
 }
 
 bootstrapApp();
+
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&staffHistorySearchActive()&&staffHistoryCacheExpiresAt<=Date.now())queueStaffHistorySearch(true);});

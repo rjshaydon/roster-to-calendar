@@ -29,7 +29,7 @@ export async function staffHistorySourceTerms(r2,sourceType,today=melbourneDateK
  return {terms,missing};
 }
 export async function readStaffHistoryFragment(r2,term,{loadEvidence}={}){
- const key=ROOT+'fragments/'+term.sourceType+'/'+term.termStart+'/'+term.staffRevision+'.json.gz';
+ const key=ROOT+'fragments/v2/'+term.sourceType+'/'+term.termStart+'/'+term.staffRevision+'.json.gz';
  const cached=await loadCachedSnapshot(r2,key);if(cached)return cached;
  const staff=await loadCachedSnapshot(r2,term.staffKey);
  if(!staff)return {...term,staffKey:undefined,members:[],missing:true};
@@ -49,9 +49,17 @@ export function historyObjectKey(revision,kind,index){
  return ROOT+revision+'/'+kind+'/'+index+'.json.gz';
 }
 export async function readStaffHistoryView(r2,input,today=melbourneDateKey(),{streamNames=false}={}){
- const current=await r2.get(STAFF_HISTORY_POINTER), pointer=current?await current.json():null;
- if(!pointer||pointer.inputRevision!==(await staffHistoryWatermark(r2,today)).inputRevision)return {preparing:true};
- if(input.revision&&input.revision!==pointer.revision)return {stale:true,revision:pointer.revision};
+ const current=await r2.get(STAFF_HISTORY_POINTER);let pointer=current?await current.json():null;
+ if(!pointer)return {preparing:true};
+ // Published generations remain coherent while a replacement is assembled.
+ // Authorization is checked separately on every request. Pin continuation and
+ // detail reads to their immutable generation, including during a pointer swap.
+ if(input.revision&&input.revision!==pointer.revision){
+  if(!/^[a-f0-9]{64}$/.test(input.revision))return {stale:true};
+  const pinned=await r2.get(ROOT+input.revision+'/manifest.json');
+  if(!pinned)return {stale:true,revision:pointer.revision};
+  pointer=await pinned.json();
+ }
  if(input.mode==='names'){
   const page=Number(input.page||0);if(!Number.isInteger(page)||page<0||page>=Math.max(1,pointer.pages))throw Error('Invalid staff history page.');
   if(page===0&&input.cachedRevision===pointer.revision)return {unchanged:true,revision:pointer.revision};

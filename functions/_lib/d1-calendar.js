@@ -1,3 +1,4 @@
+import {knownRosterGrade,resolveRosterGrades} from './roster-grade-evidence.js';
 import {
   buildRosterViewFromStoredImports,
   defaultSettings,
@@ -1997,20 +1998,22 @@ export async function buildFacilityOverviewFacts(file, doctorRows, eventRows, re
     if (!termsByDate.has(date)) termsByDate.set(date, australianTermStartForDate(date));
     return termsByDate.get(date);
   };
-  const contributions = new Map();
+  const contributions = new Map(),termGrades=new Map();
   for (const event of events) {
     const doctorKey = String(event.doctor_key || "").trim();
     const termStart = termForDate(event.start_date);
     if (!doctorKey || !termStart) continue;
     const key = `${sourceType}|${termStart}|${doctorKey}|${fileId}`;
     const doctor = doctorByKey.get(doctorKey) || event;
+    if(!termGrades.has(key))termGrades.set(key,new Set());
+    if(knownRosterGrade(event.seniority))termGrades.get(key).add(knownRosterGrade(event.seniority));
     const current = contributions.get(key);
     const first = datePart(event.start_date);
     const last = datePart(event.end_date || event.start_date);
     const fact = {
       sourceType, termStart, doctorKey, fileId: String(fileId),
       displayName: String(doctor.display_name || event.display_name || doctorKey),
-      seniority: String(doctor.seniority || event.seniority || ""),
+      seniority: resolveRosterGrades([...termGrades.get(key)],doctor.seniority),
       membershipSource: String(doctor.membership_source || "roster"),
       providerStaffId: String(doctor.provider_staff_id || event.provider_staff_id || ""),
       firstApplicableDate: current && current.firstApplicableDate < first ? current.firstApplicableDate : first,
@@ -5148,7 +5151,7 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
   const activeFileIds = new Set((options.activeFileIds || []).map(String));
   const [rawRows, continuingSms] = await Promise.all([db.prepare(maximumInputRows == null ? `
     SELECT s.doctor_key, MAX(s.display_name) AS display_name,
-      MAX(s.seniority) AS seniority, MAX(s.membership_source) AS membership_source,
+      CASE WHEN COUNT(DISTINCT CASE WHEN lower(trim(s.seniority)) NOT IN ('','unknown','not recorded') THEN s.seniority END)=1 THEN MAX(CASE WHEN lower(trim(s.seniority)) NOT IN ('','unknown','not recorded') THEN s.seniority END) ELSE 'Unknown' END AS seniority, MAX(s.membership_source) AS membership_source,
       MAX(s.provider_staff_id) AS provider_staff_id,
       MIN(s.first_applicable_date) AS first_applicable_date,
       MAX(s.last_applicable_date) AS last_applicable_date,
@@ -5180,11 +5183,12 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
       const key = String(row.doctor_key || "");
       const current = aggregated.get(key);
       if (!current) {
-        aggregated.set(key, { ...row, contribution_count: 1 });
+        aggregated.set(key, { ...row, knownGrades:new Set([knownRosterGrade(row.seniority)].filter(Boolean)), contribution_count: 1 });
         continue;
       }
       current.display_name = maxText(current.display_name, row.display_name);
-      current.seniority = maxText(current.seniority, row.seniority);
+      if(knownRosterGrade(row.seniority))current.knownGrades.add(knownRosterGrade(row.seniority));
+      current.seniority=resolveRosterGrades([...current.knownGrades]);
       current.membership_source = maxText(current.membership_source, row.membership_source);
       current.provider_staff_id = maxText(current.provider_staff_id, row.provider_staff_id);
       current.first_applicable_date = String(current.first_applicable_date || "") < String(row.first_applicable_date || "") ? current.first_applicable_date : row.first_applicable_date;

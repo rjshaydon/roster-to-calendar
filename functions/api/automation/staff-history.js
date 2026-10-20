@@ -1,3 +1,4 @@
+import {repairStaffGrades} from '../../_lib/staff-grade-repair.js';
 import {describeStaffHistory,staffHistorySourceTerms,staffHistoryWatermark,readStaffHistoryFragment,historyObjectKey,STAFF_HISTORY_POINTER,requestStaffHistoryBuild} from '../../_lib/staff-history-cache.js';
 import {storeCachedSnapshot} from '../../_lib/d1-calendar.js';
 import {reserveRosterMaintenanceBudget} from '../../_lib/roster-maintenance-budget.js';
@@ -8,8 +9,9 @@ export async function onRequestPost(context){
  if(!env.ROSTER_AUTOMATION_TOKEN||request.headers.get('Authorization')!=='Bearer '+env.ROSTER_AUTOMATION_TOKEN)return Response.json({error:'Unauthorized.'},{status:401});
  if(env.STAFF_HISTORY_BUILD_ENABLED!=='true')return Response.json({status:'disabled'});
  const input=await request.json(),r2=env.ROSTER_FILES,db=env.ROSTER_DB;
- context.data ||= {};context.data.d1OperationPhase=['enqueue','describe','terms','fragment','aliases','store','finish','acknowledge'].includes(input.mode)?input.mode:'invalid';
+ context.data ||= {};context.data.d1OperationPhase=['repair-grades','enqueue','describe','terms','fragment','aliases','store','finish','acknowledge'].includes(input.mode)?input.mode:'invalid';
  try{
+  if(input.mode==='repair-grades')return Response.json(await repairStaffGrades(context,input));
   if(input.mode==='enqueue'){await requestStaffHistoryBuild(context);return Response.json({status:'queued'});}
   if(input.mode==='describe'){
    const watermark=await staffHistoryWatermark(r2),object=await r2.get(STAFF_HISTORY_POINTER),pointer=object?await object.json():null;
@@ -81,7 +83,9 @@ export async function onRequestPost(context){
    const identity=await db.prepare('SELECT revision FROM roster_identity_revision WHERE id=1').first();
    if(Number(identity.revision)!==input.identityRevision)return Response.json({status:'stale'},{status:409});
    const pointer={revision:input.revision,inputRevision:descriptor.inputRevision,count:input.count,pages,projectionInput:String(input.projectionInput||''),missing:input.missing||[],preparedAt:new Date().toISOString()};
+   await r2.put('staff-history/v1/'+input.revision+'/manifest.json',JSON.stringify(pointer),{httpMetadata:{contentType:'application/json'}});
    const old=await r2.get(STAFF_HISTORY_POINTER);
+   if(old){const prior=await old.json();if(prior.revision&&prior.revision!==input.revision)await r2.put('staff-history/v1/'+prior.revision+'/manifest.json',JSON.stringify(prior),{httpMetadata:{contentType:'application/json'}});}
    const result=await r2.put(STAFF_HISTORY_POINTER,JSON.stringify(pointer),{httpMetadata:{contentType:'application/json'},...(old?.etag?{onlyIf:{etagMatches:old.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
    return Response.json({status:result===null?'stale':'complete',count:input.count});
   }

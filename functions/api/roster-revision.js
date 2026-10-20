@@ -9,8 +9,8 @@ export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const selected = [...new Set(String(url.searchParams.get('sites') || '').split(','))].sort();
   if (!selected.length || selected.length > 4 || selected.some(source => !sources.has(source))) return new Response('Invalid sites', { status: 400 });
-  const today = melbourneDateKey();
-  const key = new Request(`${url.origin}/api/roster-revision?sites=${selected.join(',')}&day=${today}`);
+  const today = melbourneDateKey(),history=url.searchParams.get('history')==='1';
+  const key = new Request(`${url.origin}/api/roster-revision?sites=${selected.join(',')}&day=${today}${history?'&history=1':''}`);
   const cache = globalThis.caches?.default;
   const cached = await cache?.match(key);
   if (cached) return cached;
@@ -23,6 +23,7 @@ export async function onRequestGet(context) {
   if (fingerprints.some(value => !value)) return new Response('Preparing', { status: 503, headers: { 'Cache-Control': 'no-store' } });
   const identity = context.env.IDENTITY_REVIEW_ENABLED === 'true'
     ? await context.env.ROSTER_FILES.head('identity/revision.json') : null;
+  if(history){const object=await context.env.ROSTER_FILES.head('staff-history/v1/current.json');fingerprints.push(['history',object?.etag||'']);}
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([today, fingerprints, ...(context.env.IDENTITY_REVIEW_ENABLED==='true'?[identity?.etag||'']:[])])));
   const revision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   const response = Response.json({ ok: true, revision }, { headers: { 'Cache-Control': 'public, max-age=30, must-revalidate' } });
