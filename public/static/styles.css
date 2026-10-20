@@ -5391,3 +5391,8 @@ body[data-skin="console"] .panel {
 .request-filters { display: flex; flex-wrap: wrap; gap: 1rem; margin-block: 1rem; }
 .request-workspace .modal-actions { flex-wrap: wrap; }
 .request-workspace [data-request-evidence] { margin-block: 1.5rem; }
+
+/* Historical search is one person followed by their site/term evidence. */
+.facility-overview-staff-member.facility-overview-staff-history-member { display: block; }
+.facility-overview-staff-history-member > strong { display: block; margin-bottom: 0.6rem; }
+.facility-overview-staff-history-member > p { margin: 0.6rem 0; }

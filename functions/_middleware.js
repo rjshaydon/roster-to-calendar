@@ -12,7 +12,7 @@ const STATE_ACTIONS = new Set([
   "listUnresolvedShiftCodes", "listUsers", "loadAccountContext", "loadCalendarEvents", "loadDoctorProfile",
   "loadDoctorProfileImports", "loadImportRefs", "loadImports", "loadInsightImports", "login",
   "queryDoctorProfileFacilityOverviewAccess", "queryFacilityOverviewByStream", "queryFacilityOverviewContactList",
-  "queryFacilityOverviewMetadata", "queryFacilityOverviewOnShift", "queryFacilityOverviewStaff",
+  "queryFacilityOverviewMetadata", "queryFacilityOverviewOnShift", "queryFacilityOverviewStaff", "queryFacilityStaffHistory",
   "queryFacilityOverviewTerms", "queryFacilityOverviewTogetherContext", "queryFacilityOverviewLaunchWindow",
   "queryFacilityOverviewWorkingTogether", "queryRosterInsights", "queryRosterOverlapDoctors",
   "refreshAutomatedRosterSource", "removeRosterClaim", "removeRosterImports", "repairRosterDailyPresence",
@@ -81,7 +81,7 @@ export async function onRequest(context) {
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/requests" || url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && ["identity","loadCalendarEvents"].includes(action) || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/requests" || url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/staff-history" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && ["identity","loadCalendarEvents"].includes(action) || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -92,7 +92,7 @@ export async function onRequest(context) {
     context.data ||= {};context.data.d1Meter=d1;
     sharedEnv.ROSTER_DB = d1.binding;
     beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true",
-      {deadlineAt,statementLimit:limit,purpose:['/api/requests','/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname)?'identity':'roster'});
+      {deadlineAt,statementLimit:limit,purpose:['/api/requests','/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build','/api/automation/staff-history'].includes(url.pathname)?'identity':'roster'});
   }
 
   const work = (async () => {
@@ -141,7 +141,7 @@ export async function onRequest(context) {
   // One-name identity checkpoints normally finish within seconds. Retain the
   // same work promise (including settlement) across caller disconnection;
   // waitUntil has a platform bound and does not retry or duplicate work.
-  if (!contained && ['/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname) && context.waitUntil) {
+  if (!contained && ['/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build','/api/automation/staff-history'].includes(url.pathname) && context.waitUntil) {
     context.waitUntil(work.then(() => undefined, () => undefined));
   }
   return await work;

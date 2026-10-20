@@ -1,0 +1,45 @@
+{
+  "at": "2026-10-19T22:51:32.375Z",
+  "from": "2026-10-19T22:51:00.092Z",
+  "until": "2026-10-19T22:51:03.614Z",
+  "source": "Cloudflare Workers Observability aggregate CPU in milliseconds",
+  "credential": "existing-read-only-analytics",
+  "syntheticOnly": true,
+  "stages": [
+    {
+      "stage": "names",
+      "requests": 14,
+      "medianCpuMs": 2,
+      "p95CpuMs": 3,
+      "maxCpuMs": 3
+    },
+    {
+      "stage": "histories",
+      "requests": 8,
+      "medianCpuMs": 1,
+      "p95CpuMs": 1,
+      "maxCpuMs": 1
+    },
+    {
+      "stage": "fragment",
+      "requests": 12,
+      "medianCpuMs": 2,
+      "p95CpuMs": 3,
+      "maxCpuMs": 3
+    },
+    {
+      "stage": "terms",
+      "requests": 5,
+      "medianCpuMs": 1,
+      "p95CpuMs": 1,
+      "maxCpuMs": 1
+    },
+    {
+      "stage": "store",
+      "requests": 13,
+      "medianCpuMs": 1,
+      "p95CpuMs": 2,
+      "maxCpuMs": 2
+    }
+  ]
+}
