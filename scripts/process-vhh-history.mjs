@@ -17,7 +17,7 @@ export async function preserveVhhHistory({run,extract,request,recoveryOnly=false
     const digest=await rosterImportDigest([run.id,from,to]);
     const payload=buildVhhDerivedRosterPayload({extract:history,fileId:`vhh-history:${digest}`,contentHash:digest,lastModified:run.lastModified});
     let plan=await attachRosterCompactPlan(await planRosterImportBatches(payload,{maximumBatchBytes:65536,maximumOccurrences:64}),payload);
-    plan.manifest.presenceMode='cached';
+    if(inspect.cachedPresence)plan.manifest.presenceMode='cached';
     plan.revision=await rosterImportDigest(plan.manifest);
     const result=await executeBoundedRosterImport(plan,step=>request({...step,file:payload.file,vhhHistory:{from,to},prepareOnly:Boolean(window.overlap)}));
     if(result.deferred) return result;

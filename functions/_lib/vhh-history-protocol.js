@@ -29,7 +29,7 @@ export async function handleVhhHistoryRequest(context,body) {
         if(last && Date.parse(file.firstDate)-Date.parse(last)>86400000 && last<new Date().toISOString().slice(0,10)) needsRecovery=true;
         if(file.lastDate>last)last=file.lastDate;
       }
-      return Response.json({ok:true,active,needsRecovery,run:{id:run.id,sourceId:run.sourceId,fileId:run.sourceFileId||run.fileId,contentHash:run.contentHash,providerVersion:run.providerVersion,fileName:raw.name,contentType:raw.type,lastModified:raw.last_modified}});
+      return Response.json({ok:true,active,needsRecovery,cachedPresence:context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(VHH_HISTORY_SOURCE)===true,run:{id:run.id,sourceId:run.sourceId,fileId:run.sourceFileId||run.fileId,contentHash:run.contentHash,providerVersion:run.providerVersion,fileName:raw.name,contentType:raw.type,lastModified:raw.last_modified}});
     }
     const parent=await loadRosterSyncRun(db,String(body.runId||''));
     if(!parent || parent.sourceId!==VHH_HISTORY_SOURCE || !['success','queued','processing'].includes(parent.status)) throw Error('Historical input does not match a retained VHH delivery.');
@@ -47,7 +47,8 @@ export async function handleVhhHistoryRequest(context,body) {
     switch(body.phase) {
       case 'bounded-begin':
       case 'bounded-initialize': {
-        if(body.manifest?.startDate!==from || body.manifest?.rosterEndDate!==to || body.manifest?.presenceMode!=='cached') throw Error('Historical plan differs from the requested dates.');
+        if(body.manifest?.startDate!==from || body.manifest?.rosterEndDate!==to) throw Error('Historical plan differs from the requested dates.');
+        if(body.manifest?.presenceMode && !context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(VHH_HISTORY_SOURCE)) throw Error('Cached presence is not enabled for this historical source.');
         await pinManualAuthority(db,id,'vhh');
         result=await beginBoundedRosterImport(db,id,file,{manifest:body.manifest,revision:body.revision},{holdOwnerId:parent.id});break;
       }
