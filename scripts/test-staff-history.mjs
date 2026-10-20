@@ -121,3 +121,34 @@ assert.equal(sqlite.prepare("SELECT seniority FROM facility_term_staff_contribut
 const repairedTerm=(await staffHistorySourceTerms(r2,'mch',today)).terms[0];assert.notEqual(repairedTerm.staffRevision,'revision0');
 assert.equal((await repairStaffGrades({env},{...repairInput,staffRevision:repairedTerm.staffRevision})).changed,0);
 console.log('Grade evidence repair, conflict handling, compact labels and atomic retained-result refresh passed.');
+// Exercise the app's real loading/lease-renewal functions with an expired
+// quarter-hour lease and an unchanged catalogue, rather than testing a model.
+const {runInNewContext}=await import('node:vm');
+const appSource=await readFile(new URL('../public/static/app.js',import.meta.url),'utf8');
+let namesCalls=0,historyCalls=0;
+const browser={createStaffHistoryClient,Date,clearTimeout(){},setTimeout(){return 1;},document:{hidden:false},
+ staffHistoryClient:null,staffHistoryScope:'',staffHistoryTimer:null,staffHistoryExpiryTimer:null,staffHistoryReady:false,staffHistoryLoading:false,staffHistoryError:'',staffHistoryMissing:[],staffHistoryLimit:12,staffHistoryCacheExpiresAt:0,staffHistoryRefreshQueued:false,
+ facilityOverviewState:{facilityKey:'ALL',staffQuery:'example',staffData:{staffHistoryEnabled:true}},currentFacilityOverviewAccess:{mode:'all'},currentNonClinical:false,
+ authUserEmail:'fixture@example.test',currentUserEmail:'fixture@example.test',authUserPassword:'',currentUserPassword:'',facilityOverviewTargetEmail:()=>'',activeCalendarTransitionKey:()=>'',canUseFullFacilityOverview:()=>true,
+ async accountFetch(_url,options){const input=JSON.parse(options.body);if(input.mode==='names')namesCalls++;else historyCalls++;
+ return {headers:new Headers(),input};},
+ async readJsonResponse({input}){return {revision:'fixture',...(input.mode==='names'?input.cachedRevision==='fixture'?{unchanged:true}:{people:[{slot:0,displayName:'Example',names:['Example']}],next:null}:{people:[{slot:0,history:[row(...terms[0])]}]}),facilityOverviewAccess:{mode:'all'},accessExpiresAt:new Date(Date.now()+900000).toISOString()};},
+ refreshFacilityOverviewSnapshotAccess(){},refreshFacilityOverviewStaffContent(){},renderFacilityOverviewStaffBody(){},
+};
+const browserCode=appSource.slice(appSource.indexOf('function clearStaffHistorySearch()'),appSource.indexOf('function renderStaffHistoryResults()'));
+runInNewContext(browserCode+';this.load=loadStaffHistorySearch;',browser);
+await browser.load();const retainedClient=browser.staffHistoryClient;assert.equal(browser.staffHistoryReady,true);assert.equal(historyCalls,1);
+browser.staffHistoryCacheExpiresAt=Date.now()-100;await browser.load({refresh:true});
+assert.equal(browser.staffHistoryClient,retainedClient);assert.equal(browser.staffHistoryReady,true);assert.equal(browser.staffHistoryClient.history(0).length,1);assert.equal(namesCalls,2);assert.equal(historyCalls,1,'authorization renewal does not download unchanged histories');
+let domWrites=0;const node={firstElementChild:{className:'facility-overview-results',innerHTML:'unchanged result'},set innerHTML(value){domWrites++;}};
+const bodyCode=appSource.slice(appSource.indexOf('function renderFacilityOverviewStaffBody()'),appSource.indexOf('function queueFacilityOverviewMenuPositioning()'));
+const dom={facilityOverviewBody:node,facilityOverviewState:{tab:'staff',staffContent:'unchanged result'},staffHistorySearchActive:()=>true,queueFacilityOverviewMenuPositioning(){}};
+runInNewContext(bodyCode+';this.render=renderFacilityOverviewStaffBody;',dom);dom.render();assert.equal(domWrites,0,'unchanged history does not replace the DOM');
+console.log('Actual browser lease renewal retains data, skips unchanged detail downloads and preserves unchanged DOM.');
+// A continuation is pinned to its published revision after a newer pointer is
+// activated; existing pages must never be combined with a new slot ordering.
+const currentPointer=JSON.parse(new TextDecoder().decode(r2.objects.get(STAFF_HISTORY_POINTER).bytes));
+await r2.put(`staff-history/v1/${currentPointer.revision}/manifest.json`,JSON.stringify(currentPointer));
+await r2.put(STAFF_HISTORY_POINTER,JSON.stringify({...currentPointer,revision:'b'.repeat(64)}));
+assert.equal((await readStaffHistoryView(r2,{mode:'names',revision:currentPointer.revision,page:0},today)).revision,currentPointer.revision);
+await r2.put(STAFF_HISTORY_POINTER,JSON.stringify(currentPointer));
