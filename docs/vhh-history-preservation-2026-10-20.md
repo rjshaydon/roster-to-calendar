@@ -63,3 +63,31 @@ forecast left no uncommitted read allowance under the existing 4-million read
 policy. No quota/forecast ceilings are raised for this repair. Production
 recovery must pass fresh account admission; the daily retry is 00:25 UTC
 (11:25 am Melbourne during daylight saving).
+
+## Deployment and guarded live result
+
+Runtime commit `28eecd2e` deployed successfully to Production as
+`d85c33ea.roster-to-calendar.pages.dev`. Source and workflow changes are pushed.
+Actual published-reader checks returned:
+
+| Date | Preparing | Shifts | Missing reason |
+| --- | --- | ---: | --- |
+| 22 September | false | 0 | coverage-unavailable |
+| 18 October | false | 0 | coverage-unavailable |
+| 19 October | false | 14 | none |
+
+After deployment, the identified stop flag was cleared by a compare-and-set
+requiring its exact, complete receipt and exactly one overrun that UTC day.
+The grant stayed expired; no quota, forecast, reserve or ceiling was bypassed.
+A fresh guarded recovery run then declined BEFORE download/parse with
+`Insufficient usable maintenance headroom`. The missing 371 events have NOT yet
+been imported or published. Run:
+https://github.com/rjshaydon/roster-to-calendar/actions/runs/39380303650
+
+The source-serialized daily retry remains scheduled for 00:25 UTC. Completion is
+conditional on fresh account admission and publication; this is not an assurance
+that the missing history is already visible. Validate every recovered date and
+personal/shared publications after that run. The ordinary processor's prefix
+preservation is deployed now, including atomic rollback for both patch and full
+replacement. The final archive wire test also verifies the existing VHH presence
+mode and completed-parent authority-generation isolation.
