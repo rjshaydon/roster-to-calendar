@@ -103,3 +103,28 @@ Rollback: set `STAFF_HISTORY_ENABLED=false`; stop optional preparation with BUIL
 false if needed. Do not delete existing roster facts or published calendars.
 The prior authority handoff/checker/manual-import remediation is already deployed
 on main. This branch does not start restoration Batches 4/5/8 or deferred 3/7.
+
+## Reset-day release review
+
+The 11:08 am check correctly withheld admission while analytics' 15-minute
+settlement window still pointed into the previous UTC day. No allowance was
+inferred from an empty new-day sample.
+
+Before rollout, semantic history checkpoints were added: if publication tags
+change but recorded names/terms/grades and identity evidence do not, only the
+source watermark is acknowledged. Identity export and catalogue rewrites are
+skipped. Cache renewal no longer mistakes a renewed access expiry for an account
+switch, and Show more requests made during a pending fetch are continued.
+
+Initial production acceptance uses `STAFF_HISTORY_ENABLED="creator"`; ordinary
+accounts remain excluded until the live gates pass. Creator context does not
+carry into an entered ordinary account. The normal global setting remains
+`"true"` once released. BUILD is enabled for initial preparation.
+
+The targeted history/access/publication/cold-start suites pass. The separate
+older clinician-access suite currently cannot run cleanly against migrations
+alone: it lacks the legacy runtime index `idx_roster_events_file_doctor`; a
+throwaway local schema compatibility run then reaches an older assertion about
+legacy event lookups. No production code or stored data was changed to satisfy
+that legacy fixture. The new endpoint's authorization gates are covered by the
+focused tests; authenticated live acceptance remains required.

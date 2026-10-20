@@ -11,6 +11,11 @@ export async function prepareStaffHistory({request,maxAliasPages=64}){
   const {fragment}=await request({mode:'fragment',inputRevision:descriptor.inputRevision,sourceType:term.sourceType,termStart:term.termStart});
   if(fragment.missing)missing.push({sourceType:term.sourceType,termStart:term.termStart,reason:'staff-unavailable'});else fragments.push(fragment);
  }
+ // Day/month publication tags may change while the staff history stays the
+ // same. A semantic checkpoint avoids re-exporting identities or rebuilding
+ // catalogue pages when only shift times/unchanged staff metadata changed.
+ const projectionInput=createHash('sha256').update(JSON.stringify([1,descriptor.identityMarker,missing,fragments.map(f=>[f.sourceType,f.termStart,f.termEnd,f.members.map(m=>[m.doctorKey,m.displayName,m.grade])])])).digest('hex');
+ if(initial.projectionInput===projectionInput)return request({mode:'acknowledge',inputRevision:descriptor.inputRevision,projectionInput});
  const aliases=[];let cursor={},identityRevision;
  for(let page=0;page<maxAliasPages;page++){
   const result=await request({mode:'aliases',...cursor,identityRevision});
@@ -24,7 +29,7 @@ export async function prepareStaffHistory({request,maxAliasPages=64}){
  const revision=createHash('sha256').update(JSON.stringify({people,missing})).digest('hex');
  for(let index=0;index<Math.max(1,Math.ceil(people.length/STAFF_HISTORY_PAGE));index++)await request({mode:'store',revision,kind:'names',index,people:people.slice(index*STAFF_HISTORY_PAGE,(index+1)*STAFF_HISTORY_PAGE).map(({history,...p})=>p)});
  for(let index=0;index<Math.ceil(people.length/STAFF_HISTORY_SHARD);index++)await request({mode:'store',revision,kind:'histories',index,people:people.slice(index*STAFF_HISTORY_SHARD,(index+1)*STAFF_HISTORY_SHARD).map(({names,...p})=>p)});
- return request({mode:'finish',descriptor,revision,count:people.length,identityRevision,missing});
+ return request({mode:'finish',descriptor,revision,count:people.length,identityRevision,missing,projectionInput});
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'https://roster-to-calendar.pages.dev').replace(/\/$/,''),token=process.env.ROSTER_AUTOMATION_TOKEN;
@@ -32,7 +37,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  let lastAdmission=0;
  try{
  const request=async body=>{
-  if(['aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
+  if(['fragment','aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
    const response=await guardedFetch(process.env,base+'/api/automation/account-budget',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(120000)},{label:'Staff history admission'});
    const value=await response.json();if(!response.ok||value.deferred)throw Error('Staff history preparation deferred.');lastAdmission=Date.now();
   }

@@ -87,3 +87,7 @@ export function staffHistoryAccessAllowed(record,access){
  const creator=['creator','owner'].includes(record?.role);
  return Boolean((creator||record?.facilityOverviewEnabled===true)&&access?.mode==='all'&&(creator||record?.nonClinical!==true&&access?.isSms===true));
 }
+
+export function staffHistoryEnabledFor(env,record){
+ return env.STAFF_HISTORY_ENABLED==='true'||env.STAFF_HISTORY_ENABLED==='creator'&&['creator','owner'].includes(record?.role);
+}

@@ -1,4 +1,4 @@
-import {readStaffHistoryView,staffHistoryAccessAllowed,scheduleStaffHistoryBuild} from '../_lib/staff-history-cache.js';
+import {readStaffHistoryView,staffHistoryAccessAllowed,staffHistoryEnabledFor,scheduleStaffHistoryBuild} from '../_lib/staff-history-cache.js';
 import {requestIdentityPublication} from '../_lib/identity-publication-dispatch.js';
 import {allowLegacyStateDuringRollout,requireLegacyCredentialNotPending} from '../_lib/authentication-rollout.js';
 import { serverMelbourneDateKey as australianDateKey } from '../_lib/melbourne-clock.js';
@@ -2559,7 +2559,7 @@ async function handleAccountStateRequest(context) {
       const access = await facilityOverviewAccess();
       const subject = facilityOverviewSubject && {...facilityOverviewSubject.record, role:facilityOverviewSubject.role};
       if (!facilityOverviewEnabled() || !staffHistoryAccessAllowed(subject,access)) return facilityOverviewAccessDeniedResponse(access);
-      if (context.env.STAFF_HISTORY_ENABLED !== 'true') return Response.json({error:'Staff history is not enabled.'},{status:503});
+      if (!staffHistoryEnabledFor(context.env,subject)) return Response.json({error:'Staff history is not enabled.'},{status:503});
       try {
         const result = await readStaffHistoryView(context.env.ROSTER_FILES,body,australianDateKey());
         if(result.preparing || result.stale) scheduleStaffHistoryBuild(context);
@@ -2578,7 +2578,7 @@ async function handleAccountStateRequest(context) {
       }
       const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
       const access = await facilityOverviewAccess();
-      const staffHistoryEnabled = context.env.STAFF_HISTORY_ENABLED === 'true' && staffHistoryAccessAllowed({...facilityOverviewSubject?.record,role:facilityOverviewSubject?.role},access);
+      const staffHistoryEnabled = staffHistoryEnabledFor(context.env,{role:facilityOverviewSubject?.role}) && staffHistoryAccessAllowed({...facilityOverviewSubject?.record,role:facilityOverviewSubject?.role},access);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }

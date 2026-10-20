@@ -463,7 +463,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let staffHistoryClient = null, staffHistoryScope = '', staffHistoryTimer = null, staffHistoryExpiryTimer = null;
-let staffHistoryReady = false, staffHistoryLoading = false, staffHistoryError = '', staffHistoryMissing = [], staffHistoryLimit = 12;
+let staffHistoryReady = false, staffHistoryLoading = false, staffHistoryError = '', staffHistoryMissing = [], staffHistoryLimit = 12, staffHistoryCacheExpiresAt = 0;
 let facilityOverviewState = {
   tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, previousNightRoster: null, contactAccessToken: "", contactReviewOpen: false, contactPreviousNightReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
@@ -11874,16 +11874,16 @@ async function loadFacilityOverviewStaff() {
 function clearStaffHistorySearch() {
   clearTimeout(staffHistoryTimer); staffHistoryTimer=null; clearTimeout(staffHistoryExpiryTimer); staffHistoryExpiryTimer=null;
   staffHistoryClient?.clear(); staffHistoryClient=null; staffHistoryScope='';
-  staffHistoryReady=false; staffHistoryLoading=false; staffHistoryError=''; staffHistoryMissing=[]; staffHistoryLimit=12;
+  staffHistoryReady=false; staffHistoryLoading=false; staffHistoryError=''; staffHistoryMissing=[]; staffHistoryLimit=12; staffHistoryCacheExpiresAt=0;
 }
 function staffHistoryEligible(data=facilityOverviewState.staffData) {
-  return data?.staffHistoryEnabled===true && currentFacilityOverviewAccess.mode==='all' && Date.parse(currentFacilityOverviewAccess.expiresAt)>Date.now() && canUseFullFacilityOverview();
+  return data?.staffHistoryEnabled===true && currentFacilityOverviewAccess.mode==='all' && canUseFullFacilityOverview();
 }
 function staffHistorySearchActive(data=facilityOverviewState.staffData) {
   return facilityOverviewState.facilityKey==='ALL' && Boolean(facilityOverviewState.staffQuery.trim()) && staffHistoryEligible(data);
 }
 function staffHistoryAccountScope() {
-  return [authUserEmail,currentUserEmail,facilityOverviewTargetEmail(),activeCalendarTransitionKey(),currentFacilityOverviewAccess.expiresAt].join('|');
+  return [authUserEmail,currentUserEmail,facilityOverviewTargetEmail(),activeCalendarTransitionKey(),currentFacilityOverviewAccess.mode,currentNonClinical].join('|');
 }
 function queueStaffHistorySearch() {
   clearTimeout(staffHistoryTimer);
@@ -11892,19 +11892,24 @@ function queueStaffHistorySearch() {
 }
 async function loadStaffHistorySearch() {
   if(!staffHistorySearchActive())return;
+  if(staffHistoryReady&&staffHistoryCacheExpiresAt<=Date.now())clearStaffHistorySearch();
   const scope=staffHistoryAccountScope();
   if(staffHistoryClient && staffHistoryScope!==scope)clearStaffHistorySearch();
   if(!staffHistoryClient) {
     staffHistoryScope=scope;
-    staffHistoryExpiryTimer=setTimeout(()=>{clearStaffHistorySearch();refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();},Math.max(0,Date.parse(currentFacilityOverviewAccess.expiresAt)-Date.now()));
     staffHistoryClient=createStaffHistoryClient(async input=>{
       const response=await accountFetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'queryFacilityStaffHistory',email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword,targetEmail:facilityOverviewTargetEmail(),...input})});
       const data=await readJsonResponse(response,'Could not load staff history.');
       if(staffHistoryScope!==scope)throw new Error('Staff history account changed.');
-      refreshFacilityOverviewSnapshotAccess(data);return data;
+      refreshFacilityOverviewSnapshotAccess(data);
+      staffHistoryCacheExpiresAt=Date.parse(data.accessExpiresAt||data.facilityOverviewAccess?.expiresAt)||0;
+      if(staffHistoryCacheExpiresAt<=Date.now())throw new Error('Staff history access could not be refreshed.');
+      clearTimeout(staffHistoryExpiryTimer);
+      staffHistoryExpiryTimer=setTimeout(()=>{clearStaffHistorySearch();staffHistoryError='Search again to refresh staff history.';refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();},staffHistoryCacheExpiresAt-Date.now());
+      return data;
     });
   }
-  const client=staffHistoryClient, requestedQuery=facilityOverviewState.staffQuery;
+  const client=staffHistoryClient, requestedQuery=facilityOverviewState.staffQuery, requestedLimit=staffHistoryLimit;
   if(staffHistoryLoading)return;
   staffHistoryLoading=true;staffHistoryError='';
   try {
@@ -11927,11 +11932,11 @@ async function loadStaffHistorySearch() {
     }
   }
   finally {
-    if(client===staffHistoryClient){staffHistoryLoading=false;if(staffHistorySearchActive()){refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();if(requestedQuery!==facilityOverviewState.staffQuery)queueStaffHistorySearch();}}
+    if(client===staffHistoryClient){staffHistoryLoading=false;if(staffHistorySearchActive()){refreshFacilityOverviewStaffContent();renderFacilityOverviewStaffBody();if(requestedQuery!==facilityOverviewState.staffQuery||requestedLimit!==staffHistoryLimit)queueStaffHistorySearch();}}
   }
 }
 function renderStaffHistoryResults() {
-  if(staffHistoryClient && (staffHistoryScope!==staffHistoryAccountScope()||!staffHistoryEligible()))clearStaffHistorySearch();
+  if(staffHistoryClient && (staffHistoryScope!==staffHistoryAccountScope()||!staffHistoryEligible()||staffHistoryReady&&staffHistoryCacheExpiresAt<=Date.now()))clearStaffHistorySearch();
   const heading='<p class="facility-overview-by-stream-summary">Across available rosters</p>';
   if(staffHistoryError)return heading+`<article class="issue-card"><p>${escapeHtml(staffHistoryError)}</p></article>`;
   if(!staffHistoryReady)return heading+'<p>Loading staff history…</p>';

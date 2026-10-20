@@ -48,8 +48,8 @@ CONTACT_AUTOMATION_SOURCE_ALLOWLIST = "ddh-daily-contact-sheet,mmc-shift-allocat
 IDENTITY_DISCOVERY_ENABLED = "true"
 IDENTITY_REVIEW_ENABLED = "true"
 # Seed and verify the compact catalogue before activating the user-facing view.
-STAFF_HISTORY_BUILD_ENABLED = "false"
-STAFF_HISTORY_ENABLED = "false"
+STAFF_HISTORY_BUILD_ENABLED = "true"
+STAFF_HISTORY_ENABLED = "creator"
 SUBSCRIPTION_ARTIFACT_MODE = "ready"
 IDENTITY_EXTERNAL_AUDIT_ENABLED = "true"
 IDENTITY_REGISTRY_ENABLED = "true"

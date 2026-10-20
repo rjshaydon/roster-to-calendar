@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {runInNewContext} from 'node:vm';
 import {buildStaffHistoryCatalogue,matchesStaffHistory,coalesceStaffHistory,createStaffHistoryClient} from '../public/static/staff-history.js';
 import {prepareStaffHistory} from './process-staff-history.mjs';
-import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark} from '../functions/_lib/staff-history-cache.js';
+import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark,staffHistoryEnabledFor} from '../functions/_lib/staff-history-cache.js';
 import {onRequestPost} from '../functions/api/automation/staff-history.js';
 import {storeCachedSnapshot} from '../functions/_lib/d1-calendar.js';
 class R2 {
@@ -37,6 +37,12 @@ const richard=names.people.find(p=>p.displayName==='Richard Haydon');assert.ok(m
 const sqlBefore=db.sql.length,details=await readStaffHistoryView(r2,{mode:'histories',revision:names.revision,slots:[richard.slot]},today);assert.equal(db.sql.length,sqlBefore,'interactive history never queries D1');const history=details.people[0].history;assert.equal(history.length,4);assert.deepEqual(history.filter(h=>h.sourceType==='mmc').map(h=>h.grade),['HMO','Junior Registrar','SMS']);
 const puts=r2.puts,sql=db.sql.length;assert.equal((await prepareStaffHistory({request})).status,'unchanged');assert.equal(r2.puts,puts);assert.equal(db.sql.length,sql,'unchanged preparation performs no D1 reads or writes');
 assert.equal((await readStaffHistoryView(r2,{mode:'names',cachedRevision:names.revision},today)).unchanged,true);
+// A changed day-manifest tag with identical staff evidence acknowledges the
+// new source watermark without any identity queries or catalogue rewrites.
+const sourceObject=r2.objects.get('facility-overview/v1/mmc/manifest.json');sourceObject.etag='synthetic-day-only-update';
+const beforeAcknowledge=db.sql.length,putsBeforeAcknowledge=r2.puts;
+assert.equal((await prepareStaffHistory({request})).status,'unchanged-history');assert.equal(db.sql.length,beforeAcknowledge);assert.equal(r2.puts,putsBeforeAcknowledge+1);assert.equal((await readStaffHistoryView(r2,{mode:'names',cachedRevision:names.revision},today)).unchanged,true);
+
 assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'all',isSms:true}),true);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'sites',isSms:false}),false);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:false},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'user',nonClinical:true,facilityOverviewEnabled:true},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'creator'},{mode:'all'}),true);
 // A changed identity marker invalidates the coherent catalogue before new data
 // can be combined with old memberships; a missing shard is preparation, not no match.
@@ -56,7 +62,7 @@ let failPage=true;const pagedCalls=[];const paged=createStaffHistoryClient(async
 await assert.rejects(()=>paged.load(),/lost page/);assert.equal(paged.revision,'');failPage=false;await paged.load();assert.equal(pagedCalls[2].cachedRevision,'');assert.equal(paged.matches('Later Page').length,1);
 await assert.rejects(()=>readStaffHistoryView(r2,{mode:'histories',slots:Array.from({length:13},(_,i)=>i)},today),/twelve/);
 // Execute the actual endpoint gate, proving denial happens before cache reads.
-const state=await readFile(new URL('../functions/api/state.js',import.meta.url),'utf8');const block=state.slice(state.indexOf('    if (action === "queryFacilityStaffHistory")'),state.indexOf('    if (action === "queryFacilityOverviewStaff")'));let reads=0;const denied=await runInNewContext('(async()=>{'+block+'})()',{action:'queryFacilityStaffHistory',Response,facilityOverviewAccess:async()=>({mode:'site',isSms:false}),facilityOverviewSubject:{record:{facilityOverviewEnabled:true},role:'user'},facilityOverviewEnabled:()=>true,staffHistoryAccessAllowed,facilityOverviewAccessDeniedResponse:()=>new Response('denied',{status:403}),readStaffHistoryView:()=>{reads++;},context:{env:{STAFF_HISTORY_ENABLED:'true'}}});assert.equal(denied.status,403);assert.equal(reads,0);
+const state=await readFile(new URL('../functions/api/state.js',import.meta.url),'utf8');const block=state.slice(state.indexOf('    if (action === "queryFacilityStaffHistory")'),state.indexOf('    if (action === "queryFacilityOverviewStaff")'));let reads=0;const denied=await runInNewContext('(async()=>{'+block+'})()',{action:'queryFacilityStaffHistory',Response,facilityOverviewAccess:async()=>({mode:'site',isSms:false}),facilityOverviewSubject:{record:{facilityOverviewEnabled:true},role:'user'},facilityOverviewEnabled:()=>true,staffHistoryAccessAllowed,staffHistoryEnabledFor,facilityOverviewAccessDeniedResponse:()=>new Response('denied',{status:403}),readStaffHistoryView:()=>{reads++;},context:{env:{STAFF_HISTORY_ENABLED:'true'}}});assert.equal(denied.status,403);assert.equal(reads,0);
 // Old cached staff objects without contribution counts are not silently lost.
 // The background endpoint uses the indexed contribution table, excluding an
 // inactive file and carried-forward directory entries without reading events.
@@ -64,6 +70,7 @@ await storeCachedSnapshot(r2,'legacy-staff',{members:[{doctorKey:'RECOVER',displ
 await storeCachedSnapshot(r2,'facility-overview/v1/vhh/manifest.json',{terms:[{...Object.fromEntries(['termStart','termEnd'].map((k,i)=>[k,terms[0][i]])),staffKey:'legacy-staff',staffRevision:'legacy-evidence'}]});
 sqlite.prepare("INSERT INTO roster_files(id,name,source_type,active)VALUES('legacy-active','Synthetic.xlsx','vhh',1),('legacy-inactive','Synthetic old.xlsx','vhh',0)").run();
 sqlite.prepare("INSERT INTO facility_term_staff_contributions(source_type,term_start,doctor_key,file_id,display_name,seniority)VALUES('vhh','2026-02-02','RECOVER','legacy-active','Recovered Historical Doctor','HMO'),('vhh','2026-02-02','RETIRED','legacy-inactive','Retired File Doctor','SMS')").run();
+assert.equal(staffHistoryEnabledFor({STAFF_HISTORY_ENABLED:'creator'},{role:'creator'}),true);assert.equal(staffHistoryEnabledFor({STAFF_HISTORY_ENABLED:'creator'},{role:'user'}),false);
 const beforeLegacy=db.sql.length,watermark=await staffHistoryWatermark(r2,today),legacy=await request({mode:'fragment',sourceType:'vhh',termStart:'2026-02-02',inputRevision:watermark.inputRevision});assert.deepEqual(legacy.fragment.members.map(m=>m.displayName),['Recovered Historical Doctor']);assert.equal(legacy.fragment.members[0].grade,'HMO','dated contribution grade wins over a newer directory grade');assert.ok(db.sql.slice(beforeLegacy).some(sql=>sql.includes('facility_term_staff_contributions')));assert.ok(!db.sql.some(sql=>/FROM roster_events/i.test(sql)));
 await storeCachedSnapshot(r2,'facility-overview/v1/casey/manifest.json',{terms:[{termStart:'2026-11-02',termEnd:'2027-01-31',staffKey:'future',staffRevision:'future'}]});
 assert.equal((await staffHistorySourceTerms(r2,'casey','2026-09-30')).terms.length,0);assert.equal((await staffHistorySourceTerms(r2,'casey','2026-10-01')).terms.length,1,'future term respects its normal release date');

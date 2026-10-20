@@ -14,7 +14,7 @@ export async function onRequestPost(context){
    const watermark=await staffHistoryWatermark(r2),object=await r2.get(STAFF_HISTORY_POINTER),pointer=object?await object.json():null;
    if(pointer?.inputRevision===watermark.inputRevision)return Response.json({status:'unchanged'});
    const descriptor=await describeStaffHistory(r2);
-   return Response.json({status:'ready',descriptor});
+   return Response.json({status:'ready',descriptor,projectionInput:pointer?.projectionInput||''});
   }
   if(['terms','fragment'].includes(input.mode)){
    if((await staffHistoryWatermark(r2)).inputRevision!==input.inputRevision)return Response.json({status:'stale'},{status:409});
@@ -30,6 +30,12 @@ export async function onRequestPost(context){
     if(rows.results.length>512)throw Error('Older staff history evidence exceeds its bounded page.');
     return rows.results.map(row=>({doctorKey:row.doctor_key,displayName:row.display_name,seniority:row.seniority,membershipSource:row.membership_source,contributionCount:1}));
    }})});
+  }
+  if(input.mode==='acknowledge'){
+   const object=await r2.get(STAFF_HISTORY_POINTER),pointer=object?await object.json():null;
+   if(!pointer||!input.projectionInput||pointer.projectionInput!==input.projectionInput||input.inputRevision!==(await staffHistoryWatermark(r2)).inputRevision)return Response.json({status:'stale'},{status:409});
+   const result=await r2.put(STAFF_HISTORY_POINTER,JSON.stringify({...pointer,inputRevision:input.inputRevision}),{httpMetadata:{contentType:'application/json'},onlyIf:{etagMatches:object.etag}});
+   return Response.json({status:result===null?'stale':'unchanged-history',count:pointer.count});
   }
   if(input.mode==='aliases'){
    // Keyset pagination on the existing alias primary key, with one coherent
@@ -64,7 +70,7 @@ export async function onRequestPost(context){
    if(!await reserveRosterMaintenanceBudget(db,0,8))return Response.json({status:'deferred'},{status:503});
    const identity=await db.prepare('SELECT revision FROM roster_identity_revision WHERE id=1').first();
    if(Number(identity.revision)!==input.identityRevision)return Response.json({status:'stale'},{status:409});
-   const pointer={revision:input.revision,inputRevision:descriptor.inputRevision,count:input.count,pages,missing:input.missing||[],preparedAt:new Date().toISOString()};
+   const pointer={revision:input.revision,inputRevision:descriptor.inputRevision,count:input.count,pages,projectionInput:String(input.projectionInput||''),missing:input.missing||[],preparedAt:new Date().toISOString()};
    const old=await r2.get(STAFF_HISTORY_POINTER);
    const result=await r2.put(STAFF_HISTORY_POINTER,JSON.stringify(pointer),{httpMetadata:{contentType:'application/json'},...(old?.etag?{onlyIf:{etagMatches:old.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
    return Response.json({status:result===null?'stale':'complete',count:input.count});
