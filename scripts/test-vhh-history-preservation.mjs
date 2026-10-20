@@ -1,3 +1,5 @@
+import {handleVhhHistoryRequest} from '../functions/_lib/vhh-history-protocol.js';
+import {executeBoundedRosterImport} from './roster-import-driver.mjs';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
@@ -138,3 +140,22 @@ assert.equal(absent.preparing,false);assert.equal(absent.missing[0].reason,'cove
 const broken=await loadPublishedFacilityDays(bucket,['vhh'],'2026-10-19','2026-10-20');
 assert.equal(broken.preparing,true,'missing artifact inside real coverage remains a preparation error');
 console.log('VHH hidden history: bounded gap planning, atomic rollover rollback/retry, no duplicate shifts, grade-preserving archive, overnight boundary and missing-data responses passed.');
+
+// Exercise the actual archive wire handler with ordinary VHH presence enabled.
+// A completed parent's old generation must not block an additive supplement.
+sqlite.prepare("INSERT INTO roster_sources(id,source_type) VALUES(?,'vhh')").run(VHH_ROSTER_SOURCE_ID);
+sqlite.prepare("INSERT INTO raw_roster_files(file_id,name,type,size,last_modified) VALUES('raw-fixture','Active Medical Roster.xlsx','application/json',100,3)").run();
+sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,status,started_at) VALUES('completed-parent',?,'replacement','raw-fixture','success','2026-10-20T00:00:00Z')").run(VHH_ROSTER_SOURCE_ID);
+sqlite.prepare("INSERT INTO roster_term_authority(source_type,term_start,generation,file_id,source_id,content_revision,activated_at) VALUES('vhh','2026-08-03',2,'replacement',?,'fixture','2026-10-20')").run(VHH_ROSTER_SOURCE_ID);
+sqlite.prepare("INSERT INTO roster_authority_fences(run_id,source_type,generations_json) VALUES('completed-parent','vhh',?)").run(JSON.stringify({'2026-08-03':1}));
+const protocolWindow={from:'2026-08-24',to:'2026-08-30'};
+const protocolDigest=await rosterImportDigest(['completed-parent',protocolWindow.from,protocolWindow.to]);
+const protocolPayload=buildVhhDerivedRosterPayload({extract:{sourceId:VHH_ROSTER_SOURCE_ID,fileName:historyFileName(protocolWindow.from,protocolWindow.to),blocks:[block(protocolWindow.from,protocolWindow.to)]},fileId:'vhh-history:'+protocolDigest,contentHash:protocolDigest,lastModified:1});
+const protocolPlan=await attachRosterCompactPlan(await planRosterImportBatches(protocolPayload),protocolPayload);
+await executeBoundedRosterImport(protocolPlan,body=>call(async()=>{
+ const response=await handleVhhHistoryRequest({env:{ROSTER_DB:db,ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED:'true',FACILITY_AUTOMATIC_PUBLICATION_ENABLED:'true'}},{...body,sourceId:VHH_ROSTER_SOURCE_ID,runId:'completed-parent',file:protocolPayload.file,vhhHistory:protocolWindow});
+ const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result;
+}));
+assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_daily_presence WHERE event_id LIKE ?').get(protocolPayload.file.id+':%').n,7,'ordinary VHH recovery preserves the existing presence mode');
+assert.equal(sqlite.prepare("SELECT generation FROM roster_term_authority WHERE source_type='vhh'").get().generation,2);
+console.log('Actual historical wire protocol passed completed-parent generation isolation, source validation, normal presence preparation and disjoint activation.');

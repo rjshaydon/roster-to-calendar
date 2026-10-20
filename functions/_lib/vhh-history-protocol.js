@@ -62,7 +62,11 @@ export async function handleVhhHistoryRequest(context,body) {
           result={prepared:true};
         } else result=await activateBoundedRosterTerm(db,id,body.revision,{publishFacility:automaticFacilityPublicationEnabled(context.env,'vhh'),deliveryGuard:delivery.guard,historySupplement:true});
         break;
-      case 'bounded-finalize': result={completed:true};break;
+      case 'bounded-finalize': {
+        const job=await db.prepare('SELECT compact_ready,activated,plan_revision FROM roster_import_jobs WHERE run_id=?').bind(id).first();
+        if(!job?.compact_ready || job.plan_revision!==body.revision || !body.prepareOnly&&!job.activated) throw Error('Historical completion requires its prepared/activated job.');
+        result={completed:true};break;
+      }
       default: throw Error('Unsupported historical phase.');
     }
     return Response.json({ok:true,...result});
