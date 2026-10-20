@@ -127,10 +127,10 @@ source watermark is acknowledged. Identity export and catalogue rewrites are
 skipped. Cache renewal no longer mistakes a renewed access expiry for an account
 switch, and Show more requests made during a pending fetch are continued.
 
-Initial production acceptance uses `STAFF_HISTORY_ENABLED="creator"`; ordinary
-accounts remain excluded until the live gates pass. Creator context does not
-carry into an entered ordinary account. The normal global setting remains
-`"true"` once released. BUILD is enabled for initial preparation.
+Initial production acceptance used `STAFF_HISTORY_ENABLED="creator"`; after
+passing the live gates, commit `c35a6660` enabled the global setting `"true"`.
+Creator context does not carry into an entered ordinary account. Deployment:
+https://e1561518.roster-to-calendar.pages.dev (production custom domain unchanged).
 
 The targeted history/access/publication/cold-start suites pass. The separate
 older clinician-access suite currently cannot run cleanly against migrations
@@ -138,4 +138,5 @@ alone: it lacks the legacy runtime index `idx_roster_events_file_doctor`; a
 throwaway local schema compatibility run then reaches an older assertion about
 legacy event lookups. No production code or stored data was changed to satisfy
 that legacy fixture. The new endpoint's authorization gates are covered by the
-focused tests; authenticated live acceptance remains required.
+focused tests and the authenticated native cases above; live Creator acceptance
+was completed before release.
