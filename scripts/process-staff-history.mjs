@@ -34,18 +34,20 @@ export async function prepareStaffHistory({request,maxAliasPages=64}){
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'https://roster-to-calendar.pages.dev').replace(/\/$/,''),token=process.env.ROSTER_AUTOMATION_TOKEN;
  if(!token)throw Error('ROSTER_AUTOMATION_TOKEN required.');
- let lastAdmission=0;
+ let lastAdmission=0,lastMode='describe',lastHttpStatus=0;
  try{
  const request=async body=>{
+  lastMode=body.mode;lastHttpStatus=0;
   if(['fragment','aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
    const response=await guardedFetch(process.env,base+'/api/automation/account-budget',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(120000)},{label:'Staff history admission'});
    const value=await response.json();if(!response.ok||value.deferred)throw Error('Staff history preparation deferred.');lastAdmission=Date.now();
   }
   const response=await guardedFetch(process.env,base+'/api/automation/staff-history',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)},{label:'Staff history checkpoint'});
+  lastHttpStatus=response.status;
   if(!response.ok)throw Error('Staff history preparation deferred or superseded.');
   const value=await response.json();if(['stale','deferred'].includes(value.status))throw Error('Staff history preparation deferred or superseded.');return value;
  };
  const result=process.argv.includes('--dispatch')?await request({mode:'enqueue'}):await prepareStaffHistory({request});
  console.log(JSON.stringify({event:'staff-history',status:result.status,count:result.count}));
- }catch{console.log(JSON.stringify({event:'staff-history',status:'deferred'}));process.exitCode=1;}
+ }catch{console.log(JSON.stringify({event:'staff-history',status:'deferred',mode:lastMode,httpStatus:lastHttpStatus}));process.exitCode=1;}
 }

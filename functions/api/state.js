@@ -2556,6 +2556,7 @@ async function handleAccountStateRequest(context) {
     }
 
     if (action === "queryFacilityStaffHistory") {
+      setRequestOperationPhase(context,body?.mode === 'histories' ? 'histories' : 'names');
       const access = await facilityOverviewAccess();
       const subject = facilityOverviewSubject && {...facilityOverviewSubject.record, role:facilityOverviewSubject.role};
       if (!facilityOverviewEnabled() || !staffHistoryAccessAllowed(subject,access)) return facilityOverviewAccessDeniedResponse(access);

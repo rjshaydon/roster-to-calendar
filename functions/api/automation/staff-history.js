@@ -8,6 +8,7 @@ export async function onRequestPost(context){
  if(!env.ROSTER_AUTOMATION_TOKEN||request.headers.get('Authorization')!=='Bearer '+env.ROSTER_AUTOMATION_TOKEN)return Response.json({error:'Unauthorized.'},{status:401});
  if(env.STAFF_HISTORY_BUILD_ENABLED!=='true')return Response.json({status:'disabled'});
  const input=await request.json(),r2=env.ROSTER_FILES,db=env.ROSTER_DB;
+ context.data ||= {};context.data.d1OperationPhase=['enqueue','describe','terms','fragment','aliases','store','finish','acknowledge'].includes(input.mode)?input.mode:'invalid';
  try{
   if(input.mode==='enqueue'){await requestStaffHistoryBuild(context);return Response.json({status:'queued'});}
   if(input.mode==='describe'){
