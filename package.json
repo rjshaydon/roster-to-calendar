@@ -85,6 +85,7 @@
     "test:support-ui": "node --no-warnings scripts/test-support-ui-browser.mjs",
     "test:roster-authority": "node --no-warnings scripts/test-roster-authority.mjs",
     "test:maintenance-diagnostic": "node scripts/test-maintenance-diagnostic.mjs",
+    "test:workflow-reliability": "node scripts/test-workflow-reliability.mjs",
     "test:staff-history": "node --no-warnings scripts/test-staff-history.mjs",
     "test:manual-roster-cache": "node --no-warnings scripts/test-manual-roster-cache.mjs",
     "test:vhh-history": "node --no-warnings scripts/test-vhh-history-preservation.mjs"

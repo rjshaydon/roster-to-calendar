@@ -1,3 +1,4 @@
+import {identityMaintenancePreflight} from './identity-maintenance-preflight.js';
 import {loadCachedSnapshot,storeCachedSnapshot} from './d1-calendar.js';
 const facilityMetadataManifestKey=source=>`facility-overview/v1/${source}/manifest.json`;
 import {rosterTermVisible,melbourneDateKey} from '../../public/static/roster-term-policy.js';
@@ -89,12 +90,22 @@ export async function requestStaffHistoryBuild(context){
  if(env.STAFF_HISTORY_BUILD_ENABLED!=='true'||!env.GITHUB_ACTIONS_TOKEN||!r2?.head)return;
  try{
   const watermark=await staffHistoryWatermark(r2),current=await r2.get(STAFF_HISTORY_POINTER);
-  if(current&&(await current.json()).inputRevision===watermark.inputRevision)return;
+  if(current&&(await current.json()).inputRevision===watermark.inputRevision)return {status:'unchanged'};
   const key=ROOT+'dispatch.json',old=await r2.get(key),state=old?await old.json():{};
-  if(state.until>Date.now())return;
-  const saved=await r2.put(key,JSON.stringify({until:Date.now()+20*60000}),{...(old?.etag?{onlyIf:{etagMatches:old.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});if(saved===null)return;
-  await guardedFetch(env,'https://api.github.com/repos/rjshaydon/roster-to-calendar/actions/workflows/staff-history.yml/dispatches',{method:'POST',headers:{Authorization:'Bearer '+env.GITHUB_ACTIONS_TOKEN,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'roster-to-calendar'},body:JSON.stringify({ref:env.ROSTER_GITHUB_WORKFLOW_REF||'main'}),signal:AbortSignal.timeout(15000)},{label:'Staff history preparation'});
- }catch{console.warn('Staff history preparation deferred.');}
+  if(state.until>Date.now())return {status:'deferred',reason:'build-already-scheduled'};
+  const saved=await r2.put(key,JSON.stringify({until:Date.now()+20*60000}),{...(old?.etag?{onlyIf:{etagMatches:old.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});if(saved===null)return {status:'deferred',reason:'build-already-scheduled'};
+  // Acquire the R2 lease first so repeated publication callbacks do not each
+  // inspect D1 or dispatch a job known to be blocked. The scheduled maintenance
+  // runner revisits changed inputs after imports finish.
+  const preflight=await identityMaintenancePreflight(env.ROSTER_DB,{accountAware:env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'});
+  if(preflight.active_import||Number(preflight.unfinished_count)>=3||!Number(preflight.current_grant)){
+   await r2.put(key,JSON.stringify({until:Date.now()+5*60000}),{onlyIf:{etagMatches:saved.etag}});
+   return {status:'deferred',reason:preflight.active_import?'roster-import-pending':'maintenance-unavailable'};
+  }
+  const response=await guardedFetch(env,'https://api.github.com/repos/rjshaydon/roster-to-calendar/actions/workflows/staff-history.yml/dispatches',{method:'POST',headers:{Authorization:'Bearer '+env.GITHUB_ACTIONS_TOKEN,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'roster-to-calendar'},body:JSON.stringify({ref:env.ROSTER_GITHUB_WORKFLOW_REF||'main'}),signal:AbortSignal.timeout(15000)},{label:'Staff history preparation'});
+  if(!response.ok)throw Error('Staff history dispatch failed.');
+  return {status:'queued'};
+ }catch{console.warn('Staff history preparation deferred.');return {status:'deferred',reason:'dispatch-unavailable'};}
 }
 export function scheduleStaffHistoryBuild(context){if(context.env.STAFF_HISTORY_BUILD_ENABLED==='true'&&context.waitUntil)context.waitUntil(requestStaffHistoryBuild(context));}
 

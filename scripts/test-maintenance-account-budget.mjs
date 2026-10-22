@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { maintenanceReceiptSummary } from "../functions/_lib/maintenance-receipt-summary.js";
 import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions/_lib/account-maintenance-policy.js";
-import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant, currentOptionalMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
+import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant, currentOptionalMaintenanceGrant, currentOptionalMaintenanceGrantDetails } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
 import { onRequestPost as identityMaintenance } from "../functions/api/automation/identity-maintenance.js";
@@ -125,8 +125,15 @@ try {
   globalThis.fetch=async()=>{throw Error('A reused grant must not fetch analytics');};
   const reused=await (await admit({...context,request:new Request(context.request.url,{method:'POST',headers:{Authorization:'Bearer test-only'},body:JSON.stringify({reuseCurrentGrant:true})})})).json();
   assert.equal(reused.reused,true);
+  assert.equal(reused.validUntil,sqlite.prepare('SELECT valid_until FROM roster_account_budget WHERE utc_day=?').get(day).valid_until,'reuse exposes the original expiry');
+  assert.equal(await currentOptionalMaintenanceGrantDetails(database(),new Date(Date.parse(reused.validUntil)-30000),60000),null,'nearly expired grants are not reused for long-running work');
   assert.deepEqual(sqlite.prepare("SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes FROM roster_account_budget WHERE utc_day=?").get(day),beforeReuse,'reuse cannot grant additional headroom');
   globalThis.fetch=actualFetch;
+  sqlite.prepare("UPDATE roster_account_budget SET valid_until=? WHERE utc_day=?").run(new Date(Date.now()+30000).toISOString(),day);
+  const renewed=await (await admit({...context,request:new Request(context.request.url,{method:"POST",headers:{Authorization:"Bearer test-only"},body:JSON.stringify({reuseCurrentGrant:true})})})).json();
+  assert.equal(renewed.reused,undefined,"a nearly expired allowance requires fresh analytics instead of reuse");
+  assert.equal(renewed.deferred,false);
+  assert.ok(Date.parse(renewed.budget.validUntil)>Date.now()+60000);
   // A reservation interleaving the snapshot's two reads must prevent stale
   // headroom being applied. The previous grant remains atomically consumed.
   const raceDb = database(), racer = database();

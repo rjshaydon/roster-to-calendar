@@ -1,7 +1,39 @@
+import {appendFile} from 'node:fs/promises';
+import {createMaintenanceAdmission} from './automation-checkpoint-client.mjs';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {buildStaffHistoryCatalogue,STAFF_HISTORY_PAGE,STAFF_HISTORY_SHARD} from '../public/static/staff-history.js';
 import {guardedFetch} from '../functions/_lib/outbound-network.js';
+export class StaffHistoryDeferred extends Error {
+ constructor(status='deferred',mode='',httpStatus=200){super('Staff history preparation postponed.');this.status=status;this.mode=mode;this.httpStatus=httpStatus;}
+}
+export function createStaffHistoryRequest({base,token,fetch=guardedFetch,env=process.env,now=Date.now}) {
+ let lastMode='',lastHttpStatus=0;
+ const post=async(path,body)=>{
+  lastMode=body.mode||'admission';lastHttpStatus=0;
+  const response=await fetch(env,base+path,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)},{label:'Staff history checkpoint'});
+  lastHttpStatus=response.status;
+  const value=await response.json();
+  const expected=value.status==='stale'&&[200,409].includes(response.status)||value.status==='deferred'&&[200,503].includes(response.status);
+  if(expected)throw new StaffHistoryDeferred(value.status,lastMode,lastHttpStatus);
+  if(!response.ok)throw Error('Staff history checkpoint failed.');
+  return value;
+ };
+ const admission=createMaintenanceAdmission({request:body=>post('/api/automation/account-budget',body),now});
+ const request=async body=>{
+  if(['repair-grades','fragment','aliases','finish'].includes(body.mode)){
+   const value=await admission();
+   if(value.deferred||value.paused)throw new StaffHistoryDeferred('deferred','admission',200);
+  }
+  return post('/api/automation/staff-history',body);
+ };
+ request.diagnostic=()=>({mode:lastMode,httpStatus:lastHttpStatus});
+ return request;
+}
+export async function runStaffHistory({request,dispatch=false}) {
+ try{return dispatch?await request({mode:'enqueue'}):await prepareStaffHistory({request});}
+ catch(error){if(error instanceof StaffHistoryDeferred)return {status:error.status,mode:error.mode,httpStatus:error.httpStatus};throw error;}
+}
 export async function prepareStaffHistory({request,maxAliasPages=64,repairPass=0}){
  const initial=await request({mode:'describe'});if(['unchanged','disabled','deferred'].includes(initial.status))return initial;
  const {descriptor}=initial,fragments=[],missing=[...descriptor.missing],terms=[];
@@ -12,7 +44,8 @@ export async function prepareStaffHistory({request,maxAliasPages=64,repairPass=0
   if(!fragment.missing&&fragment.members.some(m=>!m.grade||['unknown','not recorded'].includes(m.grade.toLowerCase()))){
    let repaired;for(let step=0;step<128;step++){repaired=await request({mode:'repair-grades',sourceType:term.sourceType,termStart:term.termStart,staffRevision:term.staffRevision});if(repaired.status!=='continue')break;}
    if(repaired.status==='source-repaired'){if(repairPass>=16)throw Error('Grade repair restart limit.');return prepareStaffHistory({request,maxAliasPages,repairPass:repairPass+1});}
-   if(repaired.status!=='complete')throw Error('Grade repair deferred.');
+   if(['deferred','stale'].includes(repaired.status))throw new StaffHistoryDeferred(repaired.status,'repair-grades');
+   if(repaired.status!=='complete')throw Error('Unexpected grade repair result.');
   }
   if(fragment.missing)missing.push({sourceType:term.sourceType,termStart:term.termStart,reason:'staff-unavailable'});else fragments.push(fragment);
  }
@@ -39,20 +72,13 @@ export async function prepareStaffHistory({request,maxAliasPages=64,repairPass=0
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'https://roster-to-calendar.pages.dev').replace(/\/$/,''),token=process.env.ROSTER_AUTOMATION_TOKEN;
  if(!token)throw Error('ROSTER_AUTOMATION_TOKEN required.');
- let lastAdmission=0,lastMode='describe',lastHttpStatus=0;
+ const request=createStaffHistoryRequest({base,token});
  try{
- const request=async body=>{
-  lastMode=body.mode;lastHttpStatus=0;
-  if(['repair-grades','fragment','aliases','finish'].includes(body.mode)&&Date.now()-lastAdmission>300000){
-   const response=await guardedFetch(process.env,base+'/api/automation/account-budget',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(120000)},{label:'Staff history admission'});
-   const value=await response.json();if(!response.ok||value.deferred)throw Error('Staff history preparation deferred.');lastAdmission=Date.now();
-  }
-  const response=await guardedFetch(process.env,base+'/api/automation/staff-history',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)},{label:'Staff history checkpoint'});
-  lastHttpStatus=response.status;
-  if(!response.ok)throw Error('Staff history preparation deferred or superseded.');
-  const value=await response.json();if(['stale','deferred'].includes(value.status))throw Error('Staff history preparation deferred or superseded.');return value;
- };
- const result=process.argv.includes('--dispatch')?await request({mode:'enqueue'}):await prepareStaffHistory({request});
- console.log(JSON.stringify({event:'staff-history',status:result.status,count:result.count}));
- }catch{console.log(JSON.stringify({event:'staff-history',status:'deferred',mode:lastMode,httpStatus:lastHttpStatus}));process.exitCode=1;}
+  const result=await runStaffHistory({request,dispatch:process.argv.includes('--dispatch')});
+  console.log(JSON.stringify({event:'staff-history',status:result.status,count:result.count,mode:result.mode,httpStatus:result.httpStatus}));
+  if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,`Staff history: ${result.status}. Existing published history remains available.\n`);
+ }catch{
+  console.error(JSON.stringify({event:'staff-history',status:'failed',...request.diagnostic()}));
+  process.exitCode=1;
+ }
 }

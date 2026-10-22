@@ -12,10 +12,15 @@ export async function onRequestPost(context){
  context.data ||= {};context.data.d1OperationPhase=['repair-grades','enqueue','describe','terms','fragment','aliases','store','finish','acknowledge'].includes(input.mode)?input.mode:'invalid';
  try{
   if(input.mode==='repair-grades')return Response.json(await repairStaffGrades(context,input));
-  if(input.mode==='enqueue'){await requestStaffHistoryBuild(context);return Response.json({status:'queued'});}
+  if(input.mode==='enqueue')return Response.json(await requestStaffHistoryBuild(context)||{status:'disabled'});
   if(input.mode==='describe'){
    const watermark=await staffHistoryWatermark(r2),object=await r2.get(STAFF_HISTORY_POINTER),pointer=object?await object.json():null;
    if(pointer?.inputRevision===watermark.inputRevision)return Response.json({status:'unchanged'});
+   const preflight=await identityMaintenancePreflight(db,{accountAware:env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'});
+   // Description is R2-only after this preflight. A manual runner can renew
+   // an expired grant before its first fragment; absence of a grant must not
+   // prevent it from reaching that admission step.
+   if(preflight.active_import||Number(preflight.unfinished_count)>=3)return Response.json({status:'deferred',reason:preflight.active_import?'roster-import-pending':'maintenance-unavailable'});
    const descriptor=await describeStaffHistory(r2);
    return Response.json({status:'ready',descriptor,projectionInput:pointer?.projectionInput||''});
   }
@@ -27,7 +32,7 @@ export async function onRequestPost(context){
    if(!term)throw Error('Unknown published term.');
    return Response.json({fragment:await readStaffHistoryFragment(r2,term,{loadEvidence:async()=>{
     const preflight=await identityMaintenancePreflight(db,{accountAware:env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'});
-    if(preflight.active_import||Number(preflight.unfinished_count)>=3||!Number(preflight.current_grant)||!await reserveRosterMaintenanceBudget(db,0,65536))throw Error('Older staff history evidence deferred.');
+    if(preflight.active_import||Number(preflight.unfinished_count)>=3||!Number(preflight.current_grant)||!await reserveRosterMaintenanceBudget(db,0,65536))throw Object.assign(Error('Older staff history evidence deferred.'),{code:'STAFF_HISTORY_DEFERRED'});
     const rows=await db.prepare(`SELECT c.doctor_key,c.display_name,c.seniority,c.membership_source FROM facility_term_staff_contributions c
      JOIN roster_files f ON f.id=c.file_id AND f.active=1 WHERE c.source_type=? AND c.term_start=? LIMIT 513`).bind(term.sourceType,term.termStart).all();
     if(rows.results.length>512)throw Error('Older staff history evidence exceeds its bounded page.');
@@ -90,7 +95,8 @@ export async function onRequestPost(context){
    return Response.json({status:result===null?'stale':'complete',count:input.count});
   }
   throw Error('Invalid staff history operation.');
- }catch{
+ }catch(error){
+  if(error.code==='STAFF_HISTORY_DEFERRED')return Response.json({status:'deferred'},{status:503});
   console.warn(JSON.stringify({event:'staff-history',mode:input.mode,status:'interrupted'}));
   return Response.json({error:'Staff history preparation interrupted.'},{status:500});
  }

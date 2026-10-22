@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {staffHistoryResponse} from '../functions/api/state.js';
 import {buildStaffHistoryCatalogue,matchesStaffHistory,coalesceStaffHistory,createStaffHistoryClient,staffHistoryTermRange} from '../public/static/staff-history.js';
 import {prepareStaffHistory} from './process-staff-history.mjs';
-import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark,staffHistoryEnabledFor} from '../functions/_lib/staff-history-cache.js';
+import {readStaffHistoryView,staffHistoryAccessAllowed,STAFF_HISTORY_POINTER,staffHistorySourceTerms,staffHistoryWatermark,staffHistoryEnabledFor,requestStaffHistoryBuild} from '../functions/_lib/staff-history-cache.js';
 import {onRequestPost} from '../functions/api/automation/staff-history.js';
 import {storeCachedSnapshot} from '../functions/_lib/d1-calendar.js';
 class R2 {
@@ -48,7 +48,7 @@ assert.equal((await readStaffHistoryView(r2,{mode:'names',cachedRevision:names.r
 // new source watermark without any identity queries or catalogue rewrites.
 const sourceObject=r2.objects.get('facility-overview/v1/mmc/manifest.json');sourceObject.etag='synthetic-day-only-update';
 const beforeAcknowledge=db.sql.length,putsBeforeAcknowledge=r2.puts;
-assert.equal((await prepareStaffHistory({request})).status,'unchanged-history');assert.equal(db.sql.length,beforeAcknowledge);assert.equal(r2.puts,putsBeforeAcknowledge+1);assert.equal((await readStaffHistoryView(r2,{mode:'names',cachedRevision:names.revision},today)).unchanged,true);
+assert.equal((await prepareStaffHistory({request})).status,'unchanged-history');assert.equal(db.sql.length,beforeAcknowledge+1,'changed inputs perform only the bounded admission preflight before semantic acknowledgement');assert.equal(r2.puts,putsBeforeAcknowledge+1);assert.equal((await readStaffHistoryView(r2,{mode:'names',cachedRevision:names.revision},today)).unchanged,true);
 
 assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'all',isSms:true}),true);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:true},{mode:'sites',isSms:false}),false);assert.equal(staffHistoryAccessAllowed({role:'user',facilityOverviewEnabled:false},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'user',nonClinical:true,facilityOverviewEnabled:true},{mode:'all',isSms:true}),false);assert.equal(staffHistoryAccessAllowed({role:'creator'},{mode:'all'}),true);
 // A changed identity marker invalidates the coherent catalogue before new data
@@ -152,3 +152,23 @@ await r2.put(`staff-history/v1/${currentPointer.revision}/manifest.json`,JSON.st
 await r2.put(STAFF_HISTORY_POINTER,JSON.stringify({...currentPointer,revision:'b'.repeat(64)}));
 assert.equal((await readStaffHistoryView(r2,{mode:'names',revision:currentPointer.revision,page:0},today)).revision,currentPointer.revision);
 await r2.put(STAFF_HISTORY_POINTER,JSON.stringify(currentPointer));
+
+// Dispatch coalesces behind pending imports instead of starting runners which
+// will immediately postpone grade repair. The lease also bounds preflight SQL.
+const originalFetch=globalThis.fetch;let dispatches=0;
+try{
+ globalThis.fetch=async()=>{dispatches++;return new Response(null,{status:204});};
+ const dispatchEnv={...env,GITHUB_ACTIONS_TOKEN:'synthetic'};
+ await r2.put('identity/revision.json',JSON.stringify({revision:'dispatch-test'}));
+ sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,status,started_at)VALUES('dispatch-pending','monash-adults','queued',?)").run(now);
+ const before=db.sql.length;
+ assert.equal((await requestStaffHistoryBuild({env:dispatchEnv})).reason,'roster-import-pending');
+ assert.equal(dispatches,0);assert.equal(db.sql.length,before+1);
+ await requestStaffHistoryBuild({env:dispatchEnv});assert.equal(db.sql.length,before+1,'live lease avoids repeated D1 checks');
+ const postponed=await request({mode:'describe'});assert.equal(postponed.status,'deferred','manual preparation also stops before exporting fragments');
+ sqlite.prepare("UPDATE roster_sync_runs SET status='success' WHERE id='dispatch-pending'").run();
+ r2.objects.delete('staff-history/v1/dispatch.json');
+ assert.equal((await requestStaffHistoryBuild({env:dispatchEnv})).status,'queued');assert.equal(dispatches,1);
+ await requestStaffHistoryBuild({env:dispatchEnv});assert.equal(dispatches,1,'only one resumed build is dispatched');
+}finally{globalThis.fetch=originalFetch;}
+console.log('Staff history defers before blocked work, coalesces dispatch and resumes after imports.');

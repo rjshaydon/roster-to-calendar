@@ -1,3 +1,4 @@
+import {createMaintenanceAdmission,isReadOnlyPatchPage,retryablePatchReadFailure,retryPatchRead} from './automation-checkpoint-client.mjs';
 import {preserveVhhHistory} from './process-vhh-history.mjs';
 import {drainRosterPublication} from './roster-publication-driver.mjs';
 import {publishDoctorSource} from './process-doctor-source.mjs';
@@ -27,13 +28,13 @@ const recoverVhhHistory=process.env.ROSTER_RECOVER_VHH_HISTORY==='true';
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 
-const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: { reuseCurrentGrant: true } });
+const accountAdmission=createMaintenanceAdmission({request:body=>automationRequest("/api/automation/account-budget",{method:"POST",body})});
+const admission = await accountAdmission();
 if (admission.deferred || admission.paused) {
   console.log("Account budget deferred; queued work retained.");
   await processorOutcome('deferred');
   process.exit(0);
 }
-let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 if(pending.maintenanceDeferred&&!publicationOnly){console.log('Insufficient usable maintenance headroom; retained work left untouched before parsing.');await processorOutcome('deferred');process.exit(0);}
 let runs = Array.isArray(pending.runs) ? pending.runs : [];
@@ -216,7 +217,7 @@ async function processRun(run) {
     }
     if (finished.deferred) {
       processorDeferred=true;
-      console.log("Import write allowance exhausted; queued progress retained for automatic continuation.");
+      console.log("Roster import deferred by maintenance safeguards; queued progress retained for automatic continuation.");
       return;
     }
   }
@@ -245,14 +246,26 @@ async function postDerived(run, payload, phase, doctors, eventsByDoctor, issuesB
 }
 
 async function automationRequest(path, options = {}) {
-  if (path !== "/api/automation/account-budget" && Date.now() - lastAccountAdmission > 5 * 60 * 1000) {
-    const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: { reuseCurrentGrant: true } });
-    lastAccountAdmission = Date.now();
-    if (admission.deferred || admission.paused) return { ok: true, deferred: true, maintenanceDeferred: true };
+  if(path!=="/api/automation/account-budget") {
+    const admission=await accountAdmission();
+    if(admission.deferred||admission.paused)return {ok:true,deferred:true,maintenanceDeferred:true};
   }
+  if(!isReadOnlyPatchPage(path,options.body))return automationRequestAttempt(path,options);
+  const read=()=>retryPatchRead(()=>automationRequestAttempt(path,options));
+  const result=await read();
+  if(!result.deferred)return result;
+  // Expiry can race a callback even after the local deadline check. Renew
+  // once, then retry only this read. A real budget deferral still stops work.
+  const admission=await accountAdmission({force:true});
+  if(admission.deferred||admission.paused)return result;
+  return read();
+}
+
+async function automationRequestAttempt(path,options) {
+  const readOnly=isReadOnlyPatchPage(path,options.body);
   const headers = { ...authorizationHeaders(), ...(options.body ? { "Content-Type": "application/json" } : {}) };
   let lastError = null;
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  for (let attempt = 1; attempt <= (readOnly?1:6); attempt += 1) {
     try {
       const response = await guardedFetch(process.env, `${baseUrl}${path}`, {
         method: options.method || "GET",
@@ -267,7 +280,7 @@ async function automationRequest(path, options = {}) {
         // An uncertain derived callback is not retried in this pass. Keep
         // its durable cursor for a later invocation; other reads may retry.
         lastError = new Error(`Automation endpoint returned non-JSON HTTP ${response.status || 502}.`);
-        if (path === "/api/automation/derived") break;
+        if (path === "/api/automation/derived") {lastError.retryablePatchRead=readOnly&&(response.ok||retryablePatchReadFailure(response.status));break;}
         if (attempt < 6) {
           await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
           continue;
@@ -280,9 +293,11 @@ async function automationRequest(path, options = {}) {
       lastError = new Error(`${path} source=${sourceId} phase=${String(result.mode||options.body?.phase||'publication')} ${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
       lastError.code = String(result.code || '');
       lastError.boundedReplacementRequired = result.boundedReplacementRequired === true;
+      lastError.retryablePatchRead=readOnly&&retryablePatchReadFailure(response.status,result);
       if (path === "/api/automation/derived" || ![408, 429, 500, 502, 503, 504].includes(response.status)) break;
     } catch (error) {
       lastError = error;
+      if(path==="/api/automation/derived"){lastError.retryablePatchRead=readOnly;break;}
     }
     await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
   }

@@ -3,7 +3,7 @@ import { maintenanceReceiptSummary } from '../../_lib/maintenance-receipt-summar
 import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
 import { accountMaintenanceHeadroom, ACCOUNT_MAINTENANCE_POLICY } from "../../_lib/account-maintenance-policy.js";
-import { stopAccountMaintenance, recoverAbandonedMaintenance, currentOptionalMaintenanceGrant } from "../../_lib/roster-maintenance-budget.js";
+import { stopAccountMaintenance, recoverAbandonedMaintenance, currentOptionalMaintenanceGrantDetails } from "../../_lib/roster-maintenance-budget.js";
 
 export async function onRequestPost(context) {
   const token = String(context.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -12,9 +12,10 @@ export async function onRequestPost(context) {
   const input = await context.request.json().catch(() => ({}));
   // Reuse only the same unexpired, SQL-enforced allocation. This cannot add
   // headroom or skip the unfinished-work gate, and expires after ten minutes.
-  if (input.reuseCurrentGrant === true && context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true"
-    && await currentOptionalMaintenanceGrant(context.env.ROSTER_DB)) {
-    return Response.json({ ok: true, reused: true, deferred: false });
+  if (input.reuseCurrentGrant === true && context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true") {
+    // Do not hand a long-running processor an allocation about to expire.
+    const grant=await currentOptionalMaintenanceGrantDetails(context.env.ROSTER_DB,new Date(),60000);
+    if(grant)return Response.json({ ok: true, reused: true, deferred: false, validUntil:grant.validUntil });
   }
   return refreshAccountMaintenanceBudget(context);
 }
