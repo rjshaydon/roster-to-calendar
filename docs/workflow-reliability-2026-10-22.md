@@ -43,3 +43,24 @@ stale fences; queue failure reporting; roster delivery reliability; cold routes.
 The pre-deployment read-only account diagnostic at 15:11 Melbourne returned GO:
 632,520 reads, 13,476 writes (settled through 14:56). Daily safeguards remain
 4,000,000 reads / 100,000 writes, with protected publication capacity.
+
+## Production acceptance
+
+Runtime commit `9b5d287e` was pushed to main and deployed to Pages deployment
+`cbb3eca8`. Both the custom domain and Pages domain reject unauthenticated
+account-budget and staff-history POSTs with HTTP 401.
+
+Normal MMC workflow `39716501541` recovered before deployment: Term 3 imported
+163 doctors / 4,206 events at 14:28 Melbourne and the processor reported completed
+at 14:29. Read-only D1 verification found no source last_error for any of the four
+sites and no unfinished facility publication jobs. Older superseded queue records
+were preserved; they were not deleted or mistaken for a fresh failed import.
+
+Post-deployment staff-history workflow `39721402181` ran the new commit twice.
+Both attempts succeeded while honestly reporting expected postponement: first
+at admission, then at describe. This verifies the false failure-email fix, not a
+newly completed history generation. The previous published history remains
+available and normal maintenance/publication triggers will revisit changed inputs.
+A follow-up read found no persistent account stop, roughly 1.65 million reads /
+70,261 writes of current grant headroom, and two unfinished receipt reservations.
+No safeguards were bypassed to force the optional rebuild.
