@@ -1,5 +1,7 @@
 # Feature restoration register
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 The next work follows the [4 October batch plan](./restoration-batch-plan-2026-10-04.md).
 The 2 October release section below predates completed Working together/history,
 VHH gap recovery and the DDH five-minute scheduler; consult the 3 October

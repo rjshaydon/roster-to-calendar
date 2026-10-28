@@ -1,5 +1,7 @@
 # MMC Term 4 staging repair — 19 October 2026
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 ## Diagnosis
 
 The five-minute Power Automate reconciliation is enabled and its runs succeed.

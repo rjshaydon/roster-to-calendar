@@ -1,5 +1,7 @@
 # Roster publication and delivery repair — resume on Medium
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 Status: implementation tested; production acceptance pending below.
 The original planning turn changed no application code, deployment, flow setting or retry. Resume only when the user returns after
 the usage reset. Do not create an automation or wake-up for this pause.

@@ -1,5 +1,7 @@
 # All EDs staff-history search — 19 October 2026
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 Status: implemented, merged and accepted on production on 20 October 2026.
 See the implementation checkpoint for release and validation evidence.
 This is a focused addition before restoration Batch 4, not a renumbering.

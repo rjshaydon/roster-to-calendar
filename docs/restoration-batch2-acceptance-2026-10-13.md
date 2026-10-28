@@ -1,5 +1,7 @@
 # Batch 2 production acceptance — 13 October 2026 (Melbourne)
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 ## Current status
 
 The prepared app-calendar reader is enabled in production. Commit `11580ca1`

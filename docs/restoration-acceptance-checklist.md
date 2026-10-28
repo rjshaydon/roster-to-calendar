@@ -1,5 +1,7 @@
 # Restoration acceptance — 2 October 2026
 
+> Current status: see the [28 October consolidated status](restoration-status-2026-10-28.md). Earlier pending steps and budget snapshots below are dated evidence, not fresh rollout instructions.
+
 Implementation and release evidence lives in
 [bounded-roster-import-checkpoint.md](./bounded-roster-import-checkpoint.md).
 This checklist separates remaining user checks from already deployed features.
