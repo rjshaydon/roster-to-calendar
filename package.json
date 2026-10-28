@@ -26,6 +26,7 @@
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
     "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-name-matching": "node --no-warnings scripts/test-contact-name-matching.mjs",
+    "test:who-clinical-support": "node scripts/test-who-clinical-support.mjs",
     "test:on-shift-all-staff": "node --no-warnings scripts/test-on-shift-all-staff.mjs && node scripts/test-shift-launch-window.mjs",
     "test:overview-defaults": "node scripts/test-overview-opening.mjs && node scripts/test-overview-defaults-and-night.mjs",
     "test:ddh-night-review": "node --no-warnings scripts/test-ddh-night-review.mjs",

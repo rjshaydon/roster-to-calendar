@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import XLSX from "xlsx";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
-import { buildRosterView, doctorOptions, parseUploadForm, filterCalendarRosterEvents, normalizeOrientationRosterEvent } from "../public/static/roster.js";
+import { buildRosterView, doctorOptions, parseUploadForm, filterCalendarRosterEvents, normalizeOrientationRosterEvent, clinicalSupportRosterMode } from "../public/static/roster.js";
 const mmcInternWorkbook = XLSX.utils.book_new();
 const mmcInternRows = Array.from({ length: 10 }, () => []);
 mmcInternRows[2] = ["Role", "Pager No", "", "Cost Centre", "Name (Not Used)", "Emp No", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -33,7 +33,7 @@ assert.ok(aaronInternEvents.some((event) => event.title === "MMC: Swing AM" && e
 
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 const teamFunction = app.slice(app.indexOf('function whoTeamLabel('), app.indexOf('function whoTeamRank('));
-const team = runInNewContext(`(${teamFunction.split('function cleanWhoSourceTitle')[0].trim()})`, {cleanWhoSourceTitle: title => title.replace(/^MMC:\s*/, '')});
+const team = runInNewContext(`(${teamFunction.split('function cleanWhoSourceTitle')[0].trim()})`, {clinicalSupportRosterMode,cleanWhoSourceTitle: title => title.replace(/^MMC:\s*/, '')});
 assert.equal(team(normalizeOrientationRosterEvent(cachedOrientation)), 'Orientation');
 assert.ok(app.includes('function buildWhoAssignment(doctor, metadata, event) {\n  event = normalizeOrientationRosterEvent(event);'), 'On shift and Working together must normalize cached entries before grouping');
 console.log('MMC orientation: timed/untimed parser, cached calendar, On shift grouping, grade/time preservation and source/code isolation passed.');

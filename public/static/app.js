@@ -6311,6 +6311,9 @@ function whoPeriodRank(period) {
 }
 
 function whoTeamLabel(event) {
+  // Preserve CS (including its onsite/office/exam title) before matching
+  // clinical streams. "Clinical Support" must never match MMC's Clinic.
+  if (clinicalSupportRosterMode(event)) return cleanWhoSourceTitle(event.title || "Clinical Support");
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
   if (text.includes("physiotherapist") || /\bphysio\b/.test(text) || text.includes("nurse practitioner") || /\b(?:enp|np|d1)\b/.test(text)) return "Fast Track";
   if (text.includes("avao")) return "AVAO";
@@ -6320,7 +6323,7 @@ function whoTeamLabel(event) {
   if (text.includes("silver")) return "Silver";
   if (text.includes("resus")) return "Resus";
   if (text.includes("float") || text.includes("rover")) return "Float";
-  if (text.includes("clinic")) return "Clinic";
+  if (/\bclinic\b/.test(text)) return "Clinic";
   if (text.includes("fast")) return "Fast Track";
   if (text.includes("ssu")) return "SSU";
   if (text.includes("hith")) return "HITH";
