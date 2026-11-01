@@ -604,6 +604,7 @@ async function handleAccountStateRequest(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
+        subscription: prepared.subscription,
         calendarRevision: snapshotPayload.calendarRevision,
         snapshot: snapshotPayload.snapshot,
         snapshotCurrent: snapshotPayload.snapshotCurrent === true,
@@ -638,7 +639,6 @@ async function handleAccountStateRequest(context) {
         responsePayload.nameMatches = prepared.nameMatches;
         responsePayload.suggestedClaims = prepared.nameMatches;
         responsePayload.availableDoctors = prepared.availableDoctors;
-        responsePayload.subscription = prepared.subscription;
         responsePayload.issueConfig = prepared.issueConfig;
       } else if (body?.diagnostics !== false) {
         responsePayload.diagnostics = {
@@ -4130,7 +4130,10 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     // The client hydrates it immediately after the fast login response, so it
     // must not be allowed to turn authentication into a 503.
     availableDoctors: [],
-    subscription: null,
+    subscription: {
+      token: String(record.subscriptionToken || ""),
+      enabled: Boolean(record.subscriptionToken),
+    },
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     facilityOverviewAccess,

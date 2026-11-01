@@ -9201,7 +9201,7 @@ async function handleExportAction(action) {
     return;
   }
   try {
-    if (currentSnapshotStale) {
+    if (action === "download" && currentSnapshotStale) {
       setStatus("Refreshing calendar...");
       await refreshSnapshotInBackground();
     }
@@ -18401,6 +18401,7 @@ function applyCloudStateIdentity(data) {
   currentAdvancedRosterRecoveryEnabled = data.advancedRosterMaintenanceEnabled === true;
   if('identityReviewEnabled' in data) currentIdentityReviewEnabled=data.identityReviewEnabled===true;
   cloudAvailable = data.cloudAvailable === true;
+  currentSubscription = sanitizeSubscription(data.subscription);
   if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
