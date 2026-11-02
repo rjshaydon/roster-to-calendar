@@ -78,9 +78,10 @@ export async function planRosterPatch(payload,baseline,stored,options={}) {
   return {manifest,batches,patchRevision:await rosterImportDigest(manifest)};
 }
 export async function executeRosterPatch(payload,baseline,callback) {
+  if(baseline.deferred||baseline.completed)return baseline;
   if (!baseline.baselineRevision) {
     baseline = await callback({phase:'bounded-patch-start',targetFileId:baseline.fileId});
-    if(baseline.deferred) return baseline;
+    if(baseline.deferred||baseline.completed) return baseline;
   }
   if(baseline.activated) return callback({phase:"bounded-finalize",patchRevision:baseline.patchRevision});
   const presenceMode=baseline.presenceMode;
@@ -89,7 +90,7 @@ export async function executeRosterPatch(payload,baseline,callback) {
     const rows=[];let after='';
     do {
       const page=await callback({phase:'bounded-patch-page',section,after});
-      if(page.deferred) return page;
+      if(page.deferred||page.completed) return page;
       rows.push(...page.rows);after=page.next;
       if(rows.length>limit) throw Error('Retained patch facts exceed the inspection limit.');
     } while(after);
@@ -97,10 +98,10 @@ export async function executeRosterPatch(payload,baseline,callback) {
   }
   const plan=await planRosterPatch(payload,baseline,stored,{presenceMode});
   const pinned=await callback({phase:'bounded-patch-plan',manifest:plan.manifest,patchRevision:plan.patchRevision});
-  if(pinned.deferred) return pinned;
+  if(pinned.deferred||pinned.completed) return pinned;
   for(const batch of plan.batches.slice(Number(pinned.nextBatch||0))) {
     const result=await callback({phase:'bounded-patch-stage',batch,patchRevision:plan.patchRevision});
-    if(result.deferred) return result;
+    if(result.deferred||result.completed) return result;
   }
   const activated=await callback({phase:'bounded-patch-activate',patchRevision:plan.patchRevision,deferCompletion:true});
   if(activated.deferred || activated.completed)return activated;

@@ -222,6 +222,10 @@ async function processRun(run) {
     }
   }
   finished ||= await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
+  if(finished.superseded){
+    console.log(`Skipped older ${processedFileName}: a newer roster delivery is queued or imported.`);
+    return;
+  }
   if (finished.deferred) {
     processorDeferred=true;
     console.log("Roster correction deferred by the shared maintenance budget; existing calendars retained.");

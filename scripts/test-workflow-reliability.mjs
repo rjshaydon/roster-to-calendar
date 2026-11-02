@@ -59,6 +59,7 @@ const preload=`
    }
    if(body.phase==='bounded-patch-page'){
     pages.push(body.after||'');
+    if(process.env.CHECKPOINT_SCENARIO==='superseded')return Response.json({ok:true,completed:true,superseded:true,doctorCount:0,eventCount:0});
     if(process.env.CHECKPOINT_SCENARIO==='stale')return Response.json({error:'D1_ERROR: malformed JSON: SQLITE_ERROR'},{status:422});
     if(pages.length===1)return Response.json({error:'D1_ERROR: Network connection lost.'},{status:422});
     if(!body.after)return Response.json({rows:[],next:'cursor-1'});
@@ -68,7 +69,7 @@ const preload=`
   throw Error('Unexpected synthetic checkpoint '+path+' '+body.phase);
  };
 `;
-for(const scenario of ['read-recovered','stale','write-lost']){
+for(const scenario of ['read-recovered','stale','write-lost','superseded']){
  const child=spawnSync(process.execPath,['--input-type=module','--eval',preload+"\ntry{await import('./scripts/process-roster-queue.mjs');process.exit(0);}catch(error){console.error(error.message);process.exit(1);}"],{
   encoding:'utf8',timeout:30000,env:{PATH:process.env.PATH,ROSTER_AUTOMATION_TOKEN:'synthetic',ROSTER_AUTOMATION_SOURCE_ID:'monash-adults',ROSTER_AUTOMATION_BASE_URL:'https://test.invalid',CHECKPOINT_SCENARIO:scenario}
  });
@@ -77,6 +78,9 @@ for(const scenario of ['read-recovered','stale','write-lost']){
  const state=JSON.parse(line.slice('CHECKPOINT_TEST:'.length));assert.equal(state.raw,1,'a same-run retry does not download or parse the workbook again');
  if(scenario==='read-recovered'){
   assert.equal(child.status,0,child.stderr);assert.deepEqual(state.pages,['','','cursor-1','cursor-1']);assert.equal(state.admissions,2,'read deferral refreshes admission once then retains progress');
+ }else if(scenario==='superseded'){
+  assert.equal(child.status,0,child.stderr);assert.equal(state.pages.length,1);
+  assert.match(child.stdout,/Skipped older/);assert.doesNotMatch(child.stdout,/Indexed |Failed to process/);
  }else{
   assert.notEqual(child.status,0,'real failures retain a nonzero job exit');
   if(scenario==='stale')assert.equal(state.pages.length,1);else assert.equal(state.writes,1,'an uncertain write is never retried blindly');

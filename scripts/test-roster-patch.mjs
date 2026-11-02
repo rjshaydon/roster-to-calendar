@@ -40,6 +40,26 @@ for(const [sourceId,path] of [['monash-adults','AdultTerm1.2026.xlsx'],['monash-
  desired.eventsByDoctor[key].shift();desired.eventsByDoctor[key][0].title+=' corrected';
  desired.eventsByDoctor[key].push({...desired.eventsByDoctor[key][1],id:'new-occurrence'});
  desired.doctors.find(d=>d.key===key).seniority='Senior Registrar';
+ // A newer input may arrive at any callback, not only activation. Stop
+ // before reading missing rows, staging more batches or finalizing old work.
+ const superseded={ok:true,completed:true,superseded:true,doctorCount:0,eventCount:0};
+ const targets=['bounded-patch-start',...['doctors','events','issues','staff','catalog'].map(s=>'bounded-patch-page:'+s),'bounded-patch-page:events:continuation','bounded-patch-plan','bounded-patch-stage','bounded-patch-activate','bounded-finalize'];
+ for(const target of targets){
+  const seen=[];
+  const outcome=await executeRosterPatch(desired,target==='bounded-patch-start'?{fileId:baseline.fileId}:baseline,async body=>{
+   const step=body.phase+(body.section?':'+body.section:'')+(body.section==='events'&&body.after?':continuation':'');seen.push(step);
+   if(step===target)return superseded;
+   if(body.phase==='bounded-patch-page'){
+    const offset=Number(body.after||0),rows=stored[body.section].slice(offset,offset+32);
+    return {rows,next:offset+32<stored[body.section].length?String(offset+32):''};
+   }
+   if(body.phase==='bounded-patch-plan')return {nextBatch:0};
+   return {};
+  });
+  assert.deepEqual(outcome,superseded,target);
+  assert.equal(seen.at(-1),target,'no callback follows supersession');
+ }
+ assert.deepEqual(await executeRosterPatch(desired,superseded,()=>assert.fail('already completed input must not issue callbacks')),superseded);
  const plan=await planRosterPatch(desired,baseline,stored),retry=await planRosterPatch(desired,baseline,stored);
  const cachedPlan=await planRosterPatch(desired,baseline,stored,{presenceMode:'cached'});
  assert.equal(cachedPlan.manifest.changedFacts,plan.manifest.changedFacts);
