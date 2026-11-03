@@ -690,9 +690,22 @@ function isMmcOrientationCode(raw) {
   return String(explicit?.label || raw || "").trim().toUpperCase() === "O";
 }
 
+export function normalizeMmcFloatRosterEvent(event) {
+  const source=String(event?.source||event?.sourceType||'').trim().toUpperCase();
+  if(source!=='MMC'||String(event?.seniority||'').trim().toUpperCase()!=='SMS')return event;
+  const raw=String(event?.rawValue||'').trim();
+  const label=String(extractMmcExplicitTime(raw)?.label||raw).trim().toUpperCase();
+  if(label!=='AFC')return event;
+  return {...event,title:'MMC: Float AM',
+    ...(event.titleParts?{titleParts:{base:'Float',period:'AM',suffix:''}}:{}),
+    ...(event.status==='unknown'?{status:'ok'}:{}),
+    ...(/^MMC shift code not recognised(?:; using explicit roster time)?\.$/.test(event.warning||'')?{warning:''}:{}),
+  };
+}
+
 export function filterCalendarRosterEvents(events = []) {
   return applyPhnwCalendarPrecedence(
-    filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events.map(normalizeOrientationRosterEvent))),
+    filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events.map(event=>normalizeMmcFloatRosterEvent(normalizeOrientationRosterEvent(event))))),
   );
 }
 
@@ -2919,6 +2932,7 @@ function buildDefaultParserRules() {
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
     add(rules.mmc, "MMC", "CS OS", seniority, "CS OS", "", "", false, "08:00", "17:30", MMC_LOCATION);
   }
+  add(rules.mmc, "MMC", "AFC", "SMS", "Float", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
   add(rules.mmc, "MMC", "N1", "SMS", "Night shift", "", "", false, "23:00", "08:30", MMC_LOCATION);
   for (const seniority of actingConsultantSeniorities) {
     for (const periodPrefix of ["A", "P"]) {

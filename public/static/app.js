@@ -29,6 +29,7 @@ import {
   filterCalendarRosterEvents,
   clinicalSupportRosterMode,
   normalizeOrientationRosterEvent,
+  normalizeMmcFloatRosterEvent,
   isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
@@ -40,7 +41,7 @@ import {
   serializeReviewItem,
   setParserExtensions,
   sourceNames,
-} from "./roster.js?v=20261019-mmc-orientation";
+} from "./roster.js?v=20261103-mmc-afc";
 import { attachContactAllocations, contactAllocationCandidates, partitionDdhNightReview, ddhNightReviewWindow, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js?v=20261007-empty-contact1";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
@@ -5855,6 +5856,7 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   event = normalizeOrientationRosterEvent(event);
+  event = normalizeMmcFloatRosterEvent(event);
   const source = eventSourceCode(event);
   // Some provider shifts omit the staff grade but retain it in the title (for
   // example "Physiotherapist"). Use the same recognised-grade detection as
