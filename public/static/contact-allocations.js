@@ -327,11 +327,21 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   };
   const sameContext = (left, right) => left.area === right.area && left.shift === right.shift;
   // A phone cannot simultaneously belong to different people in one context.
-  // Exact duplicate names with different phones are also conflicting sheet rows.
+  // A repeated given name can describe different rostered people; keep it
+  // eligible for contextual matching only when both rows have at least two
+  // plausible first-name candidates in common. Full names and single-holder
+  // duplicates still require correction in the sheet.
+  const repeatedGivenNameMayDescribeDifferentPeople = (left, right) => {
+    const plausibleFirstNames = (contact) => candidates.get(contact.contactKey).filter((candidate) =>
+      candidate.method === "first-name" && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
+    const otherIdentities = new Set(plausibleFirstNames(right).map((candidate) => candidate.identity));
+    return plausibleFirstNames(left).filter((candidate) => otherIdentities.has(candidate.identity)).length >= 2;
+  };
   for (const contact of available) {
     if (available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
       && (contactPhoneNumbers(contact.phone).some((phone) => contactPhoneNumbers(other.phone).includes(phone))
-        || (contact.name && simplify(contact.name) === simplify(other.name))))) reasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
+        || (contact.name && simplify(contact.name) === simplify(other.name)
+          && !repeatedGivenNameMayDescribeDifferentPeople(contact, other))))) reasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
   }
 
   // Explicit daily decisions are authoritative, but still require an eligible
@@ -370,35 +380,67 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   // Specific names and then unique given names may reserve identities; guesses never
   // consume candidates to make another tentative decision look unambiguous.
   for (const stage of ["specific", "given", "tentative"]) {
-    const proposals = [];
-    for (const contact of available) {
-      if (!contact.name || matched.has(contact.contactKey) || reasons.has(contact.contactKey)) continue;
-      const all = candidates.get(contact.contactKey);
-      const eligible = all.filter((candidate) => !hasTarget(candidate) && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
-      const candidate = eligible[0];
-      if (!candidate || candidate.score < CONTACT_MATCH_POLICY.minimumScore) continue;
-      const contextualWinner = candidate.contextAligned
-        && candidate.method === "first-name"
-        && eligible.slice(1).every((other) => other.nameScore <= candidate.nameScore
-          && !other.contextAligned);
-      const candidateStage = candidate.uncertain || (contextualWinner && eligible.length > 1) ? "tentative" : candidate.method === "first-name" ? "given" : "specific";
-      if (candidateStage !== stage) continue;
-      if (eligible[1] && candidate.score - eligible[1].score < CONTACT_MATCH_POLICY.minimumLead && !contextualWinner) continue;
-      // VHH's mutable sheet is particularly prone to retaining old names. A
-      // second plausible row claiming this holder remains a conflict.
-      if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
-        && candidates.get(other.contactKey).some((item) => item.identity === candidate.identity && item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore))) {
-        reasons.set(contact.contactKey, "Conflicting entries for this clinician"); continue;
+    // Reconsider given names after independently unambiguous given-name matches
+    // have been reserved. Tentative suggestions must never drive this retry.
+    let acceptedCount;
+    do {
+      const proposals = [];
+      for (const contact of available) {
+        if (!contact.name || matched.has(contact.contactKey) || reasons.has(contact.contactKey)) continue;
+        const all = candidates.get(contact.contactKey);
+        const eligible = all.filter((candidate) => !hasTarget(candidate) && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
+        const candidate = eligible[0];
+        if (!candidate || candidate.score < CONTACT_MATCH_POLICY.minimumScore) continue;
+        const contextualWinner = candidate.contextAligned
+          && ["first-name", "first-name-prefix", "alias"].includes(candidate.method)
+          && eligible.slice(1).every((other) => other.nameScore <= candidate.nameScore
+            && !other.contextAligned);
+        const candidateStage = candidate.uncertain || (contextualWinner && eligible.length > 1) ? "tentative" : candidate.method === "first-name" ? "given" : "specific";
+        if (candidateStage !== stage) continue;
+        if (eligible[1] && candidate.score - eligible[1].score < CONTACT_MATCH_POLICY.minimumLead && !contextualWinner) continue;
+        // VHH's mutable sheet is particularly prone to retaining old names. A
+        // second plausible row claiming this holder remains a conflict.
+        if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
+          && candidates.get(other.contactKey).some((item) => item.identity === candidate.identity && item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore))) {
+          reasons.set(contact.contactKey, "Conflicting entries for this clinician"); continue;
+        }
+        proposals.push({ contact, candidate: contextualWinner && eligible.length > 1
+          ? { ...candidate, uncertain: true, reasons: [...candidate.reasons, "Unique name candidate agreeing on both roster stream and explicit grade"] }
+          : candidate });
       }
-      proposals.push({ contact, candidate: contextualWinner && eligible.length > 1
-        ? { ...candidate, uncertain: true, reasons: [...candidate.reasons, "Unique given-name candidate agreeing on both roster stream and explicit grade"] }
-        : candidate });
-    }
-    // Assess competition before applying any proposal from this batch.
-    const accepted = proposals.filter((proposal) => !proposals.some((other) => other !== proposal
-      && other.candidate.indexes.some((index) => proposal.candidate.indexes.includes(index))));
-    for (const proposal of proposals) if (!accepted.includes(proposal)) reasons.set(proposal.contact.contactKey, "Competing allocations for this clinician");
-    for (const proposal of accepted) allocate(proposal.contact, proposal.candidate);
+      // Assess competition before applying any proposal from this batch.
+      const accepted = proposals.filter((proposal) => !proposals.some((other) => other !== proposal
+        && other.candidate.indexes.some((index) => proposal.candidate.indexes.includes(index))));
+      for (const proposal of proposals) if (!accepted.includes(proposal)) reasons.set(proposal.contact.contactKey, "Competing allocations for this clinician");
+      for (const proposal of accepted) allocate(proposal.contact, proposal.candidate);
+      acceptedCount = accepted.length;
+    } while (stage === "given" && acceptedCount > 0);
+  }
+
+  // For two repeated given-name rows and exactly two rostered namesakes, a
+  // unique stream-and-grade match establishes the remaining pairing. Do not
+  // use a tentative guess in general to eliminate candidates, or make this
+  // inference when another unallocated contact could claim the remaining person.
+  for (const contact of available) {
+    if (!contact.name || matched.has(contact.contactKey) || reasons.has(contact.contactKey)) continue;
+    const group = available.filter((other) => sameContext(contact, other) && simplify(contact.name) === simplify(other.name));
+    if (group.length !== 2) continue;
+    const anchor = group.find((other) => other.contactKey !== contact.contactKey && matched.has(other.contactKey));
+    if (!anchor) continue;
+    const anchorAllocation = enriched.find((assignment) => assignment.contactAllocation?.contactKey === anchor.contactKey)?.contactAllocation;
+    if (!anchorAllocation?.matchReasons?.includes("Unique name candidate agreeing on both roster stream and explicit grade")) continue;
+    const original = candidates.get(contact.contactKey).filter((candidate) => candidate.method === "first-name"
+      && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore && candidate.score >= CONTACT_MATCH_POLICY.minimumScore);
+    if (original.length !== 2) continue;
+    const remaining = original.filter((candidate) => !hasTarget(candidate));
+    if (remaining.length !== 1) continue;
+    const candidate = remaining[0];
+    if (available.some((other) => other.contactKey !== contact.contactKey && !matched.has(other.contactKey)
+      && !reasons.has(other.contactKey) && sameContext(contact, other)
+      && candidates.get(other.contactKey).some((item) => item.identity === candidate.identity
+        && item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore))) continue;
+    allocate(contact, { ...candidate, uncertain: true,
+      reasons: [...candidate.reasons, "Remaining namesake after the other contact matched both roster stream and grade"] });
   }
 
   const serviceContacts = available.filter((contact) => !matched.has(contact.contactKey) && isStandaloneServiceContact(contact));

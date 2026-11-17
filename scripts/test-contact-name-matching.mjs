@@ -40,6 +40,46 @@ assert.equal(match([daniels[0], staff('Daniel YU', 'MMC', 'Resus', 'HMO')], [dan
 assert.equal(match(daniels, [sheet('Daniel', 'MMC', '25140', 'RESUS Dr')]).matchedCount, 0, 'stream alone cannot resolve names');
 assert.equal(match([staff('Daniel PROCEL', 'MMC', '', 'SMS'), daniels[1]], [danielContact]).matchedCount, 0, 'grade alone cannot resolve names');
 assert.equal(match(daniels, [sheet('Daniel YU', 'MMC', '25140', 'RESUS (SMS/SR)')]).assignments[1].contactAllocation.phone, '25140', 'explicit surname remains authoritative');
+// A shortened name needs both stream and grade, and cannot choose between
+// two clinicians whose roster context is equally plausible.
+const stephs = [staff('Stephanie REILLY', 'MMC', 'SSU', 'SMS', 'PM'), staff('Stephanie TANG', 'MMC', 'Hub', 'Intern', 'PM')];
+const stephContact = sheet('Steph', 'MMC', '25143', 'SSU (SMS/SR)', 'PM');
+assert.equal(match(stephs, [stephContact]).assignments[0].contactAllocation.phone, '25143');
+assert.equal(match(stephs, [stephContact]).assignments[0].contactAllocation.uncertain, true);
+assert.equal(match([stephs[0], staff('Stephanie TANG', 'MMC', 'SSU', 'SMS', 'PM')], [stephContact]).matchedCount, 0);
+assert.equal(match(stephs, [sheet('Steph', 'MMC', '25143', 'SSU Dr', 'PM')]).matchedCount, 0);
+// An independently clear first-name match can remove a surname-only competitor.
+const lees = [staff('Lee ROBBINS', 'MMC', 'Registrars', 'SR', 'PM'), staff('Eldon LEE', 'MMC', 'Hub', 'HMO', 'PM')];
+const leeContacts = [sheet('Lee', 'MMC', '25138', 'Clinic (SMS/SR)', 'PM'), sheet('Eldon', 'MMC', '25720', 'Hub Dr', 'PM')];
+for (const contacts of [leeContacts, [...leeContacts].reverse()]) {
+  const result = match(lees, contacts);
+  assert.equal(result.assignments[0].contactAllocation.phone, '25138');
+  assert.equal(result.assignments[1].contactAllocation.phone, '25720');
+}
+assert.equal(match(lees, [leeContacts[0]]).matchedCount, 0, 'a surname competitor alone remains ambiguous');
+// Two rows with the same given name need not be conflicting sheet entries.
+// Stream and grade identify one; the sole remaining namesake gets the other.
+const jameses = [staff('James FORDYCE', 'MMC', 'Resus', 'SMS'), staff('James CRISPIN', 'MMC', 'Hub', 'HMO')];
+const jamesContacts = [sheet('James', 'MMC', '25141', 'Resus (SMS/SR)'), sheet('James', 'MMC', '25738', 'Dr')];
+for (const people of [jameses, [...jameses].reverse()]) {
+  for (const contacts of [jamesContacts, [...jamesContacts].reverse()]) {
+    const result = match(people, contacts);
+    assert.equal(result.assignments.find(item => item.person.displayName === 'James FORDYCE').contactAllocation.phone, '25141');
+    assert.equal(result.assignments.find(item => item.person.displayName === 'James FORDYCE').contactAllocation.uncertain, true);
+    const remaining = result.assignments.find(item => item.person.displayName === 'James CRISPIN').contactAllocation;
+    assert.equal(remaining.phone, '25738');
+    assert.equal(remaining.uncertain, true);
+    assert.equal(result.unmatched.length, 0);
+  }
+}
+const ambiguousJames = [sheet('James', 'MMC', '25141', 'Dr 1'), sheet('James', 'MMC', '25738', 'Dr 2')];
+assert.equal(match(jameses, ambiguousJames).matchedCount, 0, 'duplicate given names without distinguishing context remain unresolved');
+assert.equal(match([jameses[0], staff('James CRISPIN', 'MMC', 'Resus', 'SMS')], jamesContacts).matchedCount, 0, 'two equally aligned people remain unresolved');
+assert.equal(match([...jameses, staff('James THIRD', 'MMC', 'Clinic', 'HMO')], jamesContacts).matchedCount, 1, 'an extra namesake prevents matching the remaining contact by elimination');
+const conflictingRemaining = sheet('Crispin', 'MMC', '25739', 'Dr 3');
+assert.equal(match(jameses, [...jamesContacts, conflictingRemaining]).assignments[1].contactAllocation.phone, '25739', 'an independently clear contact takes priority over elimination');
+assert.equal(match(jameses, [jamesContacts[0], { ...jamesContacts[1], name: 'James CRISPIN', phone: '25141' }]).matchedCount, 0, 'a shared handset between different names remains a conflict');
+assert.equal(validateContactResolutionSelection(jameses, ambiguousJames, [], { contact: ambiguousJames[0], doctorKey: 'JAMES FORDYCE', now }).error, undefined, 'ambiguous repeated given names remain available for manual review');
 const ssuResult = match([staff('Maria GEORGIOU', 'MMC', 'SSU'), staff('Mary AMEEN', 'MMC', 'SSU', 'Intern')], [sheet('Maria', 'MMC', '25144/25187', 'SSU Dr 25144 diverted to 25187'), sheet('Mary', 'MMC', '25732', 'SSU Intern')]);
 assert.equal(ssuResult.matchedCount, 2);
 assert.equal(ssuResult.assignments[0].contactAllocation.phone, '25144/25187');
@@ -279,7 +319,7 @@ assert.deepEqual([db.reads, db.writes, r2.puts], budgetBefore);
 // importing the app's startup/network lifecycle into this local unit test.
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 const escapeHtml = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = vm.createContext({contactSyncWarning, escapeHtml, contactAllocationCandidates: (a,c) => contactAllocationCandidates(a,c,{ now }), facilityOverviewState: { contactList: { resolutions: [] }, contactResolutionSaving: false }, facilityOverviewOnShiftTimeLabel: () => '' });
+const ui = vm.createContext({contactSyncWarning, escapeHtml, canUseFullFacilityOverview: () => true, contactAllocationCandidates: (a,c) => contactAllocationCandidates(a,c,{ now }), facilityOverviewState: { contactList: { resolutions: [] }, contactResolutionSaving: false }, facilityOverviewOnShiftTimeLabel: () => '' });
 for (const name of ['renderFacilityOverviewContactAllocation', 'renderFacilityOverviewContactResolutionMenu', 'renderFacilityOverviewContactReviewRow']) {
   const start = app.indexOf(`function ${name}(`), end = app.indexOf('\nfunction ', start + 1), asyncEnd = app.indexOf('\nasync function ', start + 1);
   vm.runInContext(app.slice(start, Math.min(end < 0 ? Infinity : end, asyncEnd < 0 ? Infinity : asyncEnd)), ui);
