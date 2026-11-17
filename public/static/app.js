@@ -42,7 +42,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js?v=20261103-mmc-afc";
-import { attachContactAllocations, contactAllocationCandidates, partitionDdhNightReview, ddhNightReviewWindow, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js?v=20261007-empty-contact1";
+import { attachContactAllocations, contactAllocationCandidates, partitionDdhNightReview, ddhNightReviewWindow, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js?v=20261117-context-matching";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
 const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;
