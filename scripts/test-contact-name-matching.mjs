@@ -48,6 +48,15 @@ assert.equal(match(stephs, [stephContact]).assignments[0].contactAllocation.phon
 assert.equal(match(stephs, [stephContact]).assignments[0].contactAllocation.uncertain, true);
 assert.equal(match([stephs[0], staff('Stephanie TANG', 'MMC', 'SSU', 'SMS', 'PM')], [stephContact]).matchedCount, 0);
 assert.equal(match(stephs, [sheet('Steph', 'MMC', '25143', 'SSU Dr', 'PM')]).matchedCount, 0);
+const stephanieContact = sheet('Stephanie', 'MMC', '', 'Dr', 'PM');
+for (const contacts of [[stephContact, stephanieContact], [stephanieContact, stephContact]]) {
+  const result = match(stephs, contacts);
+  assert.equal(result.assignments[0].contactAllocation.phone, '25143');
+  assert.equal(result.assignments[1].contactAllocation.sourceName, 'Stephanie');
+  assert.equal(result.assignments[1].contactAllocation.phone, '');
+  assert.equal(result.unmatched.length, 0, 'a missing handset does not make the remaining namesake unmatchable');
+}
+assert.equal(match([...stephs, staff('Stephanie THIRD', 'MMC', 'Clinic', 'HMO', 'PM')], [stephContact, stephanieContact]).matchedCount, 1, 'a third namesake prevents elimination');
 // An independently clear first-name match can remove a surname-only competitor.
 const lees = [staff('Lee ROBBINS', 'MMC', 'Registrars', 'SR', 'PM'), staff('Eldon LEE', 'MMC', 'Hub', 'HMO', 'PM')];
 const leeContacts = [sheet('Lee', 'MMC', '25138', 'Clinic (SMS/SR)', 'PM'), sheet('Eldon', 'MMC', '25720', 'Hub Dr', 'PM')];

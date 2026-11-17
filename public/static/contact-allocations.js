@@ -417,21 +417,24 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
     } while (stage === "given" && acceptedCount > 0);
   }
 
-  // For two repeated given-name rows and exactly two rostered namesakes, a
-  // unique stream-and-grade match establishes the remaining pairing. Do not
+  // For two rows describing the same two namesakes (including a shortened
+  // name), a unique stream-and-grade match establishes the remaining pairing. Do not
   // use a tentative guess in general to eliminate candidates, or make this
   // inference when another unallocated contact could claim the remaining person.
   for (const contact of available) {
     if (!contact.name || matched.has(contact.contactKey) || reasons.has(contact.contactKey)) continue;
-    const group = available.filter((other) => sameContext(contact, other) && simplify(contact.name) === simplify(other.name));
-    if (group.length !== 2) continue;
-    const anchor = group.find((other) => other.contactKey !== contact.contactKey && matched.has(other.contactKey));
-    if (!anchor) continue;
-    const anchorAllocation = enriched.find((assignment) => assignment.contactAllocation?.contactKey === anchor.contactKey)?.contactAllocation;
-    if (!anchorAllocation?.matchReasons?.includes("Unique name candidate agreeing on both roster stream and explicit grade")) continue;
-    const original = candidates.get(contact.contactKey).filter((candidate) => candidate.method === "first-name"
-      && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore && candidate.score >= CONTACT_MATCH_POLICY.minimumScore);
-    if (original.length !== 2) continue;
+    const original = candidates.get(contact.contactKey).filter((candidate) =>
+      candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore && candidate.score >= CONTACT_MATCH_POLICY.minimumScore);
+    if (original.length !== 2 || original.some((candidate) => candidate.method !== "first-name")) continue;
+    const anchors = available.filter((other) => {
+      if (other.contactKey === contact.contactKey || !sameContext(contact, other) || !matched.has(other.contactKey)) return false;
+      const allocation = enriched.find((assignment) => assignment.contactAllocation?.contactKey === other.contactKey)?.contactAllocation;
+      if (!allocation?.matchReasons?.includes("Unique name candidate agreeing on both roster stream and explicit grade")) return false;
+      const comparable = candidates.get(other.contactKey).filter((item) => item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore
+        && item.score >= CONTACT_MATCH_POLICY.minimumScore && ["first-name", "first-name-prefix", "alias"].includes(item.method));
+      return comparable.length === 2 && original.every((item) => comparable.some((candidate) => candidate.identity === item.identity));
+    });
+    if (anchors.length !== 1) continue;
     const remaining = original.filter((candidate) => !hasTarget(candidate));
     if (remaining.length !== 1) continue;
     const candidate = remaining[0];
