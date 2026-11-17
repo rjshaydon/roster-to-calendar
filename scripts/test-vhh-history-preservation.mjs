@@ -1,4 +1,5 @@
 import {handleVhhHistoryRequest} from '../functions/_lib/vhh-history-protocol.js';
+import {onRequestPost as derivedRequest} from '../functions/api/automation/derived.js';
 import {executeBoundedRosterImport} from './roster-import-driver.mjs';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -91,6 +92,18 @@ async function prepare(runId,payload,activate=false,options={}) {
  return plan;
 }
 await prepare('old-run',old,true);
+// A rolling VHH workbook can span a new term while overlapping the old one.
+// The real locator must select staged replacement, without touching live data.
+const crossingExtract={...extract,blocks:[block('2026-10-19','2026-11-01'),block('2026-11-02','2026-11-15')]};
+const crossing=buildVhhDerivedRosterPayload({extract:crossingExtract,fileId:'crossing',contentHash:'d'.repeat(64),lastModified:3});
+const crossingPlan=await attachRosterCompactPlan(await planRosterImportBatches(crossing),crossing);
+sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,content_hash,status,started_at) VALUES(?,?,?,?,?,'queued',?)").run('crossing-run',VHH_ROSTER_SOURCE_ID,'crossing','crossing',crossingPlan.manifest.contentHash,new Date().toISOString());
+const crossingEnv={ROSTER_DB:db,ROSTER_AUTOMATION_TOKEN:'test',ROSTER_AUTOMATION_WRITES_ENABLED:'true',ROSTER_AUTOMATION_QUEUE_ENABLED:'true',ROSTER_AUTOMATION_SOURCE_ALLOWLIST:VHH_ROSTER_SOURCE_ID,ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED:'true',ROSTER_BOUNDED_REPLACEMENT_ENABLED:'true',ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT:'1250'};
+const locate=await call(()=>derivedRequest({env:crossingEnv,request:new Request('https://example.test/api/automation/derived',{method:'POST',headers:{authorization:'Bearer test','content-type':'application/json'},body:JSON.stringify({phase:'bounded-begin',deferStaging:true,runId:'crossing-run',sourceId:VHH_ROSTER_SOURCE_ID,file:crossing.file,manifest:crossingPlan.manifest,revision:crossingPlan.revision,supportsPatch:true})})}));
+assert.equal(locate.status,200,await locate.clone().text());
+assert.equal((await locate.json()).mode,'staging-ready');
+assert.equal(sqlite.prepare("SELECT active FROM roster_files WHERE id='old'").get().active,1);
+assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM roster_files WHERE id='crossing'").get().n,0);
 const parent='test-rollover', window={from:'2026-09-21',to:'2026-10-18'};
 const archive=buildVhhDerivedRosterPayload({extract:extractVhhHistoryWindow(extract,{...window,fileName:historyFileName(window.from,window.to)}),fileId:'archive',contentHash:'c'.repeat(64),lastModified:2});
 await prepare(historyJobId(parent,window.from,window.to),archive);

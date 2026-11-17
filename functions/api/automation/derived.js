@@ -230,6 +230,7 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
   }
   const overlapping=candidates.filter(row=>row.coverage_start<=dates.at(-1) && row.coverage_end>=dates[0]);
   const matches = [];
+  let requiresVhhRollover = false;
   for (const row of overlapping) {
     const ownership = row.ownership;
     if(!ownership || ownership.rowCount>750) throw new Error('Roster ownership exceeds its compact contribution ceiling.');
@@ -238,13 +239,19 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
     if (row.derived_state !== "ready" || !startTerm || !endTerm) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
     const overlaps = ownership.firstDate <= dates.at(-1) && ownership.lastDate >= dates[0];
     if (overlaps && startTerm === firstTerm && endTerm === lastTerm) matches.push(row);
-    else if (overlaps) throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
+    else if (overlaps) {
+      // VHH is a rolling roster. Its bounded replacement path preserves the
+      // outgoing prefix and checks the active-file fence before promotion.
+      if (sourceId === 'vhh-active-medical-roster' && eventsByDoctor?.range && env.ROSTER_BOUNDED_REPLACEMENT_ENABLED === 'true') requiresVhhRollover = true;
+      else throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
+    }
   }
   if (matches.length > 1) throw new Error("Multiple automated rosters match the incoming term; replacement requires review.");
   const current = candidates.find((row) => row.id === (currentSource?.activeFileId || preflight.active_file_id));
   return {
     stagedNextBatch:Number(preflight.next_batch || 0),stagedPreparedBatch:Number(preflight.prepared_batch || 0),
-    fileId: matches[0]?.id || run.fileId,
+    fileId: requiresVhhRollover ? run.fileId : matches[0]?.id || run.fileId,
+    requiresVhhRollover,
     preserveActiveFile: Boolean(current && australianTermStartForDate(current.coverage_start) > firstTerm),
   };
 }

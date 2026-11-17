@@ -40,7 +40,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
             if (body.supportsPatch === true && context.env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED === 'true') return Response.json({ok:true,mode:"patch",fileId:target.fileId,presenceMode:cachedPresence?'cached':undefined});
             return Response.json({ ok: true, mode: "complete", boundedReplacementAvailable: replacements });
           }
-          if(context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId)){
+          if(!target.requiresVhhRollover && context.env.ROSTER_STAGING_REUSE_SOURCES?.split(',').includes(run.sourceId)){
             const reusable=await reusableRosterStage(db,run,manifest);
             if(reusable)return Response.json({ok:true,mode:'rebase',fileId:reusable,presenceMode:'cached'});
           }
