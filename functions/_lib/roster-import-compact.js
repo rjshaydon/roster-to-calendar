@@ -12,7 +12,10 @@ export async function stageRosterCompactMetadata(db,job,manifest,batch) {
   if(!batch) {
     const receipts=await db.prepare('SELECT batch_index,payload_hash,plan_revision FROM roster_import_compact_receipts WHERE run_id=? ORDER BY batch_index LIMIT 48').bind(job.run_id).all();
     if(receipts.results.length!==compact.batches.length || receipts.results.some((r,i)=>r.batch_index!==i || r.payload_hash!==compact.batches[i].hash || r.plan_revision!==job.plan_revision)) throw Error('Compact preparation has unfinished batches.');
-    if(!await reserveRosterMaintenanceBudget(db,64,128)) return {deferred:true};
+    // The final callback also reads up to 48 compact receipts, the queued
+    // run, delivery-order guards and settlement bookkeeping. Reserve for
+    // the whole request, including reads performed before this checkpoint.
+    if(!await reserveRosterMaintenanceBudget(db,64,512)) return {deferred:true};
     await db.batch([
       inactiveGuard(db,job),
       db.prepare(`INSERT INTO roster_file_coverage(file_id,source_type,coverage_start,coverage_end,content_revision,staff_digest,daily_digest,updated_at)
