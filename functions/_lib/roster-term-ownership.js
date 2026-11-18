@@ -4,18 +4,21 @@ export async function rosterTermOwnershipForFiles(db,fileIds) {
   const ids=[...new Set(fileIds.map(String))];
   if(ids.length>32) throw new Error('Roster ownership exceeds its file ceiling.');
   if(!ids.length) return new Map();
-  // Each exact file read keeps its 751-row sentinel. D1 aggregates the bounded
-  // rows and returns one small summary per file, avoiding JS sorting/hydration.
-  const bounded=ids.map(()=>`SELECT * FROM (SELECT file_id,term_start,first_date,last_date
-    FROM facility_stream_catalog_contributions WHERE file_id=? LIMIT 751)`).join(' UNION ALL ');
-  const rows=(await db.prepare(`WITH bounded AS (${bounded}) SELECT file_id,COUNT(*) AS row_count,
-    MIN(NULLIF(term_start,'')) AS first_term,MAX(NULLIF(term_start,'')) AS last_term,
-    MIN(first_date) AS first_date,MAX(last_date) AS last_date FROM bounded GROUP BY file_id`).bind(...ids).all()).results;
+  // One bounded indexed read per file without a compound SELECT. D1 can have
+  // a lower compound-term limit than local SQLite. Preserve the 751-row
+  // sentinel separately for each file and return only the aggregate.
+  const rows=(await db.prepare(`SELECT ids.value AS file_id,
+    (SELECT json_object('row_count',COUNT(*),'first_term',MIN(NULLIF(term_start,'')),
+      'last_term',MAX(NULLIF(term_start,'')),'first_date',MIN(first_date),'last_date',MAX(last_date))
+      FROM (SELECT term_start,first_date,last_date FROM facility_stream_catalog_contributions
+        WHERE file_id=ids.value LIMIT 751)) AS summary
+    FROM json_each(?) ids`).bind(JSON.stringify(ids)).all()).results;
   const result=new Map();
   for(const row of rows) {
-    if(Number(row.row_count)>750) throw new Error('Roster ownership exceeds its compact contribution ceiling.');
-    if(!row.first_term || !row.last_term) throw new Error('Prepared roster term ownership is unavailable.');
-    result.set(row.file_id,{firstTerm:row.first_term,lastTerm:row.last_term,firstDate:row.first_date,lastDate:row.last_date});
+    const summary=typeof row.summary==='string'?JSON.parse(row.summary):row.summary;
+    if(Number(summary.row_count)>750) throw new Error('Roster ownership exceeds its compact contribution ceiling.');
+    if(!summary.first_term || !summary.last_term) throw new Error('Prepared roster term ownership is unavailable.');
+    result.set(row.file_id,{firstTerm:summary.first_term,lastTerm:summary.last_term,firstDate:summary.first_date,lastDate:summary.last_date});
   }
   if(result.size!==ids.length) throw new Error('Prepared roster term ownership is unavailable.');
   return result;

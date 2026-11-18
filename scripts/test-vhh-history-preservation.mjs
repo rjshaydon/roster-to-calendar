@@ -15,6 +15,7 @@ import {planRosterImportBatches,rosterImportDigest} from '../functions/_lib/rost
 import {attachRosterCompactPlan} from './roster-compact-plan.mjs';
 import {executeRosterPatch} from './roster-patch-plan.mjs';
 import {beginMaintenanceAccounting} from '../functions/_lib/roster-maintenance-budget.js';
+import {rosterTermOwnershipForFiles} from '../functions/_lib/roster-term-ownership.js';
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
   prepare(sql) {
@@ -58,6 +59,22 @@ class LocalD1 {
     }
   }
 }
+
+// D1 can reject a compound SELECT with several terms even when desktop SQLite
+// accepts it. Exercise more active files than the production failure, preserve
+// missing-file and per-file sentinel checks, and reject compound SQL here.
+const ownershipSqlite=new DatabaseSync(':memory:');
+ownershipSqlite.exec('CREATE TABLE facility_stream_catalog_contributions (file_id TEXT,term_start TEXT,first_date TEXT,last_date TEXT)');
+const insertOwnership=ownershipSqlite.prepare('INSERT INTO facility_stream_catalog_contributions VALUES (?,?,?,?)');
+const ownershipIds=Array.from({length:8},(_,i)=>`fixture-${i}`);
+for(const id of ownershipIds) insertOwnership.run(id,'2026-10-05','2026-10-05','2026-11-01');
+const ownershipDb=new LocalD1(ownershipSqlite);
+assert.equal((await rosterTermOwnershipForFiles(ownershipDb,ownershipIds)).size,8);
+assert.ok(!ownershipDb.sql.some(sql=>/UNION\s+ALL/i.test(sql)));
+await assert.rejects(rosterTermOwnershipForFiles(ownershipDb,['missing']),/ownership is unavailable/);
+for(let i=0;i<750;i++) insertOwnership.run(ownershipIds[0],'2026-10-05','2026-10-05','2026-11-01');
+await assert.rejects(rosterTermOwnershipForFiles(ownershipDb,[ownershipIds[0]]),/contribution ceiling/);
+ownershipSqlite.close();
 
 const sqlite=new DatabaseSync(':memory:');
 for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(name=>name.endsWith('.sql')).sort())sqlite.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
